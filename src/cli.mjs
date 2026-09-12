@@ -10,6 +10,8 @@ import { monitorCommand } from "./monitor.mjs";
 import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, verifyCheckpoint, runCheckpoint, attachArtifacts } from "./checkpoint.mjs";
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 import { playSendSound } from "./sound.mjs";
+import { supervisorPrompt } from "./prompt.mjs";
+import { superviseAgent } from "./supervise.mjs";
 
 const DEFAULT_SEND_BACKEND = "app-server";
 
@@ -87,7 +89,8 @@ export async function main(argv) {
     if (args.length === 0 || takeFlag(args, "--help") || args[0] === "help") {
       if (args[0] === "help") args.shift();
       const candidate = args[0] ?? "overview";
-      const topic = /^(codex:\/\/|[0-9a-f]{8}-)/i.test(candidate) ? "send" : candidate;
+      const topic = candidate === "supervise" && args[1] === "prompt" ? "supervise prompt"
+        : /^(codex:\/\/|[0-9a-f]{8}-)/i.test(candidate) ? "send" : candidate;
       const data = helpData(topic);
       success("help", data, json);
       if (!json) console.log(renderHelp(data));
@@ -95,6 +98,24 @@ export async function main(argv) {
     }
 
     let command = args.shift();
+    if (command === "supervise" && args[0] === "prompt") {
+      args.shift();
+      if (args.length !== 1) throw new Error("Expected: supervise prompt <THREAD>. See codex-steer help supervise prompt.");
+      const data = supervisorPrompt(args[0]);
+      success("supervise.prompt", data, json);
+      if (!json) console.log(data.prompt);
+      return;
+    }
+    if (command === "supervise") {
+      if (json) throw new Error("supervise inherits agent output and does not support --json. Use help supervise --json or supervise prompt <THREAD> --json.");
+      const separator = args.indexOf("--");
+      const ownArgs = separator < 0 ? args : args.slice(0, separator);
+      const agentArgs = separator < 0 ? [] : args.slice(separator + 1);
+      const agent = takeOption(ownArgs, "--agent", undefined);
+      if (ownArgs.length !== 1 || !agent) throw new Error("Expected: supervise <THREAD> --agent claude [-- <AGENT-ARGS...>].");
+      process.exitCode = await superviseAgent(ownArgs[0], { agent, agentArgs });
+      return;
+    }
     if (command === "resource") {
       const action = args.shift(); let data;
       if (["acquire", "run"].includes(action)) {

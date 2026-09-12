@@ -91,8 +91,8 @@ test("unknown backend and empty messages fail before doing any work", () => {
 });
 
 test("command help explains purpose, results and examples without contacting Desktop", () => {
-  for (const topic of ["read", "status", "watch", "monitor", "send", "history", "instructions", "checkpoint", "resource", "doctor", "desktop", "threads", "thread", "open", "debug-ui"]) {
-    for (const args of [["help", topic], [topic, "--help"]]) {
+  for (const topic of ["supervise", "supervise prompt", "read", "status", "watch", "monitor", "send", "history", "instructions", "checkpoint", "resource", "doctor", "desktop", "threads", "thread", "open", "debug-ui"]) {
+    for (const args of [["help", ...topic.split(" ")], [...topic.split(" "), "--help"]]) {
       const { status, result } = cli(args);
       assert.equal(status, 0); assert.equal(result.command, "help");
       assert.equal(result.data.topic, topic); assert.ok(result.data.when); assert.ok(result.data.returns); assert.ok(result.data.examples.length);
@@ -100,6 +100,12 @@ test("command help explains purpose, results and examples without contacting Des
   }
   const plain = spawnSync(process.execPath, ["bin/codex-steer.mjs", "read", "--help"], { encoding: "utf8" });
   assert.match(plain.stdout, /使い所:/); assert.match(plain.stdout, /確認できること:/);
+  for (const args of [["--help"], ["supervise", "prompt", "--help"]]) {
+    const help = spawnSync(process.execPath, ["bin/codex-steer.mjs", ...args], { encoding: "utf8" });
+    assert.equal(help.status, 0);
+    assert.match(help.stdout, /codex-steer supervise prompt <THREAD> \[--json\]/);
+    assert.doesNotMatch(help.stdout, /codex-steer prompt <THREAD>/);
+  }
 });
 
 test("Monitor stream rejects one-shot flags before connecting and always uses JSON errors", t => {

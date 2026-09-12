@@ -1,13 +1,32 @@
-export const VERSION = "0.10.0";
+import { supervisionSteps } from "./prompt.mjs";
+
+export const VERSION = "0.11.0";
 
 export const topics = {
+  supervise: {
+    title: "指定したCodexタスクの監督役としてClaudeを起動する",
+    when: "対象タスクのIDを指定して、Claude Codeを監督役の対話セッションとして起動するとき。",
+    usage: ["supervise <THREAD> --agent claude [-- <AGENT-ARGS...>]"],
+    json_output: false,
+    returns: "Claudeの標準入力・標準出力・標準エラーと終了コードを引き継ぎます。codex-steerの出力は混ぜません。",
+    examples: ["codex-steer supervise <THREAD> --agent claude", "codex-steer supervise <THREAD> --agent claude -- --model <MODEL> --effort <LEVEL>"],
+    notes: ["--agentは必須で、現在はclaudeに対応します。PATH上の実行ファイルを、現在の作業ディレクトリと環境変数を引き継いで起動します。シェルのaliasやfunctionは使いません。", "最初の -- より後ろは全てClaudeの引数です。順序・空文字・空白・改行を保ち、--help/--version/--jsonもcodex-steer側では解釈しません。シェルで再展開しないため、呼び出し元のシェルで必要な引用をしてください。", "渡された追加引数の後ろにClaude側の -- と対象ID入りの監督プロンプトを一つの引数として付加します。追加引数の意味・組み合わせの妥当性はClaudeが判断します。", "不正なID形式、--agentの不足・未対応値、区切り前の未知の引数では起動しません。Claudeが未導入・実行不可などの起動失敗は理由を標準エラーへ出して終了コード1です。Desktopの接続と対象タスクの存在は、起動した監督役が最初に確認します。", "SIGINT/SIGTERM/SIGHUPは起動したClaudeへ転送します。シグナルで終了した場合の終了コードは128+シグナル番号です。", "対話起動のsupervise <THREAD> --agent claudeでは--jsonは非対応です。help supervise --jsonでヘルプを取得でき、supervise prompt <THREAD> --jsonで起動せず監督役（オーケストレーター）向けの本文を取得できます。"],
+  },
+  "supervise prompt": {
+    title: "監督役（オーケストレーター）向けのプロンプトを出力する",
+    when: "Claude Codeなどの監督役へ渡す、対象タスク入りの初期プロンプト本文を取得・確認するとき。",
+    usage: ["supervise prompt <THREAD>"],
+    returns: "通常はプロンプト本文だけを標準出力へ返します。--jsonではdata.thread_idとdata.promptを返します。",
+    examples: ["codex-steer supervise prompt <THREAD>", "codex-steer supervise prompt codex://threads/<UUID> --json", "codex-steer supervise <THREAD> --agent claude"],
+    notes: ["出力は監督役（オーケストレーター）へ渡す初期指示です。THREADはUUIDまたはcodex://threads/...。IDの書式を確認して正規化し、本文へ埋め込みます。Desktopへの接続・履歴取得・送信・Claudeの起動・設定変更は行いません。タスクの存在と接続は監督開始時に確認します。", "Claudeを起動する場合はsupervise <THREAD> --agent claudeを使います。追加の起動引数は -- の後ろへ渡してください。", "生成される本文はhelp monitorと同じ監督手順です。ユーザーの目的・制約の範囲内で自律介入し、Monitorが使えない場合は短いwatchで観測します。", "生成した本文を既存のClaudeセッションへ貼り付けても使えます。監督停止はそのセッションへ指示してください。プロンプトはCLIやOSの権限設定を変更しません。"],
+  },
   monitor: {
-    title: "Claude CodeのMonitorに変化を渡す",
-    when: "Monitorで通知を受け、Claudeが差分を見てレビュー・検証・追加指示を判断する運用。",
-    usage: ["watch <THREAD> --stream [--since CURSOR] [--poll-ms N] [--limit N] [--max-chars N] [--include-output]", "read <THREAD> [--since CURSOR]", "help send", "help checkpoint", "help history"],
+    title: "Codexタスクを観測・介入・結果確認の順で監督する",
+    when: "ユーザーから対象と範囲を委任され、Claudeなどが継続して進捗を観測し、必要な軌道修正を判断する運用。",
+    usage: ["supervise prompt <THREAD>", "watch <THREAD> --stream [--since CURSOR] [--poll-ms N] [--limit N] [--max-chars N] [--include-output]", "read <THREAD> [--since CURSOR]", "help supervise", "help send", "help checkpoint", "help history"],
     returns: "--streamは変化ごとに1行のJSONを返します。data.events、attention、cursorをClaudeが読み、必要なときだけ次の操作を選びます。",
-    examples: ["codex-steer watch <THREAD> --stream --poll-ms 1000 --json", "codex-steer read <THREAD> --since <LAST-CURSOR> --json", "codex-steer send <THREAD> '失敗箇所を先に確認してください' --source claude-code --kind review --based-on <CURSOR> --json", "codex-steer history check <THREAD> <MESSAGE-ID> --json"],
-    notes: ["Claudeに、例のwatchコマンドをMonitorで実行するよう依頼します。codex-steer側でClaudeやMonitorを起動・設定する処理はありません。", "既存のログ監視を続ける場合は、その通知後にread --sinceを呼ぶだけで使えます。watch --streamへの置換は任意です。", "--streamは常にJSON Linesです。初回は黙って基準を取り、同じ状態や定期的な生存確認を出力しません。開始時の状態も判断する場合は先にreadしてください。", "読み取り直後からの取りこぼしを避けるには、そのcursorをwatch --stream --sinceへ渡します。未取得ページは順に出力します。", "中断まで継続します。SIGINT/SIGTERMまたはMonitorのキャンセルで終了。--until/--timeout-msとは併用しません。切断・古いcursorではエラーを1行返して終了し、自動再接続・再送はしません。", "自分の送信が履歴へ現れただけなら追加送信せず、重複した指摘はhistory/instructionsで確認します。変更通知は新しい承認ではありません。", "検証結果はcheckpoint verify、誤った診断はsend --supersedes、複数AIの利用調整はresourceを使います。各コマンドの詳細はhelp checkpoint、help instructions、help resourceを参照してください。"],
+    examples: ["codex-steer watch <THREAD> --stream --since <CURSOR> --include-output --json", "codex-steer read <THREAD> --since <LAST-CURSOR> --include-output --json", "codex-steer send <THREAD> '失敗箇所を先に確認してください' --source claude-code --kind review --based-on <CURSOR> --json", "codex-steer history check <THREAD> <MESSAGE-ID> --json"],
+    notes: [...supervisionSteps(), "--streamは常にJSON Linesで、初回は黙って基準を取り、変化時だけ出力します。SIGINT/SIGTERMまたはMonitorのキャンセルで終了し、--until/--timeout-msとは併用しません。切断・古いcursorではエラーを1行返して終了し、自動再接続・再送はしません。", "既存のログ監視を続け、その通知後にread --sinceを呼ぶ運用も可能です。複数AIの共有リソース利用調整はhelp resourceを参照してください。"],
   },
   resource: {
     title: "画面・Unity・Gitなどの利用予定をAI間で共有する",
@@ -42,10 +61,12 @@ export const topics = {
   overview: {
     title: "別のAIと、Codexタスクの進行を共有する",
     when: "タスクを探す → 現状を読む → 指示を送る → 変化を確認する、という順で使います。",
-    usage: ["threads list [--desktop-only] [--limit N]", "status <THREAD>", "read <THREAD> [--since CURSOR] [--limit N]", "watch <THREAD> [--since CURSOR] [--until change|idle|attention]", "send <THREAD> <MESSAGE...> [--new-turn] [--dry-run] [--no-sound]", "doctor [--backend app-server|ui]", "desktop start [--dry-run]", "thread resolve <THREAD>", "open <THREAD>", "debug-ui <THREAD> [--wait-ms N]", "help <COMMAND>"],
-    returns: "各コマンドに --json を付けると、AIやスクリプトが扱えるJSONを返します。",
-    examples: ["codex-steer threads list --desktop-only --json", "codex-steer read <THREAD> --json", "codex-steer help send"],
+    usage: ["supervise <THREAD> --agent claude [-- <AGENT-ARGS...>]", "supervise prompt <THREAD>", "threads list [--desktop-only] [--limit N]", "status <THREAD>", "read <THREAD> [--since CURSOR] [--limit N]", "watch <THREAD> [--since CURSOR] [--until change|idle|attention]", "send <THREAD> <MESSAGE...> [--new-turn] [--dry-run] [--no-sound]", "doctor [--backend app-server|ui]", "desktop start [--dry-run]", "thread resolve <THREAD>", "open <THREAD>", "debug-ui <THREAD> [--wait-ms N]", "help <COMMAND>"],
+    returns: "対話起動のsupervise <THREAD> --agent claudeを除き、各コマンドに --json を付けると、AIやスクリプトが扱えるJSONを返します。supervise promptもJSONに対応します。",
+    examples: ["codex-steer supervise <THREAD> --agent claude", "codex-steer threads list --desktop-only --json", "codex-steer read <THREAD> --json", "codex-steer help send"],
     use_cases: [
+      { need: "Claudeを対象タスクの監督役にする", command: "help supervise / help monitor" },
+      { need: "監督役（オーケストレーター）向けのプロンプトを取得", command: "help supervise prompt" },
       { need: "今の状態・前回からの変化を確認", command: "help read / help status" },
       { need: "Claude CodeのMonitorから使う", command: "help monitor" },
       { need: "根拠や仮説を付けて指示する", command: "help send" },
@@ -54,7 +75,7 @@ export const topics = {
       { need: "テストしたソースと成果物を照合", command: "help checkpoint" },
       { need: "画面・Unityなどの利用を調整", command: "help resource" },
     ],
-    notes: ["THREADにはUUIDまたはcodex://threads/...を指定します。", "コマンド別のhelpには、使い所・出力・例・制約を載せています。help自体も --json に対応します。"],
+    notes: ["THREADにはUUIDまたはcodex://threads/...を指定します。", "監督役の対話起動: codex-steer supervise <THREAD> --agent claude [-- <AGENT-ARGS...>]。superviseの標準入出力と終了コードはClaudeのものです。", "コマンド別のhelpには、使い所・出力・例・制約を載せています。help自体も --json に対応します。"],
   },
   read: {
     title: "直近の発言・コマンド・変更ファイルを読む",
@@ -90,7 +111,7 @@ export const topics = {
   },
   send: {
     title: "実行中タスクに方針やレビューを伝える",
-    when: "宛先と送る内容が決まったとき。停止中のタスクを続けるときだけ --new-turn を使います。",
+    when: "単発送信の宛先・内容を指定されたとき、または委任された監督範囲で軌道修正が必要と判断したとき。再開を依頼された停止中タスクには --new-turn を使います。",
     usage: ["send <THREAD> <MESSAGE...> [--new-turn] [--dry-run] [--no-sound] [--backend app-server|ui]", "send <THREAD> <MESSAGE...> [--source NAME] [--kind decision|review|hypothesis|suggestion] [--evidence FILE-OR-URL ...] [--based-on CURSOR] [--supersedes MESSAGE-ID] [--expires-at ISO-TIMESTAMP] [--checkpoint ID]", "<THREAD> <MESSAGE...> [sendと同じオプション]"],
     returns: "acceptedはサーバーの受付です。処理完了や画面への表示を保証するものではありません。",
     examples: ["codex-steer send <THREAD> '失敗したテストの原因を先に確認してください' --dry-run --json", "codex-steer send <THREAD> '競合が原因か確認してください' --source claude --kind hypothesis --evidence results.xml --based-on <CURSOR> --json", "codex-steer send <THREAD> '続けてください' --new-turn --no-sound --json", "printf '%s\\n' '理由' '変更方針' | codex-steer send <THREAD> -"],
@@ -111,5 +132,5 @@ export function helpData(topic = "overview") {
 }
 
 export function renderHelp(data) {
-  return [`codex-steer ${data.version} — ${data.title}`, "", `使い所: ${data.when}`, ...(data.use_cases ? ["", "目的から選ぶ:", ...data.use_cases.map(x => `  ${x.need} → codex-steer ${x.command}`)] : []), "", "使い方:", ...data.usage.map(x => `  codex-steer ${x} [--json]`), "", `確認できること: ${data.returns}`, "", "例:", ...data.examples.map(x => `  ${x}`), "", ...data.notes.map(x => `• ${x}`)].join("\n");
+  return [`codex-steer ${data.version} — ${data.title}`, "", `使い所: ${data.when}`, ...(data.use_cases ? ["", "目的から選ぶ:", ...data.use_cases.map(x => `  ${x.need} → codex-steer ${x.command}`)] : []), "", "使い方:", ...data.usage.map(x => `  codex-steer ${x}${data.json_output === false || x.startsWith("supervise <") ? "" : " [--json]"}`), "", `確認できること: ${data.returns}`, "", "例:", ...data.examples.map(x => `  ${x}`), "", ...data.notes.map(x => `• ${x}`)].join("\n");
 }

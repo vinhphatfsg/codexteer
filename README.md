@@ -1,6 +1,6 @@
 # codex-steer
 
-ローカルのCodex Desktopタスクへ、ターミナルからメッセージを送信し、進捗を読み取るmacOS用CLIです。
+普段のCodex Desktopを使いながら、別のAIが進捗を観測し、根拠を伴って実行途中に軌道修正を伝えるためのmacOS用CLIです。ターミナルからの単発送信にも使えます。
 
 ## 導入
 
@@ -35,35 +35,37 @@ codex-steer doctor --json
 
 ### Claude CodeにCodexの監視とステアリングを任せる
 
-上の導入を済ませ、[Monitorツール](https://code.claude.com/docs/en/tools-reference#monitor-tool)が使えるClaude Codeを用意してください。
+上の導入を済ませ、PATH上の`claude`でClaude Codeを起動できる状態にします。監視したいCodexタスクのIDまたはURLをコピーし、別のターミナルの対象プロジェクトのディレクトリから次を実行してください。
 
-1. Codexで監視したいタスクのIDまたはURLをコピーします。
-2. 別のターミナルで`claude`を起動します。
-3. 次のプロンプトの`<thread-id>`を置き換えて入力します。
-
-```text
-codex-steerで次のCodexタスクを監視し、作業中のCodexへ軌道修正を直接伝えるオーケストレーター役をしてください。
-対象: <thread-id>
-
-まず codex-steer help monitor と codex-steer help send を読み、readでユーザーの依頼・制約と現在の進捗を確認してください。
-読み終えたcursorを引き継いで watch --stream --since をMonitorツールで実行してください。
-
-次の観点で監視してください。
-- 今の要件に不要な抽象化・汎用化・仕組みを増やし、過剰設計になっていないか。
-- 本来解くべき問題から外れて、周辺機能や無関係な改善に作業を広げていないか。
-- 要件を満たす、より小さく単純な変更で目的を達成できないか。
-
-軌道修正が必要なら、作業の完了を待たずに最新の差分をreadで読み切り、
-そのcursorを使って次の形式でステアリングメッセージを送ってください。
-codex-steer send <thread-id> "<根拠と具体的な軌道修正指示>" --source claude-code --based-on <cursor> --json
-
-ユーザーの目的・制約の範囲内で、送信内容とタイミングを判断し、都度私の確認を待たずに介入してください。
-送信後も監視を続け、指示が反映されたか確認し、私には介入内容と結果を短く報告してください。
-受付がunknownの場合は、history checkで確認してから再送を判断してください。
-目的・制約が読み取れない場合や、要件自体の変更が必要な場合は私に確認してください。
+```bash
+codex-steer supervise <thread-id> --agent claude
 ```
 
-監視とステアリングの実行はClaudeに任せられます。停止するときは、同じClaudeセッションで「監視とステアリングを停止して」と伝えてください。
+対象IDを埋め込んだ監督プロンプトでClaudeを[対話起動](https://code.claude.com/docs/en/cli-reference#cli-commands)します。端末の標準入出力をそのまま使い、起動後もClaudeへ追加の指示を入力できます。
+
+モデルなどClaude側の起動引数は、`--`の後ろへ渡します。
+
+```bash
+codex-steer supervise <thread-id> --agent claude -- --model <model> --effort <level>
+```
+
+既にClaudeを起動している場合は、監督役（オーケストレーター）向けのプロンプトを出力し、そのセッションに貼り付けても使えます。
+
+```bash
+codex-steer supervise prompt <thread-id>
+```
+
+監督手順は`codex-steer help monitor`と生成プロンプトで共通です。
+
+1. 接続を診断し、対象タスクの最新の依頼・制約・進捗、有効な指示と対応待ちの履歴を確認する。
+2. 差分を読み切ったcursorから観測を続ける。[Monitorツール](https://code.claude.com/docs/en/tools-reference#monitor-tool)が使えれば`watch --stream`、使えなければ短い`watch`を繰り返す。
+3. 過剰設計・スコープ逸脱・より小さな修正の余地を判断し、必要なら最新の差分を読み切ってから`send --based-on`で介入する。同じ指摘が対応中なら結果を待つ。
+4. 送信したmessage_idを保持し、受付・対応報告・検証結果を区別して追う。`unknown`は`history check`で照合し、自動再送しない。
+5. 介入内容・確認結果・未確認事項を短く報告する。停止指示を受けたら、自分のMonitor/watchと追加送信を止める。
+
+このプロンプトは、ユーザーの最新の目的・制約の範囲内で監督と介入を委任します。その範囲の介入に毎回の確認は不要です。目的・制約が不明な場合や要件自体を変える必要がある場合は確認します。監督の委任だけで停止中タスクを再開したり、承認・質問へ代理回答したりはしません。単発送信では、ユーザーが指定した宛先・内容を使います。
+
+停止するときは、同じClaudeセッションで「監視とステアリングを停止して」と伝えてください。Codexの作業自体は継続します。監督はCLIとOSの既存の権限設定に従います。
 
 IDのコピーを省く場合は、Claudeに`codex-steer threads list --desktop-only --json`で候補を表示してもらい、対象を選ぶこともできます。同じプロジェクトに複数のタスクがある場合、Claudeの起動場所だけでは監視対象を特定できません。
 
@@ -112,7 +114,7 @@ codex-steer watch <thread-id> --stream --json
 
 以下は用途別のコマンド一覧です。`<...>`は実際の値に置き換えてください。`<cursor>`は`read`・`status`・`watch`の結果、`<message-id>`は`send`・`history list`、`<checkpoint-id>`は`checkpoint capture`・`checkpoint list`、`<token>`は`resource acquire`の結果から取得します。
 
-各コマンドに`--json`を付けるとJSONで結果を返します。別コマンドを実行する`run`では、codex-steer側のオプションを区切りの`--`より前に置いてください。
+対話起動の`supervise <thread-id> --agent claude`を除き、各コマンドに`--json`を付けるとJSONで結果を返します。`supervise prompt`もJSONに対応します。別コマンドを実行する`run`や監督役の起動では、codex-steer側のオプションを区切りの`--`より前に置いてください。
 
 #### ヘルプ・バージョン
 
@@ -133,6 +135,52 @@ codex-steer --version
 ```
 
 引数なしの`codex-steer`と`codex-steer --help`でも全体のヘルプを表示します。
+
+#### 監督役の起動
+
+```bash
+codex-steer supervise <thread-id> --agent claude
+codex-steer supervise <thread-id> --agent claude -- --model <model> --effort <level>
+codex-steer help supervise
+```
+
+`--agent`は必須で、現在の対応値は`claude`です。PATH上の実行ファイルを、現在の作業ディレクトリ・環境変数・標準入力・標準出力・標準エラーを引き継いで起動します。シェルのaliasやfunctionは使いません。
+
+最初の`--`以降は対象エージェントの引数です。順序・空文字・空白・改行を保ち、codex-steer側では解釈もシェルでの再展開もしません。例えば区切り後の`--help`・`--version`・`--json`もClaudeへ渡します。呼び出し元のシェルで必要な引用は付けてください。
+
+追加引数の後ろには、Claude側の区切り`--`と、`supervise prompt`と同じ生成処理による監督プロンプトを一つの引数として付加します。追加引数の意味や組み合わせの妥当性はClaudeが判断します。
+
+不正なID形式、`--agent`の不足・未対応値、区切り前の未知の引数では起動しません。Claudeが未導入・実行不可などの起動失敗は標準エラーに理由を表示し、終了コード1です。Desktopの接続と対象タスクの存在は、起動した監督役が最初に確認します。
+
+通常終了ではClaudeの終了コードを返します。`SIGINT`・`SIGTERM`・`SIGHUP`は起動したClaudeへ転送し、シグナル終了時は`128 + シグナル番号`を返します。対話出力を引き継ぐため、この起動形式では`--json`は非対応です。ヘルプは`help supervise --json`、本文だけの取得は`supervise prompt <thread-id> --json`を使ってください。
+
+#### 監督役（オーケストレーター）向けのプロンプトを取得
+
+```bash
+# 監督役へ渡す、対象タスク入りの本文を標準出力へ出力
+codex-steer supervise prompt <thread-id>
+
+# タスクURLからも生成可能
+codex-steer supervise prompt codex://threads/<thread-id>
+
+# JSONで対象IDと本文を取得
+codex-steer supervise prompt <thread-id> --json
+
+# このコマンドのヘルプ
+codex-steer help supervise prompt
+```
+
+`supervise prompt`は、Claudeなどの監督役（オーケストレーター）へ渡す初期プロンプトを生成します。対象IDの書式を確認して正規化し、本文へ埋め込みます。Desktopの起動・接続、履歴取得、送信、ファイル保存、Claudeの起動は行いません。タスクの存在と接続は監督開始時に確認します。本文には観測・根拠付き介入・結果確認・停止までの手順を含みます。
+
+通常出力は末尾改行付きの本文のみです。`--json`では既存CLIと同じ形式で返します。
+
+```json
+{"ok":true,"command":"supervise.prompt","data":{"thread_id":"aaaaaaaa-aaaa-4aaa-8aaa-000000000001","prompt":"対象IDを含む監督プロンプト本文…"}}
+```
+
+IDが不正な場合や引数が不足・過剰な場合は終了コード1です。通常は標準エラーへ理由を出し、本文は出力しません。`--json`では標準出力に`{"ok":false,"error":{"message":"理由"}}`を返します。起動に使う本文の生成には`--json`を付けないでください。
+
+Codex CLIでも、`steer_prompt=$(codex-steer supervise prompt <thread-id>) && codex "$steer_prompt"`のように初期プロンプトを渡せます。生成プロンプトには、Monitorが使えない場合の短い`watch`による手順と、監督AI自身の送信元名を使う案内を含みます。
 
 #### Desktopの起動・診断・タスク選択
 
