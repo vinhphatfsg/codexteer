@@ -94,7 +94,7 @@ test("unknown backend and empty messages fail before doing any work", () => {
 });
 
 test("command help explains purpose, results and examples without contacting Desktop", () => {
-  for (const topic of ["supervise", "supervise prompt", "read", "status", "watch", "monitor", "send", "history", "instructions", "checkpoint", "resource", "doctor", "desktop", "threads", "thread", "open", "debug-ui"]) {
+  for (const topic of ["supervise", "supervise prompt", "findings", "connection", "read", "status", "watch", "monitor", "send", "history", "instructions", "checkpoint", "resource", "doctor", "desktop", "threads", "thread", "open", "debug-ui"]) {
     for (const args of [["help", ...topic.split(" ")], [...topic.split(" "), "--help"]]) {
       const { status, result } = cli(args);
       assert.equal(status, 0); assert.equal(result.command, "help");
@@ -106,7 +106,7 @@ test("command help explains purpose, results and examples without contacting Des
   for (const args of [["--help"], ["supervise", "prompt", "--help"]]) {
     const help = spawnSync(process.execPath, ["bin/codexteer.mjs", ...args], { encoding: "utf8" });
     assert.equal(help.status, 0);
-    assert.match(help.stdout, /codexteer supervise prompt <THREAD> \[MESSAGE\] \[--json\]/);
+    assert.match(help.stdout, /codexteer supervise prompt <THREAD> \[MESSAGE\](?: \[--agent claude\|codex\] \[--connection shared\|desktop\])? \[--json\]/);
     assert.doesNotMatch(help.stdout, /codexteer prompt <THREAD>/);
   }
 });

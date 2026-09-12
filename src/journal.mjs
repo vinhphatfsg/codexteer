@@ -7,6 +7,7 @@ import { discoverRuntime } from "./runtime.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 import { RpcClient } from "./rpc.mjs";
 import { prepareDirective } from "./directive.mjs";
+import { assertSupervisor, withSupervisedSend } from "./supervision.mjs";
 
 export async function getMessage(threadInput, id, options = {}) {
   const threadId = normalizeThreadId(threadInput);
@@ -53,20 +54,27 @@ async function validateReplacement(threadId, options, storage) {
 
 export async function sendTrackedMessage(threadInput, body, options = {}, { send = sendAppServerMessage, ...storage } = {}) {
   const threadId = normalizeThreadId(threadInput);
+  if (options.supervisor && !options.basedOn) throw Object.assign(new Error("Supervised sends require --based-on from a completed read."), { code: "SUPERVISOR_OBSERVATION_REQUIRED" });
+  if (options.supervisor && !options.finding && !options.retracts) throw Object.assign(new Error("Supervised sends require --finding so pending interventions can be tracked and deduplicated."), { code: "SUPERVISOR_FINDING_REQUIRED" });
   if (options.dryRun) {
+    if (options.supervisor) await assertSupervisor(threadId, options.supervisor, { ...storage, sending: true, connection: options.connection });
     await validateReplacement(threadId, options, storage);
     const prepared = await prepareDirective(threadId, body, options, "preview", storage);
     return { ...await send(threadId, prepared.wireText, options), ...(prepared.metadata ? { metadata: prepared.metadata, freshness_checked: false } : {}) };
   }
-  return withStoreLock(`message-${threadId}`, async () => {
+  return withSupervisedSend(threadId, options.supervisor, () => withStoreLock(`message-${threadId}`, async () => {
     await validateReplacement(threadId, options, storage);
     const id = randomUUID(), created = new Date().toISOString();
     const prepared = await prepareDirective(threadId, body, options, id, storage);
+    const beforeSend = async (...args) => {
+      await prepared.beforeSend?.(...args);
+      if (options.supervisor) await assertSupervisor(threadId, options.supervisor, { ...storage, sending: true, connection: options.connection });
+    };
     let entry = { schema: 1, id, client_message_id: id, thread_id: threadId, created_at: created, updated_at: created, body, wire_text: prepared.wireText, metadata: prepared.metadata,
       message_sha256: digest(prepared.wireText), delivery_status: "unknown", sent: null, attempt_state: "prepared", response: { status: "unreported" } };
     await writeRecord("messages", id, entry, storage);
     try {
-      const receipt = await send(threadId, prepared.wireText, { ...options, clientMessageId: id, beforeSend: prepared.beforeSend });
+      const receipt = await send(threadId, prepared.wireText, { ...options, clientMessageId: id, beforeSend });
       entry = { ...entry, ...receipt, id, attempt_state: "finished", updated_at: new Date().toISOString() };
       try { await writeRecord("messages", id, entry, storage); } catch { return { ...receipt, message_id: id, journal_update_required: true }; }
       return { ...receipt, message_id: id };
@@ -74,9 +82,10 @@ export async function sendTrackedMessage(threadInput, body, options = {}, { send
       entry = { ...entry, sent: Object.hasOwn(error, "sent") ? error.sent : error.uncertain ? null : false, delivery_status: error.delivery_status ?? (error.uncertain ? "unknown" : "not_sent"), attempt_state: "finished", updated_at: new Date().toISOString(), error_code: error.code ?? "NOT_SENT" };
       try { await writeRecord("messages", id, entry, storage); } catch { error.journal_update_required = true; }
       error.client_message_id = id; error.message_id = id;
+      error.delivery_status = entry.delivery_status; error.sent = entry.sent;
       throw error;
     }
-  }, storage);
+  }, storage), { ...storage, connection: options.connection });
 }
 
 export async function reconcileMessages(threadInput, id, options = {}, { discover = discoverRuntime, connect = RpcClient.connect } = {}) {

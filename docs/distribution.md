@@ -1,11 +1,11 @@
 # 配布と永続実行
 
 パッケージ名は `codexteer`、CLI名は `codexteer`、ライセンスはMITです。
-旧npmパッケージは`@vinhphatfsg/codex-steer`です。GitHubリポジトリの改名はnpmパッケージを公開・改名する操作ではなく、`codexteer`は新しいパッケージとして公開します。公開時は`npm whoami`でnpm側のユーザーを確認してください。
+旧npmパッケージは`@vinhphatfsg/codex-steer`です。`codexteer@0.14.1`は公開済みで、このブランチは次期版`0.15.0`を準備します。GitHubのPR作成・マージはnpm公開を行う操作ではありません。公開時は`npm whoami`でnpm側のユーザーを確認してください。
 `package.json` は `private` を持たず、`publishConfig` でnpm公式レジストリへのpublic公開を指定しています。公開可能な設定であることと、実際に公開済みであることは別です。
 
 公開後の基本的な実行形式は次のとおりです。通常はバージョン指定なしで使えます。監督開始後は保存したCLIを使い続けるため、監督中の一貫性を保つために版を明示する必要はありません。起動側と操作側の製品バージョンも、必要な通信仕様が対応していれば異なっていても使えます。
-この例は現在公開済みであることを示すものではありません。`-y` はnpmの取得確認を省略します。
+以下の新しい監督機能をnpxで使うには0.15.0の公開が必要です。公開前はこのブランチをソースから導入してください。`-y` はnpmの取得確認を省略します。
 
 ```text
 npx -y codexteer desktop start
@@ -29,11 +29,11 @@ CLIはDesktopを自動終了しません。
 
 両形式で対象IDの後ろに任意の`MESSAGE`を一つの引数として渡せます。省略時は保存したCLIの標準方針を使い、指定時は標準方針全体をその文に置き換えます。必須の共通テンプレートは保存したCLIから常に生成し、対象・実行コマンド・操作時の確認を保ちます。指定文は生成・起動ごとの入力で、永続配置のファイルやマニフェストへ書き込まず、内容ハッシュにも含めません。同じCLIなら異なる方針でも保存先を検証して再利用します。空文字・空白だけの文は保存処理前に`INVALID_SUPERVISION_POLICY`で拒否します。本文の文字列はテンプレートやシェルとして評価しません。
 
-直接起動の`supervise`はClaudeを既定にし、`--agent claude`の明示も受け付けます。監督方針は最初の`--`より前、Claude側の起動引数はその後ろへ置いてください。
+直接起動の`supervise`はClaudeを既定にし、`--agent claude`の明示と`--agent codex`にも対応します。監督方針は最初の`--`より前、エージェント側の起動引数はその後ろへ置いてください。
 
 監督役の`doctor`・`read`・`watch`・`send`等はこのコピーを使います。パスはシェル引数として引用し、空白・引用符・コマンド置換に見える文字も文字列として扱います。本文に埋め込むパスに改行や制御文字があれば、`SUPERVISION_PATH_UNSAFE`で拒否します。ヘルプの`codexteer`表記も、監督役には指定された実行コマンドに置き換えるよう指示します。
 
-`supervise prompt`も読み取り専用ではなく、IDと引数の検証後にCLI一式の保存・再利用の検証を行ってから本文を出力します。保存・検証に失敗した場合は部分的な本文を出力せず、直接起動の場合もClaudeを起動しません。Desktopへの接続・設定変更・履歴取得・送信は行いません。`--json`には対象IDと本文に加えて`data.deployment`（元のホームを示す`codex_home`・保存先・版・ハッシュ・再利用の有無）と`data.node`（Nodeの実体パス・版）を返します。ヘルプの表示は保存処理を行いません。
+`supervise prompt`も読み取り専用ではなく、IDと引数の検証後にCLI一式の保存・再利用の検証を行ってから本文を出力します。保存・検証に失敗した場合は部分的な本文を出力せず、直接起動の場合もエージェントを起動しません。Desktopへの接続・設定変更・履歴取得・送信は行いません。`--json`には対象IDと本文に加えて`data.deployment`（元のホームを示す`codex_home`・保存先・版・ハッシュ・再利用の有無）、`data.node`（Nodeの実体パス・版）、`data.supervisor`（session_id・owner・connection）を返します。ヘルプの表示は保存処理を行いません。
 
 本文は同じPC向けです。全コマンドの先頭に`CODEX_HOME='…'`を埋め込み、配置時に検証したホームの実体パスへ固定します。生成時に`CODEX_HOME`が未設定なら、既定の`~/.codex`の実体パスを使います。相対パスやシンボリックリンクも絶対パスに解決するため、貼り付け先の作業ディレクトリや`CODEX_HOME`が異なっても、生成元のruntimeと履歴を使います。別のプロファイルを監督する場合は、そこで本文を生成し直してください。
 
@@ -53,12 +53,12 @@ CLIとnpmパッケージは`codexteer`へ変更しました。起動ファイル
 
 履歴・チェックポイント・resourceロック・永続配置の保存先`CODEX_HOME/codex-steer`、配置目録`.codex-steer-runtime.json`、IPCの親ディレクトリ`/private/tmp/codex-steer-<uid>`、通信・診断用JSONの`codex_steer_*`フィールドは旧名を維持します。履歴の移動や稼働中runtimeの置き換えをせず、旧パッケージとの間でも従来の操作別互換性チェックを使います。診断に旧パッケージ名との差が表示されても、それだけで操作を拒否しません。
 
-既存の保存済みコピーは変更・削除しません。新しいCLI・npm名と起動ファイル名は配布物の内容ハッシュに含まれるため、同じ`0.14.1`でも旧名の配布物とは別のコピーになります。
+既存の保存済みコピーは変更・削除しません。新しいCLI・npm名と起動ファイル名は配布物の内容ハッシュに含まれるため、同じ製品バージョンでも旧名の配布物とは別のコピーになります。
 
 ## 配布物
 
 `package.json` の `files` で `bin`、`src`、必要なAppleScript、音源、配布ドキュメントを指定します。
-README、MIT LICENSE、package.jsonに加え、依存する `ws` とそのライセンスを `bundleDependencies` で同梱します。
+README、CHANGELOG、MIT LICENSE、package.jsonに加え、依存する `ws` とそのライセンスを `bundleDependencies` で同梱します。
 実行時に追加の依存をネットワークから取得しません。install/postinstall/prepare/prepackフックは使用しません。
 テスト、開発用スクリプト、`.codex`、ログ、認証情報は配布対象に含めません。
 
@@ -156,13 +156,14 @@ npm run check
 npm test
 npm run test:package
 npm run test:protocol
+npm run test:connection
 ```
 
 `test:package` は実際のtarballを作り、同梱内容・実行権限を確認して、隔離した空のnpmキャッシュからオフラインでインストールします。
 公開を禁止する`private`フィールドがないこと、CLIの`bin`が正規化済みのパスであることも確認します。さらに資格情報を渡さず、外部公開できない接続先・offline・dry-runでnpmの公開準備を検証し、自動補正の警告がなく、テストするtarballと内容ハッシュが一致することを確認します。npmのdry-runは`EPRIVATE`の判定を省略するため、dry-runの成功だけで公開可能とは判断しません。
 リポジトリ外でCLIを実行し、模擬runtimeに対する異なる版でのread/send、機能単位の拒否、キャッシュ削除後の永続配置を検証します。
 改名後のCLIから旧パッケージ名のruntimeへread/sendできることと、旧名の保存先にある履歴を変更せずに読めることも確認します。
-npxから模擬Claudeを起動して保存したCLIへの参照を確認し、同じ本文を別プロセスへ貼り付けた場合も検証します。元のキャッシュの更新・削除後も保存した版を使い、模擬runtimeへのread/sendを継続できることを確認します。単体テストでは同じ版のソース変更、別の版への更新、保存済みコピーの改変、Nodeバージョンの不一致も検証します。監督側のPATHに別のCLIがある場合やCLIがない場合を含み、実際のClaudeやモデルは起動しません。
+npxから模擬Claudeと模擬Codexを起動して保存したCLIへの参照を確認し、同じ本文を別プロセスへ貼り付けた場合も検証します。元のキャッシュの更新・削除後も保存した版を使い、模擬runtimeへのread/sendを継続できることを確認します。単体テストでは同じ版のソース変更、別の版への更新、保存済みコピーの改変、Nodeバージョンの不一致も検証します。監督側のPATHに別のCLIがある場合やCLIがない場合を含み、実際のエージェントやモデルは起動しません。
 `test:protocol` は実際の同梱CLIと模擬Desktopを使います。実ユーザーのタスクへの送信やDesktopの停止は行いません。
 実際のnpm公開には、アカウントとパッケージの公開権限確認、公開版の確定とユーザーからの公開指示が必要です。
 
@@ -170,7 +171,7 @@ npxから模擬Claudeを起動して保存したCLIへの参照を確認し、�
 
 レビュー・検証を終えた版を、npm側の公開権限を持つアカウントで公開します。手動公開には2FAを有効にしたアカウントを使ってください。
 
-公開済みのパッケージ名とバージョンの組み合わせは再公開できません。旧パッケージ`@vinhphatfsg/codex-steer@0.14.0`は変更せず、今回の配布物は`codexteer@0.14.1`として公開します。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
+公開済みのパッケージ名とバージョンの組み合わせは再公開できません。既存の`codexteer@0.14.1`は変更せず、今回の配布物は`codexteer@0.15.0`として準備します。公開は別途実行します。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
 
 ```bash
 npm login
@@ -179,14 +180,32 @@ npm run test:package
 npm publish --access public
 ```
 
-公開後は、公開した版と起動コマンドの登録を確認します。次は0.14.1を公開した場合の例です。
+公開後は、公開した版と起動コマンドの登録を確認します。次は0.15.0を公開した場合の例です。
 
 ```bash
-npm view codexteer@0.14.1 version bin --json
-npx -y codexteer@0.14.1 --version
+npm view codexteer@0.15.0 version bin --json
+npx -y codexteer@0.15.0 --version
 ```
 
 `EPRIVATE`はリポジトリの`package.json`に公開禁止設定が残っていることを示します。`--access public`はその禁止を解除しません。
 `bin`のパスは`bin/codexteer.mjs`とし、先頭に`./`を付けません。npm 11.6.2では先頭の`./`を正規化する際に「invalid and removed」という警告が出ますが、この場合の実装は`bin`を保持しています。警告を避けるため、正規化済みの表記を配布元から使います。
 
 参考: [npmのfilesとbundleDependencies](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/)、[npm exec/npxのキャッシュ](https://docs.npmjs.com/cli/v11/commands/npm-exec/)、[パッケージの公開](https://docs.npmjs.com/creating-and-publishing-unscoped-public-packages/)。
+
+## 監督状態・指摘と接続方式
+
+ここからの監督制御、指摘管理、Codex CLI起動、接続方式の選択は0.15.0で追加します。保存済みCLIの機能自体は0.14.1から利用できます。製品の機能追加に伴うminor更新であり、runtime protocolと既存capabilityのv1契約は維持します。
+
+保存したCLIへのコマンドは、canonical CODEX_HOME、Node guard、`--supervisor <session-id>`、`--connection shared|desktop`を一緒に保持します。各プロンプト生成は新しいIDを発行しますが、生成だけでは登録しません。直接起動はエージェント起動前に登録し、終了時に停止します。コピーした本文は最初のregisterで開始します。
+
+同じホームの`codex-steer/supervisors`はタスク別の制御、`supervisor-observations`はセッション別の最終CLI観測、`findings`は指摘・解決条件・revision・評価を保存します。既存のstoreと同じ所有者専用のディレクトリ0700・ファイル0600を使い、シンボリックリンクや不適切な所有者・権限を拒否します。観測と制御を別レコードにし、readの完了でpause/stopを上書きしません。
+
+送信とpause/stopはタスクの監督ロック、指摘の変更と送信履歴はタスクのメッセージロックで直列化します。処理中の競合は`RECORD_BUSY`で明示し、未知の受付結果を自動再送しません。送信受付後に監督状態の書き込みだけが失敗した場合は、配送結果とIDを維持して`supervision_update_required: true`を返します。これは再送の指示ではありません。
+
+生成した新しい監督ID付きコマンドだけが制御対象です。以前の保存済みCLIやIDなしの手動コマンドは既存の挙動を維持します。同じOSユーザーの別プロセスや任意コードに対する認証・隔離ではありません。状態activeは登録を示し、観測時刻はCLIの取得結果であってAIの読了の証明ではありません。
+
+指摘の重複はkeyとrevisionで判定します。cursorだけではrevisionを進めず、新しい根拠か解決条件の変更と理由を要求します。URLは参照だけ、ファイル根拠は送信直前に再照合します。解決のnoteは明示的な判断で、checkpointのrun・入力・成果物の整合性と区別します。評価は未送信候補を含む現在revisionの集計です。操作例と制約はREADME、`help findings`、`help supervise`に記載しています。
+
+`--connection desktop`は既存の`CODEX_HOME/app-server-control/app-server-control.sock`へ読み取り専用で接続します。ホームは所有者一致かつgroup/other書込不可、制御ディレクトリとソケットは所有者専用に限定します。接続前後・各API要求でendpointを検査し、ロード済み対象だけを読み取ります。明示的な選択であり、自動検出による接続切り替え・daemon起動・Desktop再起動はしません。送信機能の診断は`unsupported`、`source: observation-only`です。実機での送信・UI表示・承認継続は未検証のまま残します。
+
+開発用の`npm run test:connection`は、Desktop同梱CLIを一時プロファイルのUnixソケットで起動し、ローカル偽モデルで作った合成履歴の読み取りを確認します。実Desktopへの接続・設定変更や外部モデル利用は行いません。`npm run test:protocol`は既存wrapper・偽Desktopとの送信と承認経路、`npm run test:package`は実tarball・オフラインnpx・偽Claude/Codexの起動と、別CODEX_HOME・キャッシュ削除後の観測/送信・pause/resume・重複拒否を確認します。これらの隔離検証から実Desktopの表示や直接接続での承認往復まで保証するものではありません。

@@ -1,6 +1,6 @@
 {
   "name": "codexteer",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "description": "Send steering messages to running Codex Desktop threads from a terminal.",
   "type": "module",
   "bin": {
@@ -10,6 +10,7 @@
     "check": "node scripts/check-syntax.mjs",
     "test": "node --test",
     "test:protocol": "node scripts/probe-app-server.mjs",
+    "test:connection": "node scripts/probe-desktop-connection.mjs",
     "benchmark:read": "node scripts/benchmark-read.mjs",
     "test:package": "node scripts/test-package.mjs"
   },
@@ -29,6 +30,7 @@
     "src/*.mjs",
     "scripts/*.applescript",
     "assets/send-pururu.wav",
+    "CHANGELOG.md",
     "docs/distribution.md"
   ],
   "bundleDependencies": [

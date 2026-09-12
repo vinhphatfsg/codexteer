@@ -11,6 +11,9 @@ const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 const REPO = path.dirname(path.dirname(BIN));
 
+
+const withoutSession = text => text.replaceAll(/--supervisor '[0-9a-f-]{36}'/g, "--supervisor '<SESSION>'");
+
 function versionCommand(text) {
   const command = text.split("\n").find(line => line.endsWith(" --version"));
   assert.ok(command, "The prompt must include an executable CLI version check");
@@ -46,7 +49,7 @@ test("supervise prompt emits only orchestrator instructions, normalizes the targ
   const url = `codex://threads/${ID.toUpperCase()}?prompt=must-not-enter-supervisor-prompt`;
   const resolved = spawnSync(process.execPath, [BIN, "supervise", "prompt", url], options);
   assert.equal(resolved.status, 0);
-  assert.equal(resolved.stdout, plain.stdout, "Only the normalized ID is interpolated, not URL query text");
+  assert.equal(withoutSession(resolved.stdout), withoutSession(plain.stdout), "Only the normalized ID is interpolated, not URL query text");
   assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["runtimes"], "Generation prepares only the distribution, without connections or journal state");
 });
 
@@ -60,7 +63,7 @@ test("JSON prompt output preserves the text as one field with the standard CLI e
     assert.equal(result.stdout.trim().split("\n").length, 1);
     const { ok, command, data } = JSON.parse(result.stdout);
     assert.equal(ok, true); assert.equal(command, "supervise.prompt");
-    assert.equal(data.thread_id, ID); assert.equal(data.prompt, plain.stdout.slice(0, -1));
+    assert.equal(data.thread_id, ID); assert.equal(withoutSession(data.prompt), withoutSession(plain.stdout.slice(0, -1)));
     assert.equal(data.deployment.reused, true);
     assert.match(data.deployment.sha256, /^[a-f0-9]{64}$/);
     assert.ok(data.deployment.directory.endsWith(`${data.deployment.version}-${data.deployment.sha256}`));
@@ -80,14 +83,15 @@ test("a custom policy replaces the default policy while retaining the shared tem
   const marker = "\n\n■ 監督方針\n";
   assert.ok(standard.prompt.includes(marker));
   assert.ok(custom.prompt.endsWith(marker + policy), "Custom policy must remain a single unchanged text section");
-  assert.equal(custom.prompt.slice(0, -marker.length - policy.length), standard.prompt.split(marker)[0]);
+  assert.equal(withoutSession(custom.prompt.slice(0, -marker.length - policy.length)), withoutSession(standard.prompt.split(marker)[0]));
   assert.match(standard.prompt.split(marker)[1], /不要な抽象化・汎用化/);
   assert.doesNotMatch(custom.prompt, /不要な抽象化・汎用化|変化のない定期報告は控え/);
   assert.equal(custom.deployment.directory, standard.deployment.directory, "Policy must not create another executable distribution");
   assert.equal(custom.deployment.reused, true);
-  assert.equal(versionCommand(custom.prompt), versionCommand(standard.prompt));
+  assert.equal(withoutSession(versionCommand(custom.prompt)), withoutSession(versionCommand(standard.prompt)));
+  assert.notEqual(custom.supervisor.session_id, standard.supervisor.session_id);
   const after = prepare([]);
-  assert.equal(after.prompt, standard.prompt, "An override must not persist into the next invocation");
+  assert.equal(withoutSession(after.prompt), withoutSession(standard.prompt), "An override must not persist into the next invocation");
   const help = spawnSync(process.execPath, [BIN, "help", "monitor"], options);
   assert.equal(help.status, 0, help.stderr);
   assert.doesNotMatch(help.stdout, /不要な抽象化・汎用化|変化のない定期報告は控え/);
@@ -139,6 +143,9 @@ test("pasted commands retain the generating profile when the receiving environme
     const data = JSON.parse(prepared.stdout).data;
     const command = data.prompt.split("\n").find(line => line.endsWith(` history list ${ID} --pending --json`));
     assert.ok(command);
+    const bootstrap = data.prompt.split("\n").find(line => line.includes(` supervise register ${ID} `));
+    const registered = spawnSync("/bin/sh", ["-c", bootstrap], options);
+    assert.equal(registered.status, 0, registered.stderr || registered.stdout);
     const recipientUser = path.join(options.cwd, "recipient-user"), differentHome = path.join(options.cwd, "different-home");
     for (const [home, id] of [[originalHome, "original"], [differentHome, "different"], [path.join(recipientUser, ".codex"), "recipient-default"]]) {
       mkdirSync(home, { recursive: true, mode: 0o700 });
@@ -304,7 +311,8 @@ test("supervise prompt composes with a shell launcher without consuming stdin or
   for (const shell of ["/bin/zsh", "/bin/bash"]) {
     const launched = spawnSync(shell, ["-f", "-c", script, "prompt-shortcut-test", ID], { ...options, input: "terminal input remains available\n" });
     assert.equal(launched.status, 0, launched.stderr);
-    assert.deepEqual(JSON.parse(launched.stdout), { args: [expected], input: "terminal input remains available\n" });
+    const captured = JSON.parse(launched.stdout); captured.args = captured.args.map(withoutSession);
+    assert.deepEqual(captured, { args: [withoutSession(expected)], input: "terminal input remains available\n" });
     const rejected = spawnSync(shell, ["-f", "-c", script, "prompt-shortcut-test", "invalid-id"], options);
     assert.equal(rejected.status, 1);
     assert.equal(rejected.stdout, "", "Claude must not start when prompt generation fails");

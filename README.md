@@ -4,13 +4,13 @@
 
 ## 導入
 
-macOS、Node.js 20以降とnpm、`/Applications/ChatGPT.app`にインストールされたCodex Desktopが必要です。Claudeを監督役にする場合は、PATH上の`claude`でClaude Codeを起動できる状態にします。
+macOS、Node.js 20以降とnpm、`/Applications/ChatGPT.app`にインストールされたCodex Desktopが必要です。監督役に使うClaude CodeまたはCodex CLIを、PATH上の`claude`または`codex`で起動できる状態にします。
 
 ### npxで使う
 
 リポジトリのcloneやグローバルインストールなしで実行できます。npmパッケージ名とCLI名は`codexteer`です。
 
-監督開始時のCLI一式を保存する機能は`0.14.1`以降に対応します。この版のnpm公開前は、次の「ソースから導入する」を使ってください。
+このブランチは次期版`0.15.0`です。npm公開済みの`0.14.1`は利用できますが、監督方針の上書き、停止・再開、指摘管理、Codex CLI起動、Desktopへの観測専用接続は`0.15.0`で追加します。公開前にこれらを使う場合は、このブランチを「ソースから導入する」の手順で導入してください。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
 
 ```bash
 npx -y codexteer --version
@@ -28,10 +28,10 @@ npx -y codexteer doctor --json
 <details>
 <summary>特定のバージョンで実行する場合（任意）</summary>
 
-不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。次は`0.14.1`を選ぶ例です。
+不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。`0.15.0`の公開後にその版を選ぶ場合は、次のように指定します。
 
 ```bash
-npx -y codexteer@0.14.1 supervise <thread-id>
+npx -y codexteer@0.15.0 supervise <thread-id>
 ```
 
 </details>
@@ -63,7 +63,7 @@ codexteer doctor --json
 
 ### codex-steerから移行する
 
-旧npmパッケージは`@vinhphatfsg/codex-steer`です。新しいパッケージの公開後は`npx -y codexteer`を使います。ソースから導入している場合は、新しいコードで`make install-local`を実行すると`codexteer`コマンドを導入できます。既存cloneのリモートURLは`https://github.com/vinhphatfsg/codexteer.git`へ更新してください。
+旧npmパッケージは`@vinhphatfsg/codex-steer`です。現在は`npx -y codexteer`を使います。ソースから導入している場合は、新しいコードで`make install-local`を実行すると`codexteer`コマンドを導入できます。既存cloneのリモートURLは`https://github.com/vinhphatfsg/codexteer.git`へ更新してください。
 
 保存済みの履歴や起動中Desktopとの接続を引き継ぐため、内部の保存先`CODEX_HOME/codex-steer`と通信・診断用JSONの`codex_steer_*`フィールドは維持しています。保存先を手動で移動する必要はありません。改名前から保存済みコピーを使っている監督も、そのコピーを引き続き使えます。
 
@@ -80,7 +80,7 @@ codexteer doctor --json
 以下の`<thread-id>`は対象のタスクIDに置き換えてください。`codex://threads/...`形式のタスクURLも使えます。
 コマンド一覧では`codexteer`と略記します。npxで手動実行する場合は、その部分を`npx -y codexteer`に置き換えてください。
 
-### Claude CodeにCodexの監視とステアリングを任せる
+### Claude Code・Codex CLIに監視とステアリングを任せる
 
 上の導入を済ませ、監視したいCodexタスクのIDまたはURLをコピーします。別のターミナルの対象プロジェクトのディレクトリから、導入方法に合う方を実行してください。
 
@@ -94,6 +94,15 @@ codexteer supervise <thread-id>
 
 対象IDを埋め込んだ監督プロンプトでClaudeを[対話起動](https://code.claude.com/docs/en/cli-reference#cli-commands)します。端末の標準入出力をそのまま使い、起動後もClaudeへ追加の指示を入力できます。
 
+Codex CLIを監督役にする場合は、`--agent codex`を指定します。省略時はClaudeです。モデルなどのエージェント側の引数は`--`の後ろへ渡します。
+
+```bash
+codexteer supervise <thread-id> --agent codex
+npx -y codexteer supervise <thread-id> "テストと差分を確認してください。" --agent codex
+codexteer supervise <thread-id> --agent codex -- --model <model>
+codexteer supervise prompt <thread-id> --agent codex
+```
+
 監督方針を変える場合は、対象IDの後ろにメッセージを一つの引数として渡します。npx経由でも同じ書式です。
 
 ```bash
@@ -106,7 +115,7 @@ codexteer supervise <thread-id> "セキュリティの問題だけを私へ報�
 
 両方とも、起動したCLI本体と依存を`CODEX_HOME/codex-steer/runtimes/<version>-<sha256>`へ検証して保存し、そのコピーへの実行コマンドを監督プロンプトに埋め込みます。監督役に渡す切り替えオプションは不要です。npxのキャッシュが新版に更新された場合や、ソース導入先を`git pull`・削除した場合も、開始済みの監督は保存した内容を使い続けます。
 
-実行コマンドには、生成時に検証した`CODEX_HOME`の実体パスも埋め込みます。貼り付け先の環境変数が未設定・別設定でも、生成元の接続先と履歴を使います。同じPCで使い、監督中は保存したコピーを保持してください。新しいCLIや別のプロファイルに切り替えるときは、その環境から監督を起動し直すか、プロンプトを生成し直します。同じ版・同じ内容のコピーは検証して再利用し、内容が変われば別の保存先を作ります。既存のコピーは自動削除・上書きしません。
+実行コマンドには、生成時に検証した`CODEX_HOME`の実体パス、監督ごとの`--supervisor` ID、選択した`--connection`も埋め込みます。先頭の指定とオプションを全て保持してください。貼り付け先の環境変数が未設定・別設定でも、生成元の接続先と履歴を使います。同じPCで使い、監督中は保存したコピーを保持してください。新しいCLIや別のプロファイルに切り替えるときは、その環境から監督を起動し直すか、プロンプトを生成し直します。同じ版・同じ内容のコピーは検証して再利用し、内容が変われば別の保存先を作ります。既存のコピーは自動削除・上書きしません。
 
 Node本体はコピーせず、開始時の実体への絶対パスとNodeバージョンの検査を各コマンドに含めます。元のNodeは保持してください。バージョンが変われば`NODE_VERSION_MISMATCH`で操作を止めます。同じバージョンのNodeの改変や共有ライブラリまで固定するものではありません。保存先やNodeが使えなくなった場合は介入を止め、理由を報告するよう指示します。
 
@@ -132,19 +141,90 @@ codexteer supervise prompt <thread-id>
 codexteer supervise prompt <thread-id> "セキュリティの問題だけを私へ報告し、Codexへは送信しないでください。"
 ```
 
-直接起動と本文だけの出力は、同じ保存・検証・生成処理を使います。`supervise prompt`もCLI一式を保存してから本文を出力します。共通テンプレートの操作手順は`codexteer help monitor`と同じで、ヘルプを読んでも上書き前の標準方針は追加されません。生成プロンプト中の`doctor`・`read`・`watch`・`send`等の例には同じ実行コマンドを使います。監督役には、ヘルプ中の`codexteer`表記も指定された実行コマンドに置き換えるよう指示します。
+直接起動と本文だけの出力は、同じ保存・検証・生成処理を使います。生成するたびに監督IDは変わります。`--json`は`data.supervisor`に`session_id`・`owner`・`connection`も返します。`supervise prompt`もCLI一式を保存してから本文を出力します。共通テンプレートの操作手順は`codexteer help monitor`と同じで、ヘルプを読んでも上書き前の標準方針は追加されません。生成プロンプト中の`doctor`・`read`・`watch`・`send`等の例には同じ実行コマンドを使います。監督役には、ヘルプ中の`codexteer`表記も指定された実行コマンドに置き換えるよう指示します。
 
 1. 接続を診断し、対象タスクの最新の依頼・制約・進捗、有効な指示と対応待ちの履歴を確認する。
 2. 差分を読み切ったcursorから観測を続ける。[Monitorツール](https://code.claude.com/docs/en/tools-reference#monitor-tool)が使えれば`watch --stream`、使えなければ短い`watch`を繰り返す。接続状態の通知を読み、復帰待ちの間は介入を控える。
-3. 選択した監督方針に従って観測する。方針で送信が許され、介入する場合は`help send`を確認し、最新の差分を読み切ってから`send --based-on`を使う。同じ指摘が対応中なら結果を待つ。
+3. 選択した監督方針に従って観測する。方針で送信が許され、介入する場合は`help send`を確認し、最新の差分を読み切り、安定したkeyで`findings create`を行ってから`send --finding <id> --based-on <cursor>`を使う。同じ指摘が対応中なら結果を待つ。
 4. 送信したmessage_idを保持し、受付・対応報告・検証結果を区別して追う。`unknown`は`history check`で照合し、自動再送しない。
 5. 選択した監督方針に従って報告する。停止指示を受けたら、自分のMonitor/watchと追加送信を止める。
 
 標準方針は、ユーザーの最新の目的・制約の範囲内で監督と介入を委任します。その範囲の介入に毎回の確認は不要です。上書き時の観測の観点・介入の判断基準・報告方法は指定文に従います。どちらの場合も、目的・制約が不明な場合や要件自体を変える必要がある場合は確認します。監督の委任だけで停止中タスクを再開したり、承認・質問へ代理回答したりはしません。単発送信では、ユーザーが指定した宛先・内容を使います。
 
-停止するときは、同じClaudeセッションで「監視とステアリングを停止して」と伝えてください。Codexの作業自体は継続します。監督はCLIとOSの既存の権限設定に従います。
+停止するときは、次の`supervise stop`を実行できます。監督エージェントのプロセス自体も終了する場合は、そのセッションへ「監視とステアリングを停止して」と伝えてください。Codexの作業自体は継続します。監督はCLIとOSの既存の権限設定に従います。
 
 IDのコピーを省く場合は、Claudeに`codexteer threads list --desktop-only --json`で候補を表示してもらい、対象を選ぶこともできます。同じプロジェクトに複数のタスクがある場合、Claudeの起動場所だけでは監視対象を特定できません。
+
+### 監督状態の確認・一時停止・停止
+
+ユーザーの端末から、生成元と同じ`CODEX_HOME`で実行します。
+
+```bash
+codexteer supervise status <thread-id> --json
+codexteer supervise list --json
+codexteer supervise pause <thread-id>
+codexteer supervise resume <thread-id>
+codexteer supervise stop <thread-id>
+```
+
+| 操作・状態 | 動作 |
+|---|---|
+| `active` | 登録済み。CLIで観測した時刻・接続状態を別に確認する |
+| `pause` / `paused` | 監督ID付きの送信を止め、観測は続ける |
+| `resume` | 同じ監督の介入を再開する |
+| `stop` / `stopped` | その監督の以後の観測・送信を拒否する。Codexタスクは止めない |
+
+`status`は所有者、最後のCLI観測と経過時間、接続状態、最後の配送、未解決の指摘を返します。`active`や観測時刻だけでAIの読了・継続監視を証明するものではありません。直接起動ではlauncherの生存確認も表示し、コピーした本文では`launcher_alive: null`です。
+
+直接起動はエージェントを起動する前に登録し、終了時に停止を記録します。本文だけの生成では未登録で、貼り付け先が本文中の`supervise register`を実行して開始します。一つのタスクに一つの監督を登録でき、競合は`SUPERVISOR_CONFLICT`になります。異常終了などで残った登録は、`status`で確認して明示的に`stop`してから開始し直してください。停止済みIDや古い本文で再開はできません。同じ本文の再登録で一時停止が解除されることもありません。
+
+送信中の`pause`/`stop`は`RECORD_BUSY`で失敗します。配送結果を確認して制御を再実行し、成功するまでは停止したと扱わないでください。監督役が自分で`resume`したり、生成コマンドから`--supervisor`を外して回避したりしないよう、必須テンプレートにも指示します。
+
+この制御は新しい監督ID付きコマンドに適用します。以前の版で開始した監督、IDなしの手動送信、同じOSユーザーが実行する任意のコードを隔離する機能ではありません。監督IDは秘密情報ではなく、古いセッションや操作の競合を検出する識別子です。
+
+### 指摘・解決条件・介入の評価を追う
+
+```bash
+codexteer findings create <thread-id> --key timeout --title "待機の終了条件" --condition "指定時間で終了する回帰テストが通る" --evidence src/monitor.mjs --based-on <cursor> --json
+codexteer findings list <thread-id> --json
+codexteer findings show <thread-id> <finding-id> --json
+codexteer send <thread-id> "終了条件を確認してください" --finding <finding-id> --based-on <cursor> --json
+codexteer findings resolve <thread-id> <finding-id> --checkpoint <checkpoint-id> --note "指定時間で終了することをテストで確認" --json
+codexteer findings evaluate <thread-id> <finding-id> --rating useful --reason "対象の不具合を再現して修正できた" --json
+codexteer findings stats <thread-id> --json
+```
+
+監督役は各行の`codexteer`を生成された実行コマンドへ置き換えます。監督ID付きの送信では`--finding`と`--based-on`が必須です（`instructions retract`はfinding不要）。通常の手動送信には追加オプションを要求しません。
+
+同じタスクの同じ`key`は既存IDを再利用します。そのrevisionに受付済み・受付不明の送信があれば、本文が違っていても`DUPLICATE_INTERVENTION`で拒否します。明確な`not_sent`だけは再試行でき、プレビューは予約しません。意味の似た別keyを自動検出する機能ではないため、同じ指摘に新しいkeyを作らないでください。
+
+新しい根拠や要件があれば`findings reopen`を使います。根拠または解決条件の変更と理由が必要で、cursorが進んだだけでは再介入できません。ユーザーの新たな要件は解決条件へ反映します。受付不明の送信は先に`history check`で確認し、`not_observed`だけで未配送と決めつけません。
+
+```bash
+codexteer findings reopen <thread-id> <finding-id> --condition "時間切れとキャンセルの両方で終了する" --reason "ユーザーがキャンセル対応を追加した" --based-on <cursor> --json
+codexteer findings dismiss <thread-id> <finding-id> --reason "既存の実装が条件を満たしていた" --json
+```
+
+配送、対応申告、解決判断は別に記録します。`history mark --status applied`の後も指摘は`awaiting_verification`です。解決には現在有効なcheckpointと、条件を満たしたと判断した根拠が必要です。解決時のrun IDと入力ハッシュを記録し、入力・最新run・成果物が変わると`needs_review`として未解決一覧に戻します。テストの成功だけで指摘の妥当性や設計の正しさを自動認定しません。
+
+評価は`useful`（有益）・`unnecessary`（不要）・`incorrect`（誤り）、未評価は`unrated`です。`stats`は現在のrevisionを1件として未送信候補も含め、評価済み件数と未評価件数を分けます。`useful_fraction`の母数は評価済み件数で、0件なら`null`です。介入の因果効果を証明する数値ではありません。詳細は`help findings`を参照してください。
+
+### 通常起動したDesktopを再起動せずに観測する
+
+Desktopが共有ローカルdaemonを使っていて、`CODEX_HOME/app-server-control/app-server-control.sock`が存在する環境では、観測専用の直接接続を選べます。
+
+```bash
+codexteer --connection desktop doctor --thread <thread-id> --json
+codexteer --connection desktop read <thread-id> --include-output --json
+codexteer --connection desktop watch <thread-id> --stream --json
+codexteer supervise <thread-id> --agent codex --connection desktop
+```
+
+既定の`--connection shared`は従来の`desktop start`で用意するwrapperです。`desktop`を選ぶと、既存ソケットの所有者・権限・同一性と、対象がロード済みであることを確認します。ソケットがなければ`DESKTOP_CONNECTION_UNAVAILABLE`、対象が未ロードなら`DESKTOP_THREAD_NOT_LOADED`で止まります。通常起動なら必ず使えるわけではありません。daemonの起動・再起動、設定変更、暗黙のタスク再開、別runtimeへの自動切り替えは行いません。
+
+直接接続で使えるのは観測です。送信・新規ターン・撤回送信・UI送信は`DESKTOP_READ_ONLY`で拒否します。送信は既存のshared方式を明示して使ってください。生成する監督プロンプトも接続方式を保持し、desktopでは観測専用の手順を使います。`doctor`は読み取り成功から送信・画面表示・承認継続の対応を推測しません。
+
+詳細は`help connection`を参照してください。今回の開発環境にはこのソケットがなく、実Desktopへの直接接続は未検証です。読み取り・エンドポイント検査・送信拒否は隔離したUnixソケットの模擬サーバーで検証しています。同梱Codex CLI 0.153.4を一時プロファイルとローカルの偽モデルで動かし、実際のUnix接続から合成履歴を読む検証も通過しました（`npm run test:connection`）。実Desktopの画面表示・承認継続の確認とは区別しています。
 
 ### タスクを探して送信する
 
@@ -266,9 +346,9 @@ codexteer help supervise prompt
     "prompt": "対象IDと保存したCLIの実行コマンドを含む監督プロンプト本文…",
     "deployment": {
       "codex_home": "/Users/me/.codex",
-      "directory": "/Users/me/.codex/codex-steer/runtimes/0.14.1-<sha256>",
-      "wrapper_path": "/Users/me/.codex/codex-steer/runtimes/0.14.1-<sha256>/bin/codexteer-wrapper.mjs",
-      "version": "0.14.1",
+      "directory": "/Users/me/.codex/codex-steer/runtimes/0.15.0-<sha256>",
+      "wrapper_path": "/Users/me/.codex/codex-steer/runtimes/0.15.0-<sha256>/bin/codexteer-wrapper.mjs",
+      "version": "0.15.0",
       "sha256": "<sha256>",
       "reused": false
     },

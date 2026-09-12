@@ -4,6 +4,7 @@ import { codexHome, discoverRuntime } from "./runtime.mjs";
 import { RpcClient } from "./rpc.mjs";
 import { decodeCursor, readOnClient } from "./observe.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
+import { assertSupervisor, recordSupervisorObservation, recordSupervisorFailure } from "./supervision.mjs";
 
 const retryable = new Set(["CONNECTION_FAILED", "TIMEOUT", "RUNTIME_UNAVAILABLE", "RUNTIME_NOT_READY"]);
 const needsReview = new Set(["STALE_CURSOR", "CURSOR_UPGRADE_REQUIRED", "OBSERVATION_CHANGED"]);
@@ -28,6 +29,7 @@ export async function streamThread(threadInput, options, onChange, { discover = 
   signal?.addEventListener("abort", cancel, { once: true });
 
   async function read() {
+    if (options.supervisor) await assertSupervisor(threadId, options.supervisor, { connection: options.connection });
     const remaining = outageStarted === null ? null : reconnectTimeoutMs - (now() - outageStarted);
     if (remaining !== null && remaining <= 0) throw expired();
     const current = new AbortController(); attempt = current;
@@ -72,6 +74,7 @@ export async function streamThread(threadInput, options, onChange, { discover = 
       }
       if (signal?.aborted) break;
       lastObservedAt = data.observed_at;
+      if (options.supervisor) await recordSupervisorObservation(threadId, options.supervisor, data);
       // Only network reads are retried. Consumer/output errors always stop here.
       if (cursor && data.changed) await onChange({ ...data, type: "observation", reason: "change" });
       if (signal?.aborted) break;
@@ -88,11 +91,16 @@ export async function streamThread(threadInput, options, onChange, { discover = 
       failure.code ??= "WATCH_FAILED";
       failure.thread_id = threadId;
       failure.watch = connection(needsReview.has(failure.code) ? "needs_review" : "failed", { cause_code: failure.cause_code ?? failure.code });
+      if (options.supervisor) await recordSupervisorFailure(threadId, options.supervisor, failure);
       throw failure;
     }
   } finally {
     signal?.removeEventListener("abort", cancel);
     client?.close();
+    if (options.supervisor && signal?.aborted) {
+      try { await recordSupervisorObservation(threadId, options.supervisor, { type: "connection", state: "stopped", cause_code: "WATCH_CANCELLED" }); }
+      catch { /* A stopped/replaced supervisor must not be revived by cleanup. */ }
+    }
   }
 }
 
@@ -102,14 +110,17 @@ export function writeObservationLine(output, data) {
   });
 }
 
-export async function monitorCommand(threadId, options) {
+export async function monitorCommand(threadId, options, dependencies) {
   const controller = new AbortController(); let outputError;
   const cancel = () => controller.abort();
   const failedOutput = error => { outputError = error; cancel(); };
   process.on("SIGINT", cancel); process.on("SIGTERM", cancel);
   process.stdout.on("error", failedOutput);
   try {
-    await streamThread(threadId, { ...options, signal: controller.signal }, data => writeObservationLine(process.stdout, data));
+    await streamThread(threadId, { ...options, signal: controller.signal }, async data => {
+      if (options.supervisor && data.type === "connection") await recordSupervisorObservation(threadId, options.supervisor, data);
+      await writeObservationLine(process.stdout, data);
+    }, dependencies);
   } catch (error) {
     if (!outputError) throw error;
   } finally {

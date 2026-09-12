@@ -4,6 +4,7 @@ import { normalizeThreadId } from "./thread-id.mjs";
 import { discoverRuntime } from "./runtime.mjs";
 import { RpcClient, RpcFailure } from "./rpc.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
+import { assertSupervisor, recordSupervisorFailure, recordSupervisorObservation } from "./supervision.mjs";
 
 export const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const mutableStatus = new Set(["inProgress", "running", "pending"]);
@@ -152,19 +153,27 @@ export async function readOnClient(client, threadId, options = {}) {
 
 export async function observeThread(threadInput, options = {}, { discover = discoverRuntime, connect = RpcClient.connect, sleep = delay, now = () => performance.now() } = {}) {
   const threadId = normalizeThreadId(threadInput);
+  if (options.supervisor) await assertSupervisor(threadId, options.supervisor, { connection: options.connection });
   if (options.since) decodeCursor(options.since, threadId);
-  const { paths, state } = await discover();
-  assertRuntimeOperation(state, options.watch ? "watch" : "read");
-  const client = compatibleClient(await connect(paths.socket), state);
+  let client;
   try {
-    if (!options.watch) return await readOnClient(client, threadId, options);
+    const { paths, state } = await discover();
+    assertRuntimeOperation(state, options.watch ? "watch" : "read");
+    client = compatibleClient(await connect(paths.socket), state);
+    if (!options.watch) {
+      const result = await readOnClient(client, threadId, options);
+      if (options.supervisor) await recordSupervisorObservation(threadId, options.supervisor, result);
+      return result;
+    }
     const { until = "change", timeoutMs = 30000, pollMs = 1000 } = options;
     if (!["change", "idle", "attention"].includes(until) || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 60000 || !Number.isInteger(pollMs) || pollMs < 250 || pollMs > 10000) throw new Error("Invalid watch condition, timeout-ms or poll-ms.");
     const deadline = now() + timeoutMs;
     let baseline = options.since;
     while (true) {
+      if (options.supervisor) await assertSupervisor(threadId, options.supervisor, { connection: options.connection });
       const hadBaseline = !!baseline;
       const result = await readOnClient(client, threadId, { ...options, since: baseline });
+      if (options.supervisor) await recordSupervisorObservation(threadId, options.supervisor, result);
       const met = until === "idle" ? ["idle", "notLoaded"].includes(result.status) : until === "attention" ? result.status === "systemError" || (result.attention?.length ?? 0) > 0 : baseline && result.changed;
       if (met) return { ...result, timed_out: false, reason: until };
       if (!baseline) baseline = result.cursor;
@@ -172,7 +181,10 @@ export async function observeThread(threadInput, options = {}, { discover = disc
       if (!result.changed && result.has_more) { baseline = result.cursor; continue; }
       await sleep(Math.min(pollMs, Math.max(0, deadline - now())));
     }
-  } finally { client.close(); }
+  } catch (error) {
+    if (options.supervisor) await recordSupervisorFailure(threadId, options.supervisor, error);
+    throw error;
+  } finally { client?.close(); }
 }
 
 export function printObservation(data, statusOnly = false) {
