@@ -21,7 +21,7 @@ export async function prepareSupervisorPrompt(threadInput) {
   const home = codexHome();
   shellArgument(node.path); shellArgument(home);
   const deployment = await prepareDeployment(home);
-  const command = `${shellArgument(node.path)} ${shellArgument(path.join(deployment.directory, "bin/codex-steer.mjs"))} --require-node-version ${shellArgument(node.version)}`;
+  const command = `${shellArgument(node.path)} ${shellArgument(path.join(deployment.directory, "bin/codexteer.mjs"))} --require-node-version ${shellArgument(node.version)}`;
   // Render with the saved distribution's implementation as well as its CLI.
   // An update to the source/cache after placement cannot mix prompt and code.
   const { supervisorPrompt } = await import(pathToFileURL(path.join(deployment.directory, "src/prompt.mjs")).href);
@@ -33,7 +33,7 @@ function launchFailure(agent, error) {
 }
 
 export async function superviseAgent(threadInput, { agent, agentArgs = [] } = {}) {
-  if (agent !== "claude") throw new Error("supervise requires --agent claude. See codex-steer help supervise.");
+  if (agent !== "claude") throw new Error("supervise requires --agent claude. See codexteer help supervise.");
   const { prompt } = await prepareSupervisorPrompt(threadInput);
 
   let child;

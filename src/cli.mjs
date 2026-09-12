@@ -27,7 +27,7 @@ function fail(error, json) {
     sent: error.sent, thread_id: error.thread_id, rpc_code: error.rpc_code ?? error.rpcCode,
     message_id: error.message_id, client_message_id: error.client_message_id, journal_update_required: error.journal_update_required,
   } }));
-  else console.error(`codex-steer: ${message}`);
+  else console.error(`codexteer: ${message}`);
   process.exitCode = 1;
 }
 
@@ -105,7 +105,7 @@ export async function main(argv) {
     let command = args.shift();
     if (command === "supervise" && args[0] === "prompt") {
       args.shift();
-      if (args.length !== 1) throw new Error("Expected: supervise prompt <THREAD>. See codex-steer help supervise prompt.");
+      if (args.length !== 1) throw new Error("Expected: supervise prompt <THREAD>. See codexteer help supervise prompt.");
       const data = await prepareSupervisorPrompt(args[0]);
       success("supervise.prompt", data, json);
       if (!json) console.log(data.prompt);
@@ -141,7 +141,7 @@ export async function main(argv) {
         data = action === "renew" ? await renewResource(args[0], token, { ttlMs }) : await releaseResource(args[0], token);
       } else if (action === "status" && args.length === 1) data = await resourceStatus(args[0]);
       else if (action === "list" && args.length === 0) data = await listResources();
-      else throw new Error("See codex-steer help resource.");
+      else throw new Error("See codexteer help resource.");
       success(`resource.${action}`, data, json);
       if (!json) console.log(JSON.stringify(data, null, 2));
       return;
@@ -170,7 +170,7 @@ export async function main(argv) {
         if (args.length !== 2) throw new Error(`Expected: checkpoint ${action} <THREAD> <ID>.`);
         data = action === "verify" ? await verifyCheckpoint(args[0], args[1]) : checkpointSummary(await getCheckpoint(args[0], args[1]), includeOutput);
         if (action === "verify" && !data.valid) process.exitCode = 1;
-      } else throw new Error("See codex-steer help checkpoint.");
+      } else throw new Error("See codexteer help checkpoint.");
       success(`checkpoint.${action}`, data, json);
       if (!json) console.log(JSON.stringify(data, null, 2));
       return;
@@ -185,7 +185,7 @@ export async function main(argv) {
         if (!json) { for (const entry of data.instructions) console.log(`${entry.id}  ${entry.instruction_status}  ${entry.metadata?.source ?? "unspecified"}\n${entry.body}`); if (data.pending_changes.length) console.log(`配送未確認: ${data.pending_changes.map(e => e.id).join(", ")}`); }
         return;
       }
-      if (action !== "retract") throw new Error("See codex-steer help instructions.");
+      if (action !== "retract") throw new Error("See codexteer help instructions.");
       const reason = takeOption(args, "--reason", undefined), source = takeOption(args, "--source", undefined), basedOn = takeOption(args, "--based-on", undefined);
       const dryRun = takeFlag(args, "--dry-run"), newTurn = takeFlag(args, "--new-turn");
       if (args.length !== 2 || !reason?.trim()) throw new Error("Expected: instructions retract <THREAD> <MESSAGE-ID> --reason TEXT.");
@@ -200,7 +200,7 @@ export async function main(argv) {
       const pending = takeFlag(args, "--pending");
       const report = action === "mark" ? { status: takeOption(args, "--status", undefined), note: takeOption(args, "--note", undefined), evidence: takeOptions(args, "--evidence"), by: takeOption(args, "--by", "local") } : {};
       const [threadId, id] = args;
-      if (!threadId || args.length > 2 || !["list", "show", "check", "mark"].includes(action) || (["show", "mark"].includes(action) && !id) || (action === "list" && id)) throw new Error("See codex-steer help history.");
+      if (!threadId || args.length > 2 || !["list", "show", "check", "mark"].includes(action) || (["show", "mark"].includes(action) && !id) || (action === "list" && id)) throw new Error("See codexteer help history.");
       const data = action === "list" ? await listMessages(threadId, { includeText, pending }) : action === "show" ? messageSummary(await getMessage(threadId, id), includeText) : action === "check" ? await reconcileMessages(threadId, id, { includeText }) : await markMessage(threadId, id, report);
       success(`history.${action}`, data, json);
       if (!json) for (const entry of Array.isArray(data) ? data : [data]) console.log(`${entry.id}  ${entry.delivery_status}  history:${entry.verification?.status ?? "unchecked"}  response:${entry.response.status}${entry.body ? "\n" + entry.body : ""}`);
@@ -219,10 +219,10 @@ export async function main(argv) {
       if (stream) json = true;
       if (command === "watch") {
         const until = takeOption(args, "--until", undefined), timeout = takeOption(args, "--timeout-ms", undefined);
-        if (stream && (until !== undefined || timeout !== undefined)) throw new Error("--stream runs until cancelled; do not combine it with --until or --timeout-ms. See codex-steer help monitor.");
+        if (stream && (until !== undefined || timeout !== undefined)) throw new Error("--stream runs until cancelled; do not combine it with --until or --timeout-ms. See codexteer help monitor.");
         Object.assign(options, { watch: true, until: until ?? "change", timeoutMs: Number(timeout ?? "30000"), pollMs: Number(takeOption(args, "--poll-ms", "1000")) });
       }
-      if (args.length !== 1) throw new Error(`Expected: ${command} <THREAD>. See codex-steer help ${command}.`);
+      if (args.length !== 1) throw new Error(`Expected: ${command} <THREAD>. See codexteer help ${command}.`);
       if (stream) { await monitorCommand(args[0], options); return; }
       const data = await observeThread(args[0], options);
       if (command === "status") delete data.events;
@@ -248,12 +248,12 @@ export async function main(argv) {
         if (report.compatibility) {
           console.log(`  connection: ${report.connection.status}`);
           console.log(`  Desktop: ${report.desktop_version ?? "unknown"}, CLI: ${report.running_cli_version ?? "unknown"}, wrapper Node: ${report.running_wrapper_node_version ?? "unknown"}, local Node: ${report.cli_node_version}`);
-          console.log(`  codex-steer: ${report.codex_steer_compatibility.status} (local ${report.codex_steer_version}, running ${report.codex_steer_compatibility.runtime.version ?? "unknown"})`);
+          console.log(`  codexteer: ${report.codex_steer_compatibility.status} (local ${report.codex_steer_version}, running ${report.codex_steer_compatibility.runtime.version ?? "unknown"})`);
           console.log(`  runtime protocol: ${report.runtime_compatibility.protocol.status}`);
           for (const [operation, contract] of Object.entries(report.runtime_compatibility.operations)) console.log(`    ${operation}: ${contract.status}${contract.failure ? ` (${contract.failure})` : ""}`);
           console.log(`  observation compatibility: ${report.compatibility.status} (${report.compatibility.scope})`);
           for (const [method, status] of Object.entries(report.compatibility.api_checks)) console.log(`    ${method}: ${status}`);
-          if (target === undefined) console.log("  Verify a target: codex-steer doctor --thread <THREAD> --json");
+          if (target === undefined) console.log("  Verify a target: codexteer doctor --thread <THREAD> --json");
           if (report.failure) console.log(`  failure: ${report.failure.code}${report.failure.rpc_code === null ? "" : ` (RPC ${report.failure.rpc_code})`}`);
         }
         if (report.remediation) console.log(`\n${report.remediation}`);
@@ -263,7 +263,7 @@ export async function main(argv) {
     }
 
     if (command === "desktop") {
-      if (args.shift() !== "start") throw new Error("Expected: codex-steer desktop start");
+      if (args.shift() !== "start") throw new Error("Expected: codexteer desktop start");
       const dryRun = takeFlag(args, "--dry-run");
       if (args.length) throw new Error(`Unexpected argument: ${args[0]}`);
       const data = await startDesktop({ dryRun });
@@ -273,7 +273,7 @@ export async function main(argv) {
     }
 
     if (command === "threads") {
-      if (args.shift() !== "list") throw new Error("Expected: codex-steer threads list");
+      if (args.shift() !== "list") throw new Error("Expected: codexteer threads list");
       const limit = Number.parseInt(takeOption(args, "--limit", "20"), 10);
       const desktopOnly = takeFlag(args, "--desktop-only");
       if (args.length > 0) throw new Error(`Unexpected argument: ${args[0]}`);
@@ -287,7 +287,7 @@ export async function main(argv) {
     }
 
     if (command === "thread") {
-      if (args.shift() !== "resolve") throw new Error("Expected: codex-steer thread resolve <THREAD>");
+      if (args.shift() !== "resolve") throw new Error("Expected: codexteer thread resolve <THREAD>");
       if (args.length !== 1) throw new Error("thread resolve requires exactly one thread ID or URL.");
       const threadId = normalizeThreadId(args[0]);
       const data = { thread_id: threadId, deep_link: threadDeepLink(threadId) };
@@ -350,7 +350,7 @@ export async function main(argv) {
           ? `Submitted through Desktop UI for ${threadId}; delivery is unverified.`
           : `App Server accepted input for ${threadId} (turn ${data.turn_id}).`);
       if (data.message_id) console.log(`message_id: ${data.message_id}`);
-      if (!noSound && !dryRun && data.sent === true && !data.sound.played) console.error(`codex-steer: Input was accepted, but the sound could not be played (${data.sound.reason}).`);
+      if (!noSound && !dryRun && data.sent === true && !data.sound.played) console.error(`codexteer: Input was accepted, but the sound could not be played (${data.sound.reason}).`);
     }
   } catch (error) {
     fail(error, json);

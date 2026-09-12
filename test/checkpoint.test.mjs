@@ -42,7 +42,7 @@ test("failed commands, missing executables and timeouts never validate or attach
   const f = await fixture(t);
   assert.equal((await runCheckpoint(ID, f.id, [process.execPath, "-e", "process.exit(2)"], f)).valid, false);
   await assert.rejects(attachArtifacts(ID, f.id, [`${f.cwd}/src/input.txt`], f), /successful run/);
-  const missing = await runCheckpoint(ID, f.id, ["/definitely/missing/codex-steer-command"], f);
+  const missing = await runCheckpoint(ID, f.id, ["/definitely/missing/codexteer-command"], f);
   assert.equal(missing.valid, false); assert.match(missing.error, /ENOENT/);
   const timed = await runCheckpoint(ID, f.id, [process.execPath, "-e", "setTimeout(()=>{},10000)"], { ...f, timeoutMs: 100 });
   assert.equal(timed.timed_out, true); assert.equal(timed.valid, false);

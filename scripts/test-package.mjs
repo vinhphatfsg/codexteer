@@ -23,10 +23,11 @@ try {
   await mkdir(home, { mode: 0o700 }); await mkdir(workspace);
   const source = await describeDistribution(repo);
   const sourcePackage = JSON.parse(source.contents.get("package.json"));
+  assert.equal(sourcePackage.name, "codexteer");
   // npm publish --dry-run skips libnpmpublish's EPRIVATE guard, so check the
   // release metadata explicitly as well as exercising npm's publish preparation.
   assert.equal(Object.hasOwn(sourcePackage, "private"), false, "Release package must not disable publication");
-  assert.deepEqual(sourcePackage.bin, { "codex-steer": "bin/codex-steer.mjs" });
+  assert.deepEqual(sourcePackage.bin, { "codexteer": "bin/codexteer.mjs" });
   assert.equal(sourcePackage.publishConfig.access, "public");
   assert.equal(sourcePackage.publishConfig.registry, "https://registry.npmjs.org/");
   const { stdout } = await exec("npm", ["pack", "--offline", "--ignore-scripts", "--json", "--pack-destination", root], { cwd: repo, env });
@@ -47,14 +48,14 @@ try {
   assert.equal(publishArtifact.name, sourcePackage.name);
   assert.equal(publishArtifact.version, sourcePackage.version);
   assert.equal(publishArtifact.shasum, artifact.shasum, "Publish preparation must pack the tested artifact");
-  const executed = await exec("npm", ["exec", "--offline", "--yes", "--package", tarball, "--", "codex-steer", "desktop", "start", "--dry-run", "--json"], { cwd: root, env });
+  const executed = await exec("npm", ["exec", "--offline", "--yes", "--package", tarball, "--", "codexteer", "desktop", "start", "--dry-run", "--json"], { cwd: root, env });
   assert.equal(JSON.parse(executed.stdout).data.started, false);
 
   // npx must pass a prompt bound to a saved copy of its tarball, even if another CLI
   // is on PATH. The fake agent executes only the prompt's read-only version check.
   const agentBin = path.join(root, "agent-bin"); await mkdir(agentBin);
   await symlink(process.execPath, path.join(agentBin, "node"));
-  await writeFile(path.join(agentBin, "codex-steer"), '#!/bin/sh\necho wrong-cli >&2\nexit 91\n', { mode: 0o755 });
+  await writeFile(path.join(agentBin, "codexteer"), '#!/bin/sh\necho wrong-cli >&2\nexit 91\n', { mode: 0o755 });
   await writeFile(path.join(agentBin, "claude"), `#!/usr/bin/env node
 const { spawnSync } = require("node:child_process");
 const prompt = process.argv.at(-1);
@@ -94,7 +95,7 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   const { claimRuntime } = await load("runtime.mjs");
   const { VERSION, PACKAGE_NAME } = await load("version.mjs");
   const { RUNTIME_PROTOCOL, RUNTIME_CAPABILITIES } = await load("compatibility.mjs");
-  let cliPath = path.join(installed, "bin/codex-steer.mjs");
+  let cliPath = path.join(installed, "bin/codexteer.mjs");
   async function cli(args, ok = true) {
     let result;
     try { result = await exec(process.execPath, [cliPath, ...args, "--json"], { cwd: root, env, timeout: 10000 }); }
@@ -114,7 +115,9 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   assert.equal((await lstat(deployment.wrapper_path)).mode & 0o777, 0o700);
   assert.equal(deployment.sha256, source.sha256, "packing changed executable distribution contents");
 
-  lease = await claimRuntime(home, { codex_steer_package: PACKAGE_NAME, codex_steer_version: VERSION, codex_steer_protocol: RUNTIME_PROTOCOL });
+  // A renamed CLI must discover and use a wrapper started under the old name.
+  lease = await claimRuntime(home, { codex_steer_package: "@vinhphatfsg/codex-steer", codex_steer_version: "0.14.0", codex_steer_protocol: RUNTIME_PROTOCOL });
+  assert.equal(lease.paths.root, `/private/tmp/codex-steer-${process.getuid()}`);
   http = createServer(); ws = new WebSocketServer({ server: http }); let reads = 0, sends = 0;
   ws.on("error", () => {}); // The HTTP listener's error rejects once() below.
   ws.on("connection", socket => socket.on("message", bytes => {
@@ -157,13 +160,13 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   await cli(["help"]); await cli(["supervise", "prompt", ID]); await cli(["history", "list", ID]);
   assert.equal((await cli(["send", ID, "synthetic", "--dry-run"])).data.sent, false);
   assert.equal(reads, beforeProtocol); assert.equal(sends, 5);
-  await lease.update({ codex_steer_version: VERSION, codex_steer_protocol: 1, codex_steer_capabilities: RUNTIME_CAPABILITIES });
+  await lease.update({ codex_steer_package: PACKAGE_NAME, codex_steer_version: VERSION, codex_steer_protocol: 1, codex_steer_capabilities: RUNTIME_CAPABILITIES });
   // Normal read/steer must also work with no subscription endpoint at all.
   await new Promise(resolve => control.close(resolve));
   await rm(workspace, { recursive: true }); await rm(cache, { recursive: true, force: true });
   const afterRemoval = await exec("/bin/sh", ["-c", savedVersionCommand], { cwd: root, env: { ...env, PATH: agentBin }, timeout: 10000 });
   assert.equal(afterRemoval.stdout.trim(), VERSION, "The generated command must survive removal of the original/cache");
-  cliPath = path.join(deployment.directory, "bin/codex-steer.mjs");
+  cliPath = path.join(deployment.directory, "bin/codexteer.mjs");
   assert.equal((await cli(["--version"])).data.version, VERSION);
   assert.equal((await cli(["read", ID])).data.thread_id, ID);
   assert.equal((await cli(["send", ID, "synthetic after cache removal", "--no-sound"])).data.delivery_status, "accepted");
@@ -176,7 +179,7 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   assert.equal(sends, 7);
   const pkg = JSON.parse(await readFile(path.join(deployment.directory, "package.json")));
   assert.equal(pkg.license, "MIT"); assert.equal(Object.hasOwn(pkg, "private"), false);
-  assert.deepEqual(pkg.bin, { "codex-steer": "bin/codex-steer.mjs" });
+  assert.deepEqual(pkg.bin, { "codexteer": "bin/codexteer.mjs" });
   for (const hook of ["preinstall", "install", "postinstall", "prepare", "prepack"]) assert.equal(pkg.scripts[hook], undefined);
   console.log(JSON.stringify({ suite: "package", result: "PASS", package: PACKAGE_NAME, version: VERSION, packed_files: artifact.files.length, publish_dry_run: true, offline_install: true, npm_exec: true, npx_supervision: true, copied_prompt: true, cache_update: true, cache_removal: true, mixed_versions: true, feature_isolation: true, real_desktop_validated: false }));
 } finally {

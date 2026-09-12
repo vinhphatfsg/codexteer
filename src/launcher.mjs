@@ -60,7 +60,7 @@ export async function appServerDoctor({ threadId: threadInput, versions = instal
     compatibility.api_checks[method] = "verified";
     checks.initialized = true;
     method = null;
-    if (!checks.bundled_wrapper_node) throw Object.assign(new Error("The running wrapper does not confirm Desktop's bundled Node runtime. App tools may fail code-signing authorization. Finish current tasks, quit Desktop, then run: codex-steer desktop start"), { code: "WRAPPER_NODE_UNVERIFIED" });
+    if (!checks.bundled_wrapper_node) throw Object.assign(new Error("The running wrapper does not confirm Desktop's bundled Node runtime. App tools may fail code-signing authorization. Finish current tasks, quit Desktop, then run: codexteer desktop start"), { code: "WRAPPER_NODE_UNVERIFIED" });
     if (threadId) {
       const probe = { async request(name, ...args) { method = name; const result = await client.request(name, ...args); compatibility.api_checks[name] = "verified"; return result; } };
       const observation = await readOnClient(probe, threadId, { limit: 1, maxChars: 100 });
@@ -112,7 +112,7 @@ export async function startDesktop({ dryRun = false, run = spawnSync, prepare = 
   const processes = run("/bin/ps", ["-axo", "comm="], { encoding: "utf8", timeout: 3000 });
   if (processes.status !== 0) throw new Error("Cannot check whether Desktop is running. Run desktop start from your terminal.");
   if (processes.stdout.split("\n").some(line => line.trim() === `${APP_PATH}/Contents/MacOS/ChatGPT`)) {
-    throw new Error("Desktop is already running. Finish current tasks and quit Desktop, then run: codex-steer desktop start");
+    throw new Error("Desktop is already running. Finish current tasks and quit Desktop, then run: codexteer desktop start");
   }
   const deployment = await prepare(home);
   const launched = run("/usr/bin/open", desktopLaunchArgs(home, deployment.wrapper_path), { encoding: "utf8", timeout: 5000 });

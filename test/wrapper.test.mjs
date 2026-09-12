@@ -152,7 +152,7 @@ test("doctor leaves unattempted compatibility checks unverified when discovery f
 });
 
 test("doctor treats unknown or different product versions and package names as diagnostics", async () => {
-  for (const extra of [{ codex_steer_version: undefined }, { codex_steer_version: "0.1.0" }, { codex_steer_package: "codex-steer" }, { cli_version: "0.153.3" }]) {
+  for (const extra of [{ codex_steer_version: undefined }, { codex_steer_version: "0.1.0" }, { codex_steer_package: "@vinhphatfsg/codex-steer" }, { cli_version: "0.153.3" }]) {
     const { options } = doctorFixture({ node_path: BUNDLED_NODE, ...extra });
     const result = await appServerDoctor(options);
     assert.equal(result.ready, process.platform === "darwin"); assert.equal(result.checks.codex_steer_version, undefined);

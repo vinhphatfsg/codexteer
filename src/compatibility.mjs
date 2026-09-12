@@ -77,7 +77,7 @@ function assertContract(contract, { operation, capability, allowProbe }) {
   if (contract.status === "supported" || (allowProbe && contract.source === "probe")) return;
   const prefix = capability === "protocol" ? "RUNTIME_PROTOCOL" : "CAPABILITY";
   const suffix = contract.status === "unsupported" ? "UNSUPPORTED" : "UNVERIFIED";
-  throw Object.assign(new Error(`${operation} requires a compatible ${capability} contract. Check codex-steer doctor --json for supported operations; use a compatible CLI or update the wrapper after finishing current tasks.`), {
+  throw Object.assign(new Error(`${operation} requires a compatible ${capability} contract. Check codexteer doctor --json for supported operations; use a compatible CLI or update the wrapper after finishing current tasks.`), {
     code: `${prefix}_${suffix}`, operation, capability,
   });
 }

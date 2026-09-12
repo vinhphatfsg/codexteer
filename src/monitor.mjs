@@ -117,7 +117,7 @@ export async function monitorCommand(threadId, options) {
     process.stdout.off("error", failedOutput);
   }
   if (outputError && outputError.code !== "EPIPE") {
-    console.error(`codex-steer: Monitor output failed: ${outputError.message}`);
+    console.error(`codexteer: Monitor output failed: ${outputError.message}`);
     process.exitCode = 1;
   }
 }

@@ -190,7 +190,7 @@ async function checkUserMessageIdentity(threadId, receipt, expectedText) {
 
 async function measureChangedRead(threadId, since, label) {
   const started = performance.now();
-  const { stdout } = await promisify(execFile)(process.execPath, [fileURLToPath(new URL("../bin/codex-steer.mjs", import.meta.url)), "read", threadId, "--since", since, "--json"], {
+  const { stdout } = await promisify(execFile)(process.execPath, [fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url)), "read", threadId, "--since", since, "--json"], {
     cwd: root, env: { ...process.env, CODEX_HOME: root }, timeout: 15000,
   });
   const ms = performance.now() - started, { ok, data } = JSON.parse(stdout);
@@ -242,7 +242,7 @@ try {
   assert.ok(delta.events.every(e => e.type !== "reasoning"));
   // Exercise the default backend in another cwd, including URL shorthand and
   // argv text. A second identical message must retain its own identity, too.
-  const cliSend = await promisify(execFile)(process.execPath, [fileURLToPath(new URL("../bin/codex-steer.mjs", import.meta.url)), `codex://threads/${thread.id}`, "日本語\nprobe steer", "--json"], {
+  const cliSend = await promisify(execFile)(process.execPath, [fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url)), `codex://threads/${thread.id}`, "日本語\nprobe steer", "--json"], {
     cwd: root, env: { ...process.env, CODEX_HOME: root }, timeout: 15000,
   });
   const cliReceipt = JSON.parse(cliSend.stdout);
@@ -260,7 +260,7 @@ try {
   assert.equal(verifiedJournal[0].verification.status, "stored");
   const fresh = await observeThread(thread.id, {}, { discover: () => discoverRuntime(root) });
   await writeFile(`${root}/evidence.txt`, "synthetic review evidence");
-  const cliArgs = [fileURLToPath(new URL("../bin/codex-steer.mjs", import.meta.url))];
+  const cliArgs = [fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url))];
   const cliOptions = { cwd: root, env: { ...process.env, CODEX_HOME: root }, timeout: 15000 };
   const typed = JSON.parse((await promisify(execFile)(process.execPath, [...cliArgs, "send", thread.id, "訂正した仮説", "--source", "claude-code", "--kind", "hypothesis", "--evidence", `${root}/evidence.txt`, "--based-on", fresh.cursor, "--supersedes", journal.id, "--json"], cliOptions)).stdout).data;
   const typedEntry = await getMessage(thread.id, typed.message_id, { home: root });

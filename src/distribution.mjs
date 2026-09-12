@@ -6,6 +6,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 export const PACKAGE_ROOT = fileURLToPath(new URL("../", import.meta.url));
+// Preserve the deployed record format and state namespace across the rename.
 const RECORD = ".codex-steer-runtime.json";
 const hash = value => createHash("sha256").update(value).digest("hex");
 const failure = (message, code = "DEPLOYMENT_UNSAFE") => Object.assign(new Error(message), { code });
@@ -85,7 +86,7 @@ export async function describeDistribution(root = PACKAGE_ROOT) {
   root = await realpath(root);
   await checkAncestors(root);
   check(await lstat(root), true, false);
-  const names = ["package.json", "LICENSE", "bin/codex-steer.mjs", "bin/codex-steer-wrapper.mjs", "assets/send-pururu.wav",
+  const names = ["package.json", "LICENSE", "bin/codexteer.mjs", "bin/codexteer-wrapper.mjs", "assets/send-pururu.wav",
     "scripts/send.applescript", "scripts/inspect.applescript", "scripts/accessibility.applescript"];
   for (const directory of ["bin", "assets", "scripts", "src", "node_modules", "node_modules/ws", "node_modules/ws/lib"]) {
     check(await lstat(path.join(root, directory)), true, false);
@@ -142,7 +143,7 @@ export async function verifyDeployment(directory, distribution) {
   }
   await visit();
   if (found.size !== expected.size) throw failure("Deployment is incomplete.", "DEPLOYMENT_MODIFIED");
-  return { directory, wrapper_path: path.join(directory, "bin/codex-steer-wrapper.mjs"), version: distribution.manifest.version, sha256: distribution.sha256 };
+  return { directory, wrapper_path: path.join(directory, "bin/codexteer-wrapper.mjs"), version: distribution.manifest.version, sha256: distribution.sha256 };
 }
 
 export async function prepareDeployment(home, { sourceRoot = PACKAGE_ROOT } = {}) {

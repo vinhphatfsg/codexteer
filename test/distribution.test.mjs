@@ -29,7 +29,7 @@ test("a complete deployment runs outside the repository after the source/cache i
   assert.equal((await lstat(first.wrapper_path)).mode & 0o777, 0o700);
   assert.equal((await lstat(first.directory)).mode & 0o777, 0o700);
   await rm(sourceRoot, { recursive: true });
-  const { stdout } = await exec(process.execPath, [path.join(first.directory, "bin/codex-steer.mjs"), "--version"], { cwd: root, env: { ...process.env, CODEX_HOME: home } });
+  const { stdout } = await exec(process.execPath, [path.join(first.directory, "bin/codexteer.mjs"), "--version"], { cwd: root, env: { ...process.env, CODEX_HOME: home } });
   assert.equal(stdout.trim(), distribution.manifest.version);
 });
 

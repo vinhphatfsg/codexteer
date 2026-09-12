@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
-const BIN = fileURLToPath(new URL("../bin/codex-steer.mjs", import.meta.url));
+const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 const REPO = path.dirname(path.dirname(BIN));
 
 function versionCommand(text) {
@@ -22,7 +22,7 @@ function copyCli(directory) {
   for (const name of ["package.json", "LICENSE"]) copyFileSync(path.join(REPO, name), path.join(directory, name));
   mkdirSync(path.join(directory, "node_modules"));
   cpSync(path.join(REPO, "node_modules/ws"), path.join(directory, "node_modules/ws"), { recursive: true });
-  return path.join(directory, "bin/codex-steer.mjs");
+  return path.join(directory, "bin/codexteer.mjs");
 }
 
 function fixture(t) {
@@ -70,7 +70,7 @@ test("JSON prompt output preserves the text as one field with the standard CLI e
 test("generated commands use the saved CLI despite missing or shadowed PATH commands", t => {
   const options = fixture(t);
   const poison = path.join(options.cwd, "poison"); mkdirSync(poison);
-  for (const name of ["node", "codex-steer", "npx"]) {
+  for (const name of ["node", "codexteer", "npx"]) {
     writeFileSync(path.join(poison, name), '#!/bin/sh\necho wrong-executable >&2\nexit 91\n', { mode: 0o755 });
   }
   const result = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID], options);
@@ -79,7 +79,7 @@ test("generated commands use the saved CLI despite missing or shadowed PATH comm
   assert.ok(command.includes(realpathSync(process.execPath)));
   assert.ok(command.includes("/codex-steer/runtimes/"));
   assert.equal(command.includes(realpathSync(BIN)), false);
-  assert.doesNotMatch(result.stdout, /^(?:command -v codex-steer|codex-steer |npx )/m);
+  assert.doesNotMatch(result.stdout, /^(?:command -v codexteer|codexteer |npx )/m);
   const prefix = command.slice(0, -" --version".length);
   for (const operation of ["doctor", "help monitor", "help send", "read", "watch", "send", "history list", "history check", "instructions list"]) {
     assert.ok(result.stdout.includes(`\n${prefix} ${operation}`), `Missing bound command: ${operation}`);
@@ -201,7 +201,7 @@ test("invalid prompt arguments fail without producing a partial prompt or touchi
     const plain = spawnSync(process.execPath, [BIN, "supervise", "prompt", ...args], options);
     assert.equal(plain.status, 1);
     assert.equal(plain.stdout, "");
-    assert.match(plain.stderr, /codex-steer:/);
+    assert.match(plain.stderr, /codexteer:/);
     const json = spawnSync(process.execPath, [BIN, "--json", "supervise", "prompt", ...args], options);
     assert.equal(json.status, 1);
     assert.equal(json.stderr, "");
@@ -219,7 +219,7 @@ test("the removed top-level prompt command and help topic fail without producing
     const plain = spawnSync(process.execPath, [BIN, ...args], options);
     assert.equal(plain.status, 1);
     assert.equal(plain.stdout, "");
-    assert.match(plain.stderr, /codex-steer:/);
+    assert.match(plain.stderr, /codexteer:/);
     const json = spawnSync(process.execPath, [BIN, "--json", ...args], options);
     assert.equal(json.status, 1);
     assert.equal(JSON.parse(json.stdout).ok, false);
@@ -229,13 +229,13 @@ test("the removed top-level prompt command and help topic fail without producing
 
 test("supervise prompt composes with a shell launcher without consuming stdin or launching on invalid IDs", t => {
   const options = fixture(t);
-  symlinkSync(BIN, path.join(options.cwd, "codex-steer"));
+  symlinkSync(BIN, path.join(options.cwd, "codexteer"));
   symlinkSync(process.execPath, path.join(options.cwd, "node"));
   // Capture argv/stdin without launching a real Claude session or contacting a model.
   writeFileSync(path.join(options.cwd, "claude"), '#!/usr/bin/env node\nconst fs = require("node:fs"); process.stdout.write(JSON.stringify({ args: process.argv.slice(2), input: fs.readFileSync(0, "utf8") }));\n', { mode: 0o755 });
   options.env.PATH = `${options.cwd}:${process.env.PATH}`;
   const expected = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID], options).stdout.slice(0, -1);
-  const script = 'steer_prompt=$(codex-steer supervise prompt "$1") && claude "$steer_prompt"';
+  const script = 'steer_prompt=$(codexteer supervise prompt "$1") && claude "$steer_prompt"';
   for (const shell of ["/bin/zsh", "/bin/bash"]) {
     const launched = spawnSync(shell, ["-f", "-c", script, "prompt-shortcut-test", ID], { ...options, input: "terminal input remains available\n" });
     assert.equal(launched.status, 0, launched.stderr);

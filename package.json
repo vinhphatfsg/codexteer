@@ -1,10 +1,10 @@
 {
-  "name": "@vinhphatfsg/codex-steer",
+  "name": "codexteer",
   "version": "0.14.1",
   "description": "Send steering messages to running Codex Desktop threads from a terminal.",
   "type": "module",
   "bin": {
-    "codex-steer": "bin/codex-steer.mjs"
+    "codexteer": "bin/codexteer.mjs"
   },
   "scripts": {
     "check": "node scripts/check-syntax.mjs",
@@ -22,7 +22,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/vinhphatfsg/codex-steer.git"
+    "url": "git+https://github.com/vinhphatfsg/codexteer.git"
   },
   "files": [
     "bin/*.mjs",

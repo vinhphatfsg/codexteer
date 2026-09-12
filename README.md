@@ -1,4 +1,4 @@
-# codex-steer
+# codexteer
 
 普段のCodex Desktopを使いながら、別のAIが進捗を観測し、根拠を伴って実行途中に軌道修正を伝えるためのmacOS用CLIです。ターミナルからの単発送信にも使えます。
 
@@ -8,19 +8,19 @@ macOS、Node.js 20以降とnpm、`/Applications/ChatGPT.app`にインストー�
 
 ### npxで使う
 
-リポジトリのcloneやグローバルインストールなしで実行できます。npmパッケージ名は`@vinhphatfsg/codex-steer`です。無指定の`codex-steer`は別パッケージなので、スコープまで指定してください。
+リポジトリのcloneやグローバルインストールなしで実行できます。npmパッケージ名とCLI名は`codexteer`です。
 
 監督開始時のCLI一式を保存する機能は`0.14.1`以降に対応します。この版のnpm公開前は、次の「ソースから導入する」を使ってください。
 
 ```bash
-npx -y @vinhphatfsg/codex-steer --version
+npx -y codexteer --version
 ```
 
 Codex Desktopでの作業を終えてアプリを終了し、ターミナルから起動します。
 
 ```bash
-npx -y @vinhphatfsg/codex-steer desktop start
-npx -y @vinhphatfsg/codex-steer doctor --json
+npx -y codexteer desktop start
+npx -y codexteer doctor --json
 ```
 
 `-y`はnpmの取得確認を省略します。通常はバージョン指定なしで使えます。監督開始後は、その時点で保存したCLIを使い続けます。起動側と操作側の製品バージョンは、必要な通信仕様が対応していれば異なっていても使えます。
@@ -31,7 +31,7 @@ npx -y @vinhphatfsg/codex-steer doctor --json
 不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。次は`0.14.1`を選ぶ例です。
 
 ```bash
-npx -y @vinhphatfsg/codex-steer@0.14.1 supervise <thread-id> --agent claude
+npx -y codexteer@0.14.1 supervise <thread-id> --agent claude
 ```
 
 </details>
@@ -41,8 +41,8 @@ npx -y @vinhphatfsg/codex-steer@0.14.1 supervise <thread-id> --agent claude
 こちらの方法ではGitとmakeも必要です。
 
 ```bash
-git clone https://github.com/vinhphatfsg/codex-steer.git
-cd codex-steer
+git clone https://github.com/vinhphatfsg/codexteer.git
+cd codexteer
 make install-local
 ```
 
@@ -55,11 +55,17 @@ export PATH="$HOME/.local/bin:$PATH"
 Codex Desktopでの作業を終えてアプリを終了し、導入したCLIから起動します。
 
 ```bash
-codex-steer desktop start
-codex-steer doctor --json
+codexteer desktop start
+codexteer doctor --json
 ```
 
 インストールしたCLIはこのリポジトリへのシンボリックリンクです。リポジトリを移動した場合は`make install-local`を再実行してください。削除する場合は`make uninstall-local`を実行します。
+
+### codex-steerから移行する
+
+旧npmパッケージは`@vinhphatfsg/codex-steer`です。新しいパッケージの公開後は`npx -y codexteer`を使います。ソースから導入している場合は、新しいコードで`make install-local`を実行すると`codexteer`コマンドを導入できます。既存cloneのリモートURLは`https://github.com/vinhphatfsg/codexteer.git`へ更新してください。
+
+保存済みの履歴や起動中Desktopとの接続を引き継ぐため、内部の保存先`CODEX_HOME/codex-steer`と通信・診断用JSONの`codex_steer_*`フィールドは維持しています。保存先を手動で移動する必要はありません。改名前から保存済みコピーを使っている監督も、そのコピーを引き続き使えます。
 
 ### Desktopの起動について
 
@@ -72,7 +78,7 @@ codex-steer doctor --json
 ## 使い方
 
 以下の`<thread-id>`は対象のタスクIDに置き換えてください。`codex://threads/...`形式のタスクURLも使えます。
-コマンド一覧では`codex-steer`と略記します。npxで手動実行する場合は、その部分を`npx -y @vinhphatfsg/codex-steer`に置き換えてください。
+コマンド一覧では`codexteer`と略記します。npxで手動実行する場合は、その部分を`npx -y codexteer`に置き換えてください。
 
 ### Claude CodeにCodexの監視とステアリングを任せる
 
@@ -80,10 +86,10 @@ codex-steer doctor --json
 
 ```bash
 # npxで起動する場合
-npx -y @vinhphatfsg/codex-steer supervise <thread-id> --agent claude
+npx -y codexteer supervise <thread-id> --agent claude
 
 # ソースから導入した場合
-codex-steer supervise <thread-id> --agent claude
+codexteer supervise <thread-id> --agent claude
 ```
 
 対象IDを埋め込んだ監督プロンプトでClaudeを[対話起動](https://code.claude.com/docs/en/cli-reference#cli-commands)します。端末の標準入出力をそのまま使い、起動後もClaudeへ追加の指示を入力できます。
@@ -99,20 +105,20 @@ Node本体はコピーせず、開始時の実体への絶対パスとNodeバー
 モデルなどClaude側の起動引数は、`--`の後ろへ渡します。
 
 ```bash
-codex-steer supervise <thread-id> --agent claude -- --model <model> --effort <level>
+codexteer supervise <thread-id> --agent claude -- --model <model> --effort <level>
 ```
 
 同じPC・同じ`CODEX_HOME`で既にClaudeを起動している場合は、監督役（オーケストレーター）向けのプロンプトを出力し、そのセッションに貼り付けても使えます。
 
 ```bash
 # npxで本文を生成する場合
-npx -y @vinhphatfsg/codex-steer supervise prompt <thread-id>
+npx -y codexteer supervise prompt <thread-id>
 
 # ソースから導入した場合
-codex-steer supervise prompt <thread-id>
+codexteer supervise prompt <thread-id>
 ```
 
-直接起動と本文だけの出力は、同じ保存・検証・生成処理を使います。`supervise prompt`もCLI一式を保存してから本文を出力します。監督手順は`codex-steer help monitor`と共通で、生成プロンプト中の`doctor`・`read`・`watch`・`send`等の例には同じ実行コマンドを使います。監督役には、ヘルプ中の`codex-steer`表記も指定された実行コマンドに置き換えるよう指示します。
+直接起動と本文だけの出力は、同じ保存・検証・生成処理を使います。`supervise prompt`もCLI一式を保存してから本文を出力します。監督手順は`codexteer help monitor`と共通で、生成プロンプト中の`doctor`・`read`・`watch`・`send`等の例には同じ実行コマンドを使います。監督役には、ヘルプ中の`codexteer`表記も指定された実行コマンドに置き換えるよう指示します。
 
 1. 接続を診断し、対象タスクの最新の依頼・制約・進捗、有効な指示と対応待ちの履歴を確認する。
 2. 差分を読み切ったcursorから観測を続ける。[Monitorツール](https://code.claude.com/docs/en/tools-reference#monitor-tool)が使えれば`watch --stream`、使えなければ短い`watch`を繰り返す。接続状態の通知を読み、復帰待ちの間は介入を控える。
@@ -124,39 +130,39 @@ codex-steer supervise prompt <thread-id>
 
 停止するときは、同じClaudeセッションで「監視とステアリングを停止して」と伝えてください。Codexの作業自体は継続します。監督はCLIとOSの既存の権限設定に従います。
 
-IDのコピーを省く場合は、Claudeに`codex-steer threads list --desktop-only --json`で候補を表示してもらい、対象を選ぶこともできます。同じプロジェクトに複数のタスクがある場合、Claudeの起動場所だけでは監視対象を特定できません。
+IDのコピーを省く場合は、Claudeに`codexteer threads list --desktop-only --json`で候補を表示してもらい、対象を選ぶこともできます。同じプロジェクトに複数のタスクがある場合、Claudeの起動場所だけでは監視対象を特定できません。
 
 ### タスクを探して送信する
 
 ```bash
 # 最近のタスクを表示
-codex-steer threads list --desktop-only --limit 20 --json
+codexteer threads list --desktop-only --limit 20 --json
 
 # 実行中のタスクに追加入力（受付成功時に「プルッ」の通知音）
-codex-steer send <thread-id> "失敗したテストの原因を先に確認してください"
+codexteer send <thread-id> "失敗したテストの原因を先に確認してください"
 
 # 今回だけ通知音を鳴らさずに送信
-codex-steer send <thread-id> "失敗したテストの原因を先に確認してください" --no-sound
+codexteer send <thread-id> "失敗したテストの原因を先に確認してください" --no-sound
 
 # 停止中のタスクを再開
-codex-steer send <thread-id> "続きをお願いします" --new-turn
+codexteer send <thread-id> "続きをお願いします" --new-turn
 
 # 送信内容をプレビュー
-codex-steer send <thread-id> "メッセージ" --dry-run --json
+codexteer send <thread-id> "メッセージ" --dry-run --json
 
 # 複数行を標準入力から送信
-printf '%s\n' '1. 原因を調査' '2. 結果を説明' | codex-steer send <thread-id> -
+printf '%s\n' '1. 原因を調査' '2. 結果を説明' | codexteer send <thread-id> -
 ```
 
-標準の送信方式は`app-server`です。`--json`を付けると結果をJSONで返します。`delivery_status: unknown`の場合は、`codex-steer history check <thread-id> --json`で受付状況を確認してから再送を判断してください。
+標準の送信方式は`app-server`です。`--json`を付けると結果をJSONで返します。`delivery_status: unknown`の場合は、`codexteer history check <thread-id> --json`で受付状況を確認してから再送を判断してください。
 
 ### 状態と進捗を読む
 
 ```bash
-codex-steer status <thread-id> --json
-codex-steer read <thread-id> --json
-codex-steer read <thread-id> --since <cursor> --include-output --json
-codex-steer watch <thread-id> --until idle --timeout-ms 60000 --json
+codexteer status <thread-id> --json
+codexteer read <thread-id> --json
+codexteer read <thread-id> --since <cursor> --include-output --json
+codexteer watch <thread-id> --until idle --timeout-ms 60000 --json
 ```
 
 `read`は直近50件を返します。返された`data.cursor`を次回の`--since`に渡すと、新規・更新項目を取得できます。`data.has_more: true`の場合は、返されたcursorで続きを読んでください。
@@ -164,46 +170,46 @@ codex-steer watch <thread-id> --until idle --timeout-ms 60000 --json
 変化するたびに1行のJSONを受け取るには、次のコマンドを使います。Ctrl-Cで停止します。
 
 ```bash
-codex-steer watch <thread-id> --stream --json
+codexteer watch <thread-id> --stream --json
 ```
 
 ### 詳細な使い方
 
 以下は用途別のコマンド一覧です。`<...>`は実際の値に置き換えてください。`<cursor>`は`read`・`status`・`watch`の結果、`<message-id>`は`send`・`history list`、`<checkpoint-id>`は`checkpoint capture`・`checkpoint list`、`<token>`は`resource acquire`の結果から取得します。
 
-対話起動の`supervise <thread-id> --agent claude`を除き、各コマンドに`--json`を付けるとJSONで結果を返します。`supervise prompt`もJSONに対応します。別コマンドを実行する`run`や監督役の起動では、codex-steer側のオプションを区切りの`--`より前に置いてください。
+対話起動の`supervise <thread-id> --agent claude`を除き、各コマンドに`--json`を付けるとJSONで結果を返します。`supervise prompt`もJSONに対応します。別コマンドを実行する`run`や監督役の起動では、codexteer側のオプションを区切りの`--`より前に置いてください。
 
 #### ヘルプ・バージョン
 
 ```bash
 # 全体の使い方
-codex-steer help
+codexteer help
 
 # コマンド別の使い方（sendをread、watch、historyなどに置き換え）
-codex-steer help send
-codex-steer send --help
-codex-steer help send --json
+codexteer help send
+codexteer send --help
+codexteer help send --json
 
 # Claude CodeのMonitorとの連携
-codex-steer help monitor
+codexteer help monitor
 
 # バージョン
-codex-steer --version
+codexteer --version
 ```
 
-引数なしの`codex-steer`と`codex-steer --help`でも全体のヘルプを表示します。
+引数なしの`codexteer`と`codexteer --help`でも全体のヘルプを表示します。
 
 #### 監督役の起動
 
 ```bash
-codex-steer supervise <thread-id> --agent claude
-codex-steer supervise <thread-id> --agent claude -- --model <model> --effort <level>
-codex-steer help supervise
+codexteer supervise <thread-id> --agent claude
+codexteer supervise <thread-id> --agent claude -- --model <model> --effort <level>
+codexteer help supervise
 ```
 
 `--agent`は必須で、現在の対応値は`claude`です。PATH上の実行ファイルを、現在の作業ディレクトリ・環境変数・標準入力・標準出力・標準エラーを引き継いで起動します。シェルのaliasやfunctionは使いません。
 
-最初の`--`以降は対象エージェントの引数です。順序・空文字・空白・改行を保ち、codex-steer側では解釈もシェルでの再展開もしません。例えば区切り後の`--help`・`--version`・`--json`もClaudeへ渡します。呼び出し元のシェルで必要な引用は付けてください。
+最初の`--`以降は対象エージェントの引数です。順序・空文字・空白・改行を保ち、codexteer側では解釈もシェルでの再展開もしません。例えば区切り後の`--help`・`--version`・`--json`もClaudeへ渡します。呼び出し元のシェルで必要な引用は付けてください。
 
 追加引数の後ろには、Claude側の区切り`--`と、`supervise prompt`と同じ生成処理による監督プロンプトを一つの引数として付加します。追加引数の意味や組み合わせの妥当性はClaudeが判断します。
 
@@ -215,21 +221,21 @@ codex-steer help supervise
 
 ```bash
 # 監督役へ渡す、対象タスク入りの本文を標準出力へ出力
-codex-steer supervise prompt <thread-id>
+codexteer supervise prompt <thread-id>
 
 # タスクURLからも生成可能
-codex-steer supervise prompt codex://threads/<thread-id>
+codexteer supervise prompt codex://threads/<thread-id>
 
 # JSONで対象IDと本文を取得
-codex-steer supervise prompt <thread-id> --json
+codexteer supervise prompt <thread-id> --json
 
 # このコマンドのヘルプ
-codex-steer help supervise prompt
+codexteer help supervise prompt
 ```
 
 `supervise prompt`は、Claudeなどの監督役（オーケストレーター）へ渡す初期プロンプトを生成します。対象IDと引数を検証し、CLI一式を内容ハッシュ別の保存先へ配置・検証してから、正規化したIDと保存先を本文へ埋め込みます。保存・検証に失敗した場合は本文を出力せず、直接起動の場合もClaudeを起動しません。Desktopの起動・接続、履歴取得、送信、Claudeの起動は行いません。タスクの存在と接続は監督開始時に確認します。本文には観測・根拠付き介入・結果確認・停止までの手順を含みます。
 
-各コマンドは開始時のNodeと保存したCLIの絶対パスを使うため、本文を貼り付ける先のPATHに`codex-steer`がなくても実行できます。空白や引用符を含むパスはシェル引数として引用します。本文に埋め込むパスに改行等の制御文字があれば、本文を出力する前に`SUPERVISION_PATH_UNSAFE`で拒否します。引用と`--require-node-version`を含め、実行コマンドをそのまま使ってください。別のPCや`CODEX_HOME`で使う場合は、そこで本文を生成し直してください。
+各コマンドは開始時のNodeと保存したCLIの絶対パスを使うため、本文を貼り付ける先のPATHに`codexteer`がなくても実行できます。空白や引用符を含むパスはシェル引数として引用します。本文に埋め込むパスに改行等の制御文字があれば、本文を出力する前に`SUPERVISION_PATH_UNSAFE`で拒否します。引用と`--require-node-version`を含め、実行コマンドをそのまま使ってください。別のPCや`CODEX_HOME`で使う場合は、そこで本文を生成し直してください。
 
 通常出力は末尾改行付きの本文のみです。`--json`では既存CLIと同じ形式で返します。
 
@@ -242,7 +248,7 @@ codex-steer help supervise prompt
     "prompt": "対象IDと保存したCLIの実行コマンドを含む監督プロンプト本文…",
     "deployment": {
       "directory": "/Users/me/.codex/codex-steer/runtimes/0.14.1-<sha256>",
-      "wrapper_path": "/Users/me/.codex/codex-steer/runtimes/0.14.1-<sha256>/bin/codex-steer-wrapper.mjs",
+      "wrapper_path": "/Users/me/.codex/codex-steer/runtimes/0.14.1-<sha256>/bin/codexteer-wrapper.mjs",
       "version": "0.14.1",
       "sha256": "<sha256>",
       "reused": false
@@ -254,29 +260,29 @@ codex-steer help supervise prompt
 
 IDが不正な場合や引数が不足・過剰な場合は終了コード1です。通常は標準エラーへ理由を出し、本文は出力しません。`--json`では標準出力に`{"ok":false,"error":{"message":"理由"}}`を返します。起動に使う本文の生成には`--json`を付けないでください。
 
-Codex CLIでも、`steer_prompt=$(codex-steer supervise prompt <thread-id>) && codex "$steer_prompt"`のように初期プロンプトを渡せます。生成プロンプトには、Monitorが使えない場合の短い`watch`による手順と、監督AI自身の送信元名を使う案内を含みます。
+Codex CLIでも、`steer_prompt=$(codexteer supervise prompt <thread-id>) && codex "$steer_prompt"`のように初期プロンプトを渡せます。生成プロンプトには、Monitorが使えない場合の短い`watch`による手順と、監督AI自身の送信元名を使う案内を含みます。
 
 #### Desktopの起動・診断・タスク選択
 
 ```bash
 # 共有接続を有効にしてDesktopを起動（--dry-runで起動せずプレビュー）
-codex-steer desktop start
-codex-steer desktop start --dry-run --json
+codexteer desktop start
+codexteer desktop start --dry-run --json
 
 # 接続と起動条件を診断
-codex-steer doctor --json
+codexteer doctor --json
 
 # 指定タスクの観測APIも検証
-codex-steer doctor --thread <thread-id> --json
+codexteer doctor --thread <thread-id> --json
 
 # 最近のタスクを一覧表示
-codex-steer threads list --desktop-only --limit 20 --json
+codexteer threads list --desktop-only --limit 20 --json
 
 # タスクURLをIDに変換
-codex-steer thread resolve codex://threads/<thread-id> --json
+codexteer thread resolve codex://threads/<thread-id> --json
 
 # 対象タスクをDesktopの画面で開く
-codex-steer open <thread-id>
+codexteer open <thread-id>
 ```
 
 `doctor`はDesktop・同梱CLI・実行中のwrapper Node・手元のCLIを動かすNodeのバージョンと、`connection.status`、`compatibility.api_checks`、`failure`を返します。対象未指定では接続だけを診断するため、観測の互換性は`unverified`です。
@@ -301,25 +307,25 @@ codex-steer open <thread-id>
 
 ```bash
 # 実行中タスクへ追加入力
-codex-steer send <thread-id> "今の要件に必要な変更へ絞ってください" --json
+codexteer send <thread-id> "今の要件に必要な変更へ絞ってください" --json
 
 # sendを省略した短縮形
-codex-steer <thread-id> "今の要件に必要な変更へ絞ってください"
+codexteer <thread-id> "今の要件に必要な変更へ絞ってください"
 
 # 停止中・未ロードのタスクを再開
-codex-steer send <thread-id> "続きをお願いします" --new-turn --json
+codexteer send <thread-id> "続きをお願いします" --new-turn --json
 
 # 送信せずプレビュー
-codex-steer send <thread-id> "メッセージ" --dry-run --json
+codexteer send <thread-id> "メッセージ" --dry-run --json
 
 # 観測した内容と根拠を付けて送信
-codex-steer send <thread-id> "追加の抽象化を見直してください" --source claude-code --kind suggestion --evidence <file-or-url> --based-on <cursor> --json
+codexteer send <thread-id> "追加の抽象化を見直してください" --source claude-code --kind suggestion --evidence <file-or-url> --based-on <cursor> --json
 
 # 標準入力から送信
-printf '%s\n' '問題点' '具体的な修正方針' | codex-steer send <thread-id> -
+printf '%s\n' '問題点' '具体的な修正方針' | codexteer send <thread-id> -
 
 # 本文にオプション名を含める場合
-codex-steer send <thread-id> -- '--new-turn の処理を確認してください'
+codexteer send <thread-id> -- '--new-turn の処理を確認してください'
 ```
 
 | オプション | 用途 |
@@ -347,26 +353,26 @@ codex-steer send <thread-id> -- '--new-turn の処理を確認してください
 
 ```bash
 # 状態・実行中ターン・承認待ちを確認
-codex-steer status <thread-id> --json
+codexteer status <thread-id> --json
 
 # 直近の発言・コマンド・ファイル変更を読む
-codex-steer read <thread-id> --limit 50 --max-chars 2000 --json
+codexteer read <thread-id> --limit 50 --max-chars 2000 --json
 
 # 前回からの新規・更新項目を、コマンド出力や差分本文も含めて読む
-codex-steer read <thread-id> --since <cursor> --include-output --json
+codexteer read <thread-id> --since <cursor> --include-output --json
 
 # 過去全文の整合性も照合して読む
-codex-steer read <thread-id> --full-history --json
+codexteer read <thread-id> --full-history --json
 
 # 次の変化まで待つ
-codex-steer watch <thread-id> --since <cursor> --until change --timeout-ms 30000 --poll-ms 1000 --json
+codexteer watch <thread-id> --since <cursor> --until change --timeout-ms 30000 --poll-ms 1000 --json
 
 # タスクの停止、またはユーザー対応待ちまで待つ
-codex-steer watch <thread-id> --until idle --timeout-ms 60000 --json
-codex-steer watch <thread-id> --until attention --json
+codexteer watch <thread-id> --until idle --timeout-ms 60000 --json
+codexteer watch <thread-id> --until attention --json
 
 # 変化するたびにJSONを1行ずつ出力し続ける
-codex-steer watch <thread-id> --stream --since <cursor> --include-output --json
+codexteer watch <thread-id> --stream --since <cursor> --include-output --json
 ```
 
 | オプション | 対象・用途 |
@@ -408,17 +414,17 @@ codex-steer watch <thread-id> --stream --since <cursor> --include-output --json
 
 ```bash
 # 現在有効な指示を表示（--allで置換済み・撤回済み・期限切れも表示）
-codex-steer instructions list <thread-id> --json
-codex-steer instructions list <thread-id> --all --json
+codexteer instructions list <thread-id> --json
+codexteer instructions list <thread-id> --all --json
 
 # 以前の指示を訂正
-codex-steer send <thread-id> "先ほどの指示を訂正します。既存の仕組みを使ってください" --supersedes <message-id> --json
+codexteer send <thread-id> "先ほどの指示を訂正します。既存の仕組みを使ってください" --supersedes <message-id> --json
 
 # 有効期限を付けて送信
-codex-steer send <thread-id> "この方針で進めてください" --expires-at <timestamp> --json
+codexteer send <thread-id> "この方針で進めてください" --expires-at <timestamp> --json
 
 # 理由を添えて撤回
-codex-steer instructions retract <thread-id> <message-id> --reason "前提が変わったため" --json
+codexteer instructions retract <thread-id> <message-id> --reason "前提が変わったため" --json
 ```
 
 `retract`には`--source`・`--based-on`・`--new-turn`・`--dry-run`も使えます。訂正・撤回は対象タスクへメッセージとして送られ、元の履歴は残ります。有効期限は指示一覧に適用され、進行中の作業を自動停止するものではありません。
@@ -427,16 +433,16 @@ codex-steer instructions retract <thread-id> <message-id> --reason "前提が変
 
 ```bash
 # 送信履歴を表示（--pendingで反映済み・不採用以外に絞る）
-codex-steer history list <thread-id> --pending --json
+codexteer history list <thread-id> --pending --json
 
 # 特定の送信の詳細と本文を表示
-codex-steer history show <thread-id> <message-id> --include-text --json
+codexteer history show <thread-id> <message-id> --include-text --json
 
 # 対象タスクの受信履歴と照合（message-idを省略するとまとめて照合）
-codex-steer history check <thread-id> <message-id> --json
+codexteer history check <thread-id> <message-id> --json
 
 # 対応状況と根拠を記録
-codex-steer history mark <thread-id> <message-id> --status applied --note "指示どおりの変更を確認" --evidence <file-or-url> --by claude-code --json
+codexteer history mark <thread-id> <message-id> --status applied --note "指示どおりの変更を確認" --evidence <file-or-url> --by claude-code --json
 ```
 
 `list`・`show`・`check`は`--include-text`で本文も表示します。`mark --status`は`acknowledged`（確認済み）、`applied`（反映済み）、`dismissed`（不採用）から選び、`--note`を必ず付けます。`applied`には`--evidence`も必要で、複数指定できます。`check`の`stored`は保存の確認、`mark`は記録者による対応状況の申告です。
@@ -445,22 +451,22 @@ codex-steer history mark <thread-id> <message-id> --status applied --note "指�
 
 ```bash
 # 入力ファイルを記録し、checkpoint-idを取得
-codex-steer checkpoint capture <thread-id> tests --path src --path test --path package.json --path package-lock.json --json
+codexteer checkpoint capture <thread-id> tests --path src --path test --path package.json --path package-lock.json --json
 
 # 記録した入力でコマンドを実行
-codex-steer checkpoint run <thread-id> <checkpoint-id> --timeout-ms 60000 --include-output --json -- npm test
+codexteer checkpoint run <thread-id> <checkpoint-id> --timeout-ms 60000 --include-output --json -- npm test
 
 # 成功した実行に成果物ファイルを関連付け
-codex-steer checkpoint attach <thread-id> <checkpoint-id> --artifact <artifact-file> --json
+codexteer checkpoint attach <thread-id> <checkpoint-id> --artifact <artifact-file> --json
 
 # 入力・実行結果・成果物の一致を確認
-codex-steer checkpoint verify <thread-id> <checkpoint-id> --json
+codexteer checkpoint verify <thread-id> <checkpoint-id> --json
 
 # チェックポイントを一覧表示
-codex-steer checkpoint list <thread-id> --json
+codexteer checkpoint list <thread-id> --json
 
 # 特定のチェックポイントを出力ログも含めて表示
-codex-steer checkpoint show <thread-id> <checkpoint-id> --include-output --json
+codexteer checkpoint show <thread-id> <checkpoint-id> --include-output --json
 ```
 
 `capture --path`はファイル・ディレクトリを複数指定できます。除外するパスは`--exclude`で指定し、コマンドの出力先やキャッシュを入力に含めないでください。`attach --artifact`も複数指定可能です。`run --timeout-ms`は0〜86400000msで、既定の0は無制限です。入力や成果物が変わると`valid: false`になり、`run`・`verify`は終了コード1を返します。
@@ -469,22 +475,22 @@ codex-steer checkpoint show <thread-id> <checkpoint-id> --include-output --json
 
 ```bash
 # 利用を予約し、tokenを取得
-codex-steer resource acquire screen --owner claude-code --ttl-ms 120000 --thread <thread-id> --reason "画面を確認" --condition "ユーザーが今回の画面利用を許可済み" --json
+codexteer resource acquire screen --owner claude-code --ttl-ms 120000 --thread <thread-id> --reason "画面を確認" --condition "ユーザーが今回の画面利用を許可済み" --json
 
 # 特定リソースの状態を確認
-codex-steer resource status screen --json
+codexteer resource status screen --json
 
 # リソースを一覧表示
-codex-steer resource list --json
+codexteer resource list --json
 
 # 予約期限を延長
-codex-steer resource renew screen --token <token> --ttl-ms 120000 --json
+codexteer resource renew screen --token <token> --ttl-ms 120000 --json
 
 # 予約を解放
-codex-steer resource release screen --token <token> --json
+codexteer resource release screen --token <token> --json
 
 # コマンド実行中だけ予約し、終了時に解放
-codex-steer resource run project-build --owner claude-code --ttl-ms 600000 --timeout-ms 60000 --include-output --json -- npm test
+codexteer resource run project-build --owner claude-code --ttl-ms 600000 --timeout-ms 60000 --include-output --json -- npm test
 ```
 
 `screen`や`project-build`は利用者が決めるリソース名です。同じ`CODEX_HOME`・同じ名前を使う参加者間で予約を共有します。`acquire`・`run`の`--owner`は必須で、`--thread`・`--reason`・`--condition`で対象タスク・用途・利用条件を記録できます。
@@ -497,16 +503,16 @@ codex-steer resource run project-build --owner claude-code --ttl-ms 600000 --tim
 
 ```bash
 # UI方式の利用条件を診断
-codex-steer doctor --backend ui --json
+codexteer doctor --backend ui --json
 
 # UI方式で送信
-codex-steer send <thread-id> "メッセージ" --backend ui
+codexteer send <thread-id> "メッセージ" --backend ui
 
 # 画面の待機時間を指定し、送信後もDesktopを前面に維持
-codex-steer send <thread-id> "メッセージ" --backend ui --keep-focus --wait-ms 3000
+codexteer send <thread-id> "メッセージ" --backend ui --keep-focus --wait-ms 3000
 
 # 対象タスクを開いてAccessibilityの画面構造を診断
-codex-steer debug-ui <thread-id> --wait-ms 1500
+codexteer debug-ui <thread-id> --wait-ms 1500
 ```
 
 UI方式は画面フォーカスに依存し、サイドチャットが開いている場合の宛先保証はありません。結果の`submitted_unverified`はキー入力の実行を表し、対象タスクへの配送確認ではありません。

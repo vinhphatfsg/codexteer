@@ -1,23 +1,22 @@
 # 配布と永続実行
 
-パッケージ名は `@vinhphatfsg/codex-steer`、CLI名は `codex-steer`、ライセンスはMITです。
-無指定のnpm名 `codex-steer` は別リポジトリのパッケージが使用しているため、本プロジェクトの導入には使いません。
-GitHub名とnpmスコープの所有権は別です。公開時は `npm whoami` でnpm側のユーザーと、このスコープへの公開権限を確認してください。
+パッケージ名は `codexteer`、CLI名は `codexteer`、ライセンスはMITです。
+旧npmパッケージは`@vinhphatfsg/codex-steer`です。GitHubリポジトリの改名はnpmパッケージを公開・改名する操作ではなく、`codexteer`は新しいパッケージとして公開します。公開時は`npm whoami`でnpm側のユーザーを確認してください。
 `package.json` は `private` を持たず、`publishConfig` でnpm公式レジストリへのpublic公開を指定しています。公開可能な設定であることと、実際に公開済みであることは別です。
 
 公開後の基本的な実行形式は次のとおりです。通常はバージョン指定なしで使えます。監督開始後は保存したCLIを使い続けるため、監督中の一貫性を保つために版を明示する必要はありません。起動側と操作側の製品バージョンも、必要な通信仕様が対応していれば異なっていても使えます。
 この例は現在公開済みであることを示すものではありません。`-y` はnpmの取得確認を省略します。
 
 ```text
-npx -y @vinhphatfsg/codex-steer desktop start
-npx -y @vinhphatfsg/codex-steer doctor --thread <thread-id> --json
-npx -y @vinhphatfsg/codex-steer supervise <thread-id> --agent claude
-npx -y @vinhphatfsg/codex-steer supervise prompt <thread-id>
-npx -y @vinhphatfsg/codex-steer read <thread-id> --json
-npx -y @vinhphatfsg/codex-steer send <thread-id> "message" --json
+npx -y codexteer desktop start
+npx -y codexteer doctor --thread <thread-id> --json
+npx -y codexteer supervise <thread-id> --agent claude
+npx -y codexteer supervise prompt <thread-id>
+npx -y codexteer read <thread-id> --json
+npx -y codexteer send <thread-id> "message" --json
 ```
 
-特定の版で開始したい場合は、任意で`@vinhphatfsg/codex-steer@<version>`と指定できます。`<version>`は利用する公開版に置き換えてください。
+特定の版で開始したい場合は、任意で`codexteer@<version>`と指定できます。`<version>`は利用する公開版に置き換えてください。
 
 macOS、Node.js 20以降、対応するCodex Desktopが必要です。すでに起動しているDesktopは、作業を終えて終了してから `desktop start` で起動します。
 CLIはDesktopを自動終了しません。
@@ -26,7 +25,7 @@ CLIはDesktopを自動終了しません。
 
 `0.14.1`以降の`supervise`と`supervise prompt`は、開始時のCLI本体と依存を内容ハッシュ別の永続配置へコピーし、その保存先を使う実行コマンドを本文に埋め込みます。npxで取得したパッケージもソースのチェックアウトも、同じ保存・検証・生成処理を使います。起動経路を推測する環境変数や切り替えオプションは不要です。本文の生成処理自体も保存したCLI一式から読み込みます。
 
-監督役の`doctor`・`read`・`watch`・`send`等はこのコピーを使います。パスはシェル引数として引用し、空白・引用符・コマンド置換に見える文字も文字列として扱います。本文に埋め込むパスに改行や制御文字があれば、`SUPERVISION_PATH_UNSAFE`で拒否します。ヘルプの`codex-steer`表記も、監督役には指定された実行コマンドに置き換えるよう指示します。
+監督役の`doctor`・`read`・`watch`・`send`等はこのコピーを使います。パスはシェル引数として引用し、空白・引用符・コマンド置換に見える文字も文字列として扱います。本文に埋め込むパスに改行や制御文字があれば、`SUPERVISION_PATH_UNSAFE`で拒否します。ヘルプの`codexteer`表記も、監督役には指定された実行コマンドに置き換えるよう指示します。
 
 `supervise prompt`も読み取り専用ではなく、IDと引数の検証後にCLI一式の保存・再利用の検証を行ってから本文を出力します。保存・検証に失敗した場合は部分的な本文を出力せず、直接起動の場合もClaudeを起動しません。Desktopへの接続・設定変更・履歴取得・送信は行いません。`--json`には対象IDと本文に加えて`data.deployment`（保存先・版・ハッシュ・再利用の有無）と`data.node`（Nodeの実体パス・版）を返します。ヘルプの表示は保存処理を行いません。
 
@@ -39,6 +38,14 @@ Node本体はコピーせず、開始時のNodeの実体への絶対パスと`--
 バージョン指定は、開始する版を選びたい場合の任意指定です。指定なしではローカル導入済みのパッケージが選ばれる場合もあり、常に最新版を取得する契約ではありません。どちらの場合も、監督開始時に選ばれたCLIを保存して使い続けます。[npmのパッケージ選択仕様](https://docs.npmjs.com/cli/v11/commands/npm-exec/#description)
 
 Desktopとの通信は既存の操作別互換性チェックに従い、監督用CLIとDesktop起動用CLIの製品バージョンの一致は要求しません。両者は同じ永続配置の仕組みを使い、同じ版・同じ内容なら同じコピーを再利用します。
+
+## 改名前の環境との互換性
+
+CLIとnpmパッケージは`codexteer`へ変更しました。起動ファイルは`bin/codexteer.mjs`と`bin/codexteer-wrapper.mjs`です。
+
+履歴・チェックポイント・resourceロック・永続配置の保存先`CODEX_HOME/codex-steer`、配置目録`.codex-steer-runtime.json`、IPCの親ディレクトリ`/private/tmp/codex-steer-<uid>`、通信・診断用JSONの`codex_steer_*`フィールドは旧名を維持します。履歴の移動や稼働中runtimeの置き換えをせず、旧パッケージとの間でも従来の操作別互換性チェックを使います。診断に旧パッケージ名との差が表示されても、それだけで操作を拒否しません。
+
+既存の保存済みコピーは変更・削除しません。新しいCLI・npm名と起動ファイル名は配布物の内容ハッシュに含まれるため、同じ`0.14.1`でも旧名の配布物とは別のコピーになります。
 
 ## 配布物
 
@@ -144,15 +151,16 @@ npm run test:protocol
 `test:package` は実際のtarballを作り、同梱内容・実行権限を確認して、隔離した空のnpmキャッシュからオフラインでインストールします。
 公開を禁止する`private`フィールドがないこと、CLIの`bin`が正規化済みのパスであることも確認します。さらに資格情報を渡さず、外部公開できない接続先・offline・dry-runでnpmの公開準備を検証し、自動補正の警告がなく、テストするtarballと内容ハッシュが一致することを確認します。npmのdry-runは`EPRIVATE`の判定を省略するため、dry-runの成功だけで公開可能とは判断しません。
 リポジトリ外でCLIを実行し、模擬runtimeに対する異なる版でのread/send、機能単位の拒否、キャッシュ削除後の永続配置を検証します。
+改名後のCLIから旧パッケージ名のruntimeへread/sendできることと、旧名の保存先にある履歴を変更せずに読めることも確認します。
 npxから模擬Claudeを起動して保存したCLIへの参照を確認し、同じ本文を別プロセスへ貼り付けた場合も検証します。元のキャッシュの更新・削除後も保存した版を使い、模擬runtimeへのread/sendを継続できることを確認します。単体テストでは同じ版のソース変更、別の版への更新、保存済みコピーの改変、Nodeバージョンの不一致も検証します。監督側のPATHに別のCLIがある場合やCLIがない場合を含み、実際のClaudeやモデルは起動しません。
 `test:protocol` は実際の同梱CLIと模擬Desktopを使います。実ユーザーのタスクへの送信やDesktopの停止は行いません。
-実際のnpm公開には、スコープの公開権限確認、公開版の確定とユーザーからの公開指示が必要です。
+実際のnpm公開には、アカウントとパッケージの公開権限確認、公開版の確定とユーザーからの公開指示が必要です。
 
 ## npmへの公開
 
 レビュー・検証を終えた版を、npm側の公開権限を持つアカウントで公開します。手動公開には2FAを有効にしたアカウントを使ってください。
 
-公開済みのパッケージ名とバージョンの組み合わせは再公開できません。`0.14.0`公開後の変更には新しいバージョンを付け、今回の変更は`0.14.1`として公開します。削除しても同じ版番号を再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
+公開済みのパッケージ名とバージョンの組み合わせは再公開できません。旧パッケージ`@vinhphatfsg/codex-steer@0.14.0`は変更せず、今回の配布物は`codexteer@0.14.1`として公開します。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
 
 ```bash
 npm login
@@ -164,11 +172,11 @@ npm publish --access public
 公開後は、公開した版と起動コマンドの登録を確認します。次は0.14.1を公開した場合の例です。
 
 ```bash
-npm view @vinhphatfsg/codex-steer@0.14.1 version bin --json
-npx -y @vinhphatfsg/codex-steer@0.14.1 --version
+npm view codexteer@0.14.1 version bin --json
+npx -y codexteer@0.14.1 --version
 ```
 
 `EPRIVATE`はリポジトリの`package.json`に公開禁止設定が残っていることを示します。`--access public`はその禁止を解除しません。
-`bin`のパスは`bin/codex-steer.mjs`とし、先頭に`./`を付けません。npm 11.6.2では先頭の`./`を正規化する際に「invalid and removed」という警告が出ますが、この場合の実装は`bin`を保持しています。警告を避けるため、正規化済みの表記を配布元から使います。
+`bin`のパスは`bin/codexteer.mjs`とし、先頭に`./`を付けません。npm 11.6.2では先頭の`./`を正規化する際に「invalid and removed」という警告が出ますが、この場合の実装は`bin`を保持しています。警告を避けるため、正規化済みの表記を配布元から使います。
 
-参考: [npmのfilesとbundleDependencies](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/)、[npm exec/npxのキャッシュ](https://docs.npmjs.com/cli/v11/commands/npm-exec/)、[スコープ付きパッケージの公開](https://docs.npmjs.com/creating-and-publishing-scoped-public-packages/)。
+参考: [npmのfilesとbundleDependencies](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/)、[npm exec/npxのキャッシュ](https://docs.npmjs.com/cli/v11/commands/npm-exec/)、[パッケージの公開](https://docs.npmjs.com/creating-and-publishing-unscoped-public-packages/)。

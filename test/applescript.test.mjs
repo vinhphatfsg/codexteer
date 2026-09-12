@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 for (const scriptName of ["accessibility.applescript", "send.applescript", "inspect.applescript"]) {
   test(`${scriptName} compiles`, { skip: process.platform !== "darwin" }, async () => {
-    const output = await mkdtemp(path.join(os.tmpdir(), "codex-steer-script-"));
+    const output = await mkdtemp(path.join(os.tmpdir(), "codexteer-script-"));
     const source = fileURLToPath(new URL(`../scripts/${scriptName}`, import.meta.url));
     const result = spawnSync("/usr/bin/osacompile", ["-o", path.join(output, "script.scpt"), source], {
       encoding: "utf8",

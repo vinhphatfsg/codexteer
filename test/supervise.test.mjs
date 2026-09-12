@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
-const BIN = fileURLToPath(new URL("../bin/codex-steer.mjs", import.meta.url));
+const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 
 function fixture(t) {
   const cwd = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cs-supervise-")));
@@ -70,7 +70,7 @@ test("invalid IDs, missing or unsupported agent options, and misplaced flags nev
     const result = spawnSync(process.execPath, [BIN, "supervise", ...args], options);
     assert.equal(result.status, 1);
     assert.equal(result.stdout, "");
-    assert.match(result.stderr, /codex-steer:/);
+    assert.match(result.stderr, /codexteer:/);
     assert.equal(existsSync(path.join(options.cwd, "started")), false);
   }
   const json = spawnSync(process.execPath, [BIN, "supervise", ID, "--agent", "claude", "--json"], options);
