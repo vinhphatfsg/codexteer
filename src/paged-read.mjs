@@ -14,9 +14,9 @@ export async function turnMetadata(client, threadId) {
   const turns = [], seen = new Set(), ids = new Set(); let cursor;
   do {
     const page = await client.request("thread/turns/list", { threadId, itemsView: "notLoaded", sortDirection: "asc", limit: 100, ...(cursor ? { cursor } : {}) });
-    if (!Array.isArray(page.data) || (page.nextCursor && (seen.has(page.nextCursor) || !page.data.length))) throw invalidCursor();
+    if (!Array.isArray(page?.data) || (page.nextCursor != null && (typeof page.nextCursor !== "string" || !page.nextCursor || seen.has(page.nextCursor) || !page.data.length))) throw invalidCursor();
     for (const t of page.data) {
-      if (!t?.id || !t.status || ids.has(t.id)) throw invalidCursor();
+      if (typeof t?.id !== "string" || !t.id || typeof t.status !== "string" || !t.status || ids.has(t.id)) throw invalidCursor();
       turns.push({ id: t.id, status: t.status }); ids.add(t.id);
     }
     cursor = page.nextCursor; seen.add(cursor);

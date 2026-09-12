@@ -10,7 +10,7 @@ macOS、Node.js 20以降とnpm、`/Applications/ChatGPT.app`にインストー�
 
 リポジトリのcloneやグローバルインストールなしで実行できます。npmパッケージ名とCLI名は`codexteer`です。
 
-このブランチは次期版`0.15.0`です。npm公開済みの`0.14.1`は利用できますが、監督方針の上書き、停止・再開、指摘管理、Codex CLI起動、Desktopへの観測専用接続は`0.15.0`で追加します。公開前にこれらを使う場合は、このブランチを「ソースから導入する」の手順で導入してください。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
+このブランチは修正版`0.15.1`を準備します。npm公開済みの`0.15.0`には監督方針の上書き、停止・再開、指摘管理、Codex CLI起動、Desktopへの観測専用接続が含まれます。長いタスクへの送信前確認を修正した`0.15.1`を公開前に使う場合は、このブランチを「ソースから導入する」の手順で導入してください。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
 
 ```bash
 npx -y codexteer --version
@@ -28,10 +28,10 @@ npx -y codexteer doctor --json
 <details>
 <summary>特定のバージョンで実行する場合（任意）</summary>
 
-不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。`0.15.0`の公開後にその版を選ぶ場合は、次のように指定します。
+不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。`0.15.1`の公開後にその版を選ぶ場合は、次のように指定します。
 
 ```bash
-npx -y codexteer@0.15.0 supervise <thread-id>
+npx -y codexteer@0.15.1 supervise <thread-id>
 ```
 
 </details>
@@ -347,9 +347,9 @@ codexteer help supervise prompt
     "prompt": "対象IDと保存したCLIの実行コマンドを含む監督プロンプト本文…",
     "deployment": {
       "codex_home": "/Users/me/.codex",
-      "directory": "/Users/me/.codex/codex-steer/runtimes/0.15.0-<sha256>",
-      "wrapper_path": "/Users/me/.codex/codex-steer/runtimes/0.15.0-<sha256>/bin/codexteer-wrapper.mjs",
-      "version": "0.15.0",
+      "directory": "/Users/me/.codex/codex-steer/runtimes/0.15.1-<sha256>",
+      "wrapper_path": "/Users/me/.codex/codex-steer/runtimes/0.15.1-<sha256>/bin/codexteer-wrapper.mjs",
+      "version": "0.15.1",
       "sha256": "<sha256>",
       "reused": false
     },
@@ -446,6 +446,8 @@ codexteer send <thread-id> -- '--new-turn の処理を確認してください'
 | `--wait-ms <milliseconds>` | UI方式の画面待機時間。既定は1500ms。 |
 
 `--source`から`--checkpoint`までの指示メタデータは`app-server`方式で使います。`accepted`は入力の受付を表します。`unknown`の場合は`history check`で確認してから再送を判断してください。
+
+ページ履歴対応のタスクでは、送信前の状態確認も本文を含まない分割取得を使います。受信上限の64 MiBを超えた場合は`PAYLOAD_TOO_LARGE`で停止します。旧形式の履歴やv1の`--based-on`確認では全履歴の取得が必要です。修正前の保存済みCLIを使う監督には更新が自動適用されないため、更新したCLIで監督を起動し直すか、プロンプトを生成し直してください。
 
 送信音は既定でオンです。同梱の短い3音「プルッ」（約0.30秒、`assets/send-pururu.wav`）を、今回の入力が受け付けられた直後に鳴らします。`--no-sound`・`--dry-run`・受付失敗・受付未確認（UI方式を含む）では鳴りません。CodexやmacOSの通知設定は変更せず、音量・ミュートはMacの出力設定に従います。再生に失敗しても送信成功は維持され、`--json`では`data.sound.played`と鳴らなかった`reason`、通常出力では再生失敗の警告で確認できます。
 

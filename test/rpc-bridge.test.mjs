@@ -8,6 +8,7 @@ import { WebSocketServer } from "ws";
 import { RpcClient, connectSocket } from "../src/rpc.mjs";
 import { relay } from "../src/bridge.mjs";
 import { DesktopSubscriptions, serveSubscriptions, ensureDesktopSubscription } from "../src/subscription.mjs";
+import { sendAppServerMessage } from "../src/app-server.mjs";
 
 async function fixture(t, connection) {
   const root = await mkdtemp("/private/tmp/cs-ws-test-");
@@ -80,6 +81,73 @@ test("malformed protocol input stays terminal and preserves uncertain writes", a
   t.after(() => client.close());
   await assert.rejects(client.request("turn/steer", {}, { mutation: true }), error => error.code === "PROTOCOL_ERROR" && error.uncertain && !error.message.includes("private"));
   await assert.rejects(client.request("thread/read"), error => error.code === "PROTOCOL_ERROR" && !error.uncertain);
+});
+
+test("the 64 MiB receive limit reports oversized frames without making sent writes retryable", async t => {
+  const oversized = Buffer.alloc(64 * 1024 * 1024 + 1, 0x20);
+  oversized.write('{"private":"synthetic-private-prompt"}');
+  const threadId = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
+  for (const phase of ["initialize", "thread/read", "turn/steer"]) {
+    let writes = 0;
+    const root = await fixture(t, socket => {
+      socket.on("error", () => {});
+      socket.on("message", bytes => {
+        const request = JSON.parse(bytes);
+        if (!request.id) return;
+        if (request.method === "turn/steer") writes++;
+        if (request.method === phase) { socket.send(oversized, { binary: false }, () => {}); return; }
+        socket.send(JSON.stringify({ id: request.id, result: request.method === "initialize" ? {} : { thread: { id: threadId, status: { type: "active" }, turns: [{ id: "active", status: "inProgress" }] } } }));
+      });
+    });
+    await assert.rejects(sendAppServerMessage(threadId, "do not retry automatically", {
+      discover: async () => ({ paths: { lease: root, socket: `${root}/s.sock` }, state: { codex_steer_protocol: 1 } }),
+    }), error => {
+      assert.equal(error.code, "PAYLOAD_TOO_LARGE");
+      assert.equal(error.delivery_status, phase === "turn/steer" ? "unknown" : "not_sent");
+      assert.equal(error.sent, phase === "turn/steer" ? null : false);
+      assert.equal(error.message.includes("synthetic-private"), false);
+      if (phase !== "turn/steer") assert.match(error.message, /64 MiB/);
+      return true;
+    });
+    assert.equal(writes, phase === "turn/steer" ? 1 : 0);
+  }
+});
+
+test("steering succeeds over a real socket when the full history exceeds the receive limit", async t => {
+  const threadId = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001", turnId = "active";
+  const oversized = Buffer.alloc(64 * 1024 * 1024 + 1, 0x20);
+  const calls = [];
+  const root = await fixture(t, socket => {
+    socket.on("error", () => {});
+    socket.on("message", bytes => {
+      const request = JSON.parse(bytes);
+      if (!request.id) return;
+      calls.push(request);
+      let result;
+      if (request.method === "initialize") result = {};
+      else if (request.method === "thread/read") {
+        if (request.params.includeTurns) { socket.send(oversized, { binary: false }, () => {}); return; }
+        result = { thread: { id: threadId, status: { type: "active" }, historyMode: "paginated", turns: [], canAcceptDirectInput: true } };
+      } else if (request.method === "thread/turns/list") {
+        assert.equal(request.params.itemsView, "notLoaded");
+        result = { data: [{ id: turnId, status: "inProgress", itemsView: "notLoaded", items: [] }], nextCursor: null };
+      } else if (request.method === "turn/steer") {
+        assert.equal(request.params.threadId, threadId); assert.equal(request.params.expectedTurnId, turnId);
+        result = { turnId };
+      } else assert.fail(`Unexpected RPC: ${request.method}`);
+      socket.send(JSON.stringify({ id: request.id, result }));
+    });
+  });
+  const original = await RpcClient.connect(`${root}/s.sock`);
+  try { await assert.rejects(original.request("thread/read", { threadId, includeTurns: true }), { code: "PAYLOAD_TOO_LARGE", uncertain: false }); }
+  finally { original.close(); }
+  calls.length = 0;
+  const receipt = await sendAppServerMessage(threadId, "synthetic steering only", {
+    discover: async () => ({ paths: { lease: root, socket: `${root}/s.sock` }, state: { codex_steer_package: "codexteer", codex_steer_version: "0.15.0", codex_steer_protocol: 1 } }),
+  });
+  assert.equal(receipt.delivery_status, "accepted");
+  assert.equal(calls.filter(call => call.method === "turn/steer").length, 1);
+  assert.ok(calls.filter(call => call.method === "thread/read").every(call => call.params.includeTurns === false));
 });
 
 test("initialization is cancellable and read timeouts are not uncertain deliveries", async t => {
