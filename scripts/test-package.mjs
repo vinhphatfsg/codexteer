@@ -162,18 +162,18 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   assert.equal((await cli(["send", ID, "synthetic message", "--no-sound"])).data.delivery_status, "accepted");
   assert.equal(sends, 1);
   await lease.update({ codex_steer_package: PACKAGE_NAME });
-  for (const version of [null, "0.14.1", "99.0.0"]) {
+  for (const version of [null, "0.14.1", "0.15.0", "99.0.0"]) {
     await lease.update({ codex_steer_version: version });
     assert.equal((await cli(["read", ID])).data.thread_id, ID);
     assert.equal((await cli(["send", ID, "synthetic message", "--no-sound"])).data.sent, true);
   }
-  assert.equal(sends, 4, "compatible mixed versions must send");
+  assert.equal(sends, 5, "compatible mixed versions must send");
   await lease.update({ codex_steer_capabilities: { ...RUNTIME_CAPABILITIES, desktop_subscribe: [2] } });
   const before = reads;
   const unavailable = await cli(["send", ID, "synthetic", "--new-turn", "--no-sound"], false);
   assert.equal(unavailable.error.code, "CAPABILITY_UNSUPPORTED");
   assert.equal(unavailable.error.capability, "desktop_subscribe");
-  assert.equal(reads, before); assert.equal(sends, 4);
+  assert.equal(reads, before); assert.equal(sends, 5);
   assert.equal((await cli(["read", ID])).data.thread_id, ID);
   assert.equal((await cli(["send", ID, "synthetic message", "--no-sound"])).data.sent, true);
   await lease.update({ codex_steer_protocol: 2 });
@@ -183,7 +183,7 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   }
   await cli(["help"]); await cli(["supervise", "prompt", ID]); await cli(["history", "list", ID]);
   assert.equal((await cli(["send", ID, "synthetic", "--dry-run"])).data.sent, false);
-  assert.equal(reads, beforeProtocol); assert.equal(sends, 5);
+  assert.equal(reads, beforeProtocol); assert.equal(sends, 6);
   await lease.update({ codex_steer_package: PACKAGE_NAME, codex_steer_version: VERSION, codex_steer_protocol: 1, codex_steer_capabilities: RUNTIME_CAPABILITIES });
   // Normal read/steer must also work with no subscription endpoint at all.
   await new Promise(resolve => control.close(resolve));
@@ -194,7 +194,7 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   assert.equal((await cli(["--version"])).data.version, VERSION);
   assert.equal((await cli(["read", ID])).data.thread_id, ID);
   assert.equal((await cli(["send", ID, "synthetic after cache removal", "--no-sound"])).data.delivery_status, "accepted");
-  assert.equal(sends, 6);
+  assert.equal(sends, 7);
   const savedCommand = savedVersionCommand.slice(0, -" --version".length);
   await exec("/bin/sh", ["-c", `${savedCommand} supervise register ${ID} --owner claude --json`], { cwd: root, env });
   const recipientUser = path.join(root, "recipient-user"); await mkdir(recipientUser);
@@ -219,7 +219,7 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
     assert.ok(JSON.parse((await runSaved(`history list ${ID}`)).stdout).data.some(entry => entry.id === receipt.message_id));
     assert.equal(await lstat(receivingHome ?? path.join(recipientUser, ".codex")).catch(error => { if (error.code !== "ENOENT") throw error; return null; }), null, "The receiving profile must not be created or written");
   }
-  assert.equal(sends, 8);
+  assert.equal(sends, 9);
   await cli(["supervise", "stop", ID]);
   const pkg = JSON.parse(await readFile(path.join(deployment.directory, "package.json")));
   assert.equal(pkg.license, "MIT"); assert.equal(Object.hasOwn(pkg, "private"), false);

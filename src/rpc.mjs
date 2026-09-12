@@ -14,10 +14,17 @@ export class RpcFailure extends Error {
 }
 
 function connectionCode(error) {
+  if (error?.code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH") return "PAYLOAD_TOO_LARGE";
   if (["EACCES", "EPERM"].includes(error?.code)) return "PERMISSION_DENIED";
   if (error?.code === "ETIMEDOUT") return "TIMEOUT";
   if (["ENOENT", "ECONNREFUSED", "ECONNRESET", "ECONNABORTED", "EPIPE"].includes(error?.code)) return "CONNECTION_FAILED";
   return "PROTOCOL_ERROR";
+}
+
+function connectionMessage(error, fallback) {
+  return error?.code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH"
+    ? "App Server response exceeded the 64 MiB receive limit. Use paginated history access; the receive limit remains enforced."
+    : fallback;
 }
 
 export function connectSocket(socketPath, { timeoutMs = 8000, signal } = {}) {
@@ -41,7 +48,7 @@ export function connectSocket(socketPath, { timeoutMs = 8000, signal } = {}) {
     const timer = setTimeout(() => finish(new RpcFailure("App Server connection timed out.", { code: "TIMEOUT" })), timeoutMs);
     // Keep an error listener even after connection so a peer reset never throws globally.
     socket.on("error", () => {});
-    socket.once("error", error => finish(new RpcFailure("Could not connect to the shared App Server.", { code: connectionCode(error) })));
+    socket.once("error", error => finish(new RpcFailure(connectionMessage(error, "Could not connect to the shared App Server."), { code: connectionCode(error) })));
     socket.once("close", () => finish(new RpcFailure("App Server connection closed before initialization.")));
     socket.once("open", () => finish());
     signal?.addEventListener("abort", cancel, { once: true });
@@ -91,7 +98,7 @@ export class RpcClient extends EventEmitter {
       }
     });
     socket.on("close", () => this.rejectPending("App Server connection closed."));
-    socket.on("error", error => this.abort("App Server connection failed.", connectionCode(error)));
+    socket.on("error", error => this.abort(connectionMessage(error, "App Server connection failed."), connectionCode(error)));
   }
 
   static async connect(socketPath, options = {}) {

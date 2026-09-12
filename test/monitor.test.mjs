@@ -168,7 +168,7 @@ test("reconnect backoff is capped and the complete outage has a finite deadline"
 });
 
 test("permissions, protocol failures, unsupported APIs and stale history do not reconnect", async () => {
-  for (const code of ["PERMISSION_DENIED", "PROTOCOL_ERROR", "RPC_REJECTED", "RUNTIME_UNSAFE", "RUNTIME_INVALID", "STALE_CURSOR", "CURSOR_UPGRADE_REQUIRED"]) {
+  for (const code of ["PERMISSION_DENIED", "PROTOCOL_ERROR", "PAYLOAD_TOO_LARGE", "RPC_REJECTED", "RUNTIME_UNSAFE", "RUNTIME_INVALID", "STALE_CURSOR", "CURSOR_UPGRADE_REQUIRED"]) {
     let failed = false, connections = 0;
     await assert.rejects(streamThread(ID, {}, async () => {}, {
       discover: async () => ({ paths: { socket: "fake" } }),

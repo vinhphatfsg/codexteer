@@ -22,6 +22,7 @@ test("steer binds exact task and active turn without resuming or overriding sett
   assert.equal(result.turn_id, TURN);
   assert.match(result.client_message_id, UUID);
   assert.deepEqual(calls, [
+    { method: "thread/read", params: { threadId: ID, includeTurns: false }, options: undefined },
     { method: "thread/read", params: { threadId: ID, includeTurns: true }, options: undefined },
     { method: "turn/steer", params: { threadId: ID, expectedTurnId: TURN, input: [{ type: "text", text: "日本語\nline 2" }], clientUserMessageId: result.client_message_id }, options: { mutation: true } },
   ]);
@@ -46,7 +47,7 @@ for (const status of ["idle", "notLoaded", "systemError"]) {
     const calls = [];
     const client = { async request(method) { calls.push(method); return { thread: thread(status) }; } };
     await assert.rejects(sendOnClient(client, ID, "test"), /active turn/);
-    assert.deepEqual(calls, ["thread/read"]);
+    assert.deepEqual(calls, ["thread/read", "thread/read"]);
   });
 }
 
@@ -54,7 +55,7 @@ test("wrong task, ambiguous turn and non-input tasks fail before sending", async
   for (const value of [{ ...thread(), id: TURN }, { ...thread(), turns: [] }, { ...thread(), canAcceptDirectInput: false }]) {
     let calls = 0;
     await assert.rejects(sendOnClient({ async request() { calls++; return { thread: value }; } }, ID, "test"));
-    assert.equal(calls, 1);
+    assert.equal(calls, value.id !== ID || value.canAcceptDirectInput === false ? 1 : 2);
   }
 });
 
@@ -72,29 +73,28 @@ test("stale-turn rejection is never retried or converted to a new turn", async (
 for (const state of ["idle", "notLoaded"]) {
   test(`new turn from ${state} subscribes Desktop before sending, without CLI-only resume`, async () => {
     const calls = [];
-    let reads = 0;
+    let subscribed = false;
     let messageId;
     const client = { async request(method, params) {
       calls.push(method);
-      if (method === "thread/read") return { thread: thread(reads++ === 0 ? state : "idle") };
+      if (method === "thread/read") return { thread: thread(subscribed ? "idle" : state) };
       messageId = params.clientUserMessageId;
       assert.match(messageId, UUID);
       assert.deepEqual(params, { threadId: ID, input: [{ type: "text", text: "test" }], clientUserMessageId: messageId });
       return { turn: { id: TURN } };
     } };
-    const result = await sendOnClient(client, ID, "test", { newTurn: true, subscribe: async id => { assert.equal(id, ID); calls.push("desktop.subscribe"); } });
+    const result = await sendOnClient(client, ID, "test", { newTurn: true, subscribe: async id => { assert.equal(id, ID); subscribed = true; calls.push("desktop.subscribe"); } });
     assert.deepEqual(result, { turn_id: TURN, client_message_id: messageId });
-    assert.deepEqual(calls, ["thread/read", "desktop.subscribe", "thread/read", "turn/start"]);
+    assert.deepEqual(calls, ["thread/read", "thread/read", "desktop.subscribe", "thread/read", "thread/read", "turn/start"]);
   });
 }
 
 test("new-turn checks both initial state and a race during Desktop subscription", async () => {
   for (const initiallyActive of [true, false]) {
-    let calls = 0;
     let subscriptions = 0;
     await assert.rejects(sendOnClient({ async request(method) {
       assert.equal(method, "thread/read");
-      return { thread: thread(initiallyActive || calls++ ? "active" : "idle") };
+      return { thread: thread(initiallyActive || subscriptions ? "active" : "idle") };
     } }, ID, "test", { newTurn: true, subscribe: async () => subscriptions++ }), /idle|became active/);
     assert.equal(subscriptions, initiallyActive ? 0 : 1);
   }
@@ -105,7 +105,7 @@ test("subscription failure prevents a new-turn message", async () => {
   await assert.rejects(sendOnClient({ async request(method) { assert.equal(method, "thread/read"); reads++; return { thread: thread("idle") }; } }, ID, "test", {
     newTurn: true, subscribe: async () => { throw new Error("no Desktop"); },
   }), /no Desktop/);
-  assert.equal(reads, 1);
+  assert.equal(reads, 2);
 });
 
 test("dry run requires no connection and reveals no message", async () => {
@@ -229,7 +229,7 @@ test("compatible new-turn rechecks its endpoint before subscription and sending"
     } }),
   };
   assert.equal((await sendAppServerMessage(ID, "test", options)).sent, true);
-  assert.deepEqual(calls, ["inspect", "thread/read", "inspect", "inspect", "subscribe", "thread/read", "inspect", "turn/start"]);
+  assert.deepEqual(calls, ["inspect", "thread/read", "thread/read", "inspect", "inspect", "subscribe", "thread/read", "thread/read", "inspect", "turn/start"]);
   await assert.rejects(sendAppServerMessage(ID, "test", { ...options,
     inspectControl: async () => { throw Object.assign(new Error("unsafe endpoint"), { code: "RUNTIME_UNSAFE" }); },
     connect: () => assert.fail("unsafe endpoint must not connect"),
@@ -250,7 +250,7 @@ test("an unsupported optional freshness API prevents both sending and Desktop re
         calls.push(method); assert.equal(method, "thread/read"); return { thread: thread(newTurn ? "idle" : "active") };
       } }),
     }), { code: "CAPABILITY_UNSUPPORTED", capability: "history_pagination", sent: false });
-    assert.deepEqual(calls, ["thread/read"]);
+    assert.deepEqual(calls, ["thread/read", "thread/read"]);
   }
 });
 
@@ -273,4 +273,121 @@ test("a runtime replaced after observation cannot receive the send", async t => 
     connect: async () => ({ close() {}, async request(method) { if (method === "thread/read") return { thread: thread() }; writes++; } }),
   }), error => error.code === "RUNTIME_CHANGED" && error.delivery_status === "not_sent");
   assert.equal(writes, 0);
+});
+
+function pagedServer({ status = "active", turns = [{ id: TURN, status: "inProgress" }], beforeRequest = () => {} } = {}) {
+  const metadata = { ...thread(status), historyMode: "paginated", turns: [] }, calls = [];
+  const client = { close() {}, async request(method, params) {
+    calls.push({ method, ...params });
+    await beforeRequest(method, params, metadata);
+    if (method === "thread/read") {
+      assert.equal(params.includeTurns, false, "paged send must not download item bodies");
+      return { thread: structuredClone(metadata) };
+    }
+    if (method === "thread/turns/list") {
+      assert.equal(params.itemsView, "notLoaded");
+      assert.equal(params.sortDirection, "asc");
+      const start = Number(params.cursor ?? 0), end = start + params.limit;
+      return { data: structuredClone(turns.slice(start, end)), nextCursor: end < turns.length ? String(end) : null };
+    }
+    if (method === "turn/steer") return { turnId: params.expectedTurnId };
+    if (method === "turn/start") return { turn: { id: TURN } };
+    assert.fail(`Unexpected RPC: ${method}`);
+  } };
+  return { client, calls, metadata };
+}
+
+test("paged steering finds the active turn across pages without reading item bodies", async () => {
+  const turns = Array.from({ length: 200 }, (_, i) => ({ id: `old-${i}`, status: "completed" }));
+  turns.push({ id: TURN, status: "inProgress" });
+  const { client, calls } = pagedServer({ turns });
+  let checks = 0;
+  const receipt = await sendOnClient(client, ID, "bounded steering", { beforeSend: async state => {
+    checks++;
+    assert.equal(state.turns.length, 201);
+    assert.ok(state.turns.every(turn => turn.itemsView === "notLoaded"));
+  } });
+  assert.equal(checks, 1);
+  assert.equal(receipt.turn_id, TURN);
+  assert.equal(calls.filter(call => call.method === "thread/turns/list").length, 3);
+  assert.deepEqual(calls.filter(call => call.method.startsWith("turn/")), [{
+    method: "turn/steer", threadId: ID, expectedTurnId: TURN,
+    input: [{ type: "text", text: "bounded steering" }], clientUserMessageId: receipt.client_message_id,
+  }]);
+});
+
+test("missing or ambiguous active turns across pages never send", async () => {
+  for (const activeCount of [0, 2]) {
+    const turns = Array.from({ length: 101 }, (_, i) => ({ id: `turn-${i}`, status: activeCount && (i === 0 || i === 100) ? "inProgress" : "completed" }));
+    const { client, calls } = pagedServer({ turns });
+    await assert.rejects(sendOnClient(client, ID, "must not send"), /active turn/);
+    assert.equal(calls.filter(call => call.method.startsWith("turn/")).length, 0);
+  }
+});
+
+test("pagination failure never falls back to full history, resumes, or sends", async () => {
+  for (const newTurn of [false, true]) {
+    for (const badPage of [{ data: null }, { data: [{ id: 1, status: "inProgress" }] }, { data: [{ id: TURN, status: "inProgress" }, { id: TURN, status: "inProgress" }] }, { data: [{ id: TURN, status: "inProgress" }], nextCursor: 123 }]) {
+      const server = pagedServer({ status: newTurn ? "idle" : "active" });
+      const client = { async request(method, params) {
+        return method === "thread/turns/list" ? badPage : server.client.request(method, params);
+      } };
+      await assert.rejects(sendOnClient(client, ID, "must not send", { newTurn, subscribe: () => assert.fail("must not resume") }), { code: "STALE_CURSOR" });
+      assert.equal(server.calls.filter(call => call.method.startsWith("turn/")).length, 0);
+    }
+  }
+  let pages = 0;
+  const server = pagedServer();
+  await assert.rejects(sendOnClient({ async request(method, params) {
+    if (method === "thread/turns/list") return { data: [{ id: `page-${++pages}`, status: "completed" }], nextCursor: "repeat" };
+    return server.client.request(method, params);
+  } }, ID, "must not send"), { code: "STALE_CURSOR" });
+  assert.equal(pages, 2);
+});
+
+test("paged metadata is rechecked for task, input permission, and state changes", async () => {
+  for (const change of [{ id: TURN }, { canAcceptDirectInput: false }, { status: { type: "idle" } }, { historyMode: "inline" }]) {
+    let reads = 0;
+    const { client, calls } = pagedServer({ beforeRequest(method, _params, metadata) {
+      if (method === "thread/read" && ++reads === 2) Object.assign(metadata, change);
+    } });
+    await assert.rejects(sendOnClient(client, ID, "must not send"));
+    assert.equal(calls.filter(call => call.method.startsWith("turn/")).length, 0);
+  }
+});
+
+test("paged new-turn validates both sides of Desktop subscription without full history", async () => {
+  for (const status of ["idle", "notLoaded"]) {
+    const { client, metadata, calls } = pagedServer({ status, turns: [{ id: "previous", status: "completed" }] });
+    let checks = 0, subscriptions = 0;
+    const receipt = await sendOnClient(client, ID, "start explicitly", { newTurn: true,
+      beforeSend: async state => { checks++; assert.equal(state.turns[0].itemsView, "notLoaded"); },
+      subscribe: async () => { assert.equal(checks, 1); subscriptions++; metadata.status.type = "idle"; },
+    });
+    assert.equal(checks, 2); assert.equal(subscriptions, 1); assert.equal(receipt.turn_id, TURN);
+    assert.deepEqual(calls.filter(call => call.method.startsWith("turn/")).map(call => call.method), ["turn/start"]);
+  }
+  const { client, metadata, calls } = pagedServer({ status: "idle", turns: [] });
+  await assert.rejects(sendOnClient(client, ID, "must not start", { newTurn: true, subscribe: async () => { metadata.status.type = "active"; } }), /became active/);
+  assert.equal(calls.filter(call => call.method.startsWith("turn/")).length, 0);
+  const inconsistent = pagedServer({ status: "idle" });
+  await assert.rejects(sendOnClient(inconsistent.client, ID, "must not resume", { newTurn: true, subscribe: () => assert.fail("active turn must prevent resume") }), /idle/);
+});
+
+test("paged sends require pagination capability and stop on rejected page reads", async t => {
+  const root = await mkdtemp("/private/tmp/cs-paged-compat-"); t.after(() => rm(root, { recursive: true, force: true }));
+  for (const newTurn of [false, true]) {
+    for (const failure of ["CAPABILITY_UNSUPPORTED", "RPC_REJECTED"]) {
+      const { client, calls } = pagedServer({ status: newTurn ? "idle" : "active", beforeRequest(method) {
+        if (method === "thread/turns/list") throw new RpcFailure("page rejected", { code: "RPC_REJECTED", rpcCode: -32601 });
+      } });
+      await assert.rejects(sendAppServerMessage(ID, "must not send", {
+        newTurn,
+        discover: async () => ({ paths: { lease: root, socket: "unused" }, state: { ...steerState, codex_steer_capabilities: { ...RUNTIME_CAPABILITIES, history_pagination: failure === "CAPABILITY_UNSUPPORTED" ? [2] : [1] } } }),
+        inspectControl: async () => {}, connect: async () => client,
+        subscribe: () => assert.fail("must not resume"),
+      }), { code: failure, sent: false, delivery_status: "not_sent" });
+      assert.equal(calls.filter(call => call.method.startsWith("turn/")).length, 0);
+    }
+  }
 });

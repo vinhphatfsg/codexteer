@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readOnClient, readSnapshot, decodeCursor, observeThread } from "../src/observe.mjs";
 import { verifyPagedFreshness } from "../src/paged-read.mjs";
 import { streamThread } from "../src/monitor.mjs";
+import { sendOnClient } from "../src/app-server.mjs";
+import { prepareDirective } from "../src/directive.mjs";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 const msg = (id, text = id) => ({ id, type: "agentMessage", text });
@@ -46,6 +48,43 @@ test("paged initial tail matches full display while excluding large past payload
   const delta = await s.read({ since: r.cursor });
   assert.equal(delta.changed, false); assert.deepEqual(delta.events, []);
   assert.ok(s.calls.length <= 4); assert.equal(delta.history_scope, "tail-and-tracked-items");
+});
+
+test("paged send preserves v2 freshness checks without fetching full history", async () => {
+  for (const stale of [false, true]) {
+    const t = task([user("u"), msg("reply")]), s = server(t);
+    const observed = await s.read();
+    const directive = await prepareDirective(ID, "check", { basedOn: observed.cursor }, "id");
+    t.turns[0].items.push(stale ? user("new-user") : msg("progress"));
+    let writes = 0;
+    const client = { async request(method, params) {
+      if (method !== "turn/steer") return s.client.request(method, params);
+      writes++; return { turnId: params.expectedTurnId };
+    } };
+    const send = sendOnClient(client, ID, directive.wireText, { beforeSend: directive.beforeSend });
+    if (stale) await assert.rejects(send, { code: "STALE_OBSERVATION" });
+    else assert.equal((await send).turn_id, "t0");
+    assert.equal(writes, stale ? 0 : 1);
+    assert.ok(s.calls.filter(call => call.method === "thread/turns/list").every(call => call.itemsView === "notLoaded"));
+  }
+});
+
+test("v1 freshness checks never treat paged send summaries as full item history", async () => {
+  for (const stale of [false, true]) {
+    const t = task([user("u")]), observed = readSnapshot(t), s = server(t);
+    const directive = await prepareDirective(ID, "check", { basedOn: observed.cursor }, "id");
+    if (stale) t.turns[0].items.push(user("new-user"));
+    let writes = 0;
+    const client = { async request(method, params) {
+      if (method !== "turn/steer") return s.client.request(method, params);
+      writes++; return { turnId: params.expectedTurnId };
+    } };
+    const send = sendOnClient(client, ID, directive.wireText, { beforeSend: directive.beforeSend });
+    if (stale) await assert.rejects(send, { code: "STALE_OBSERVATION" });
+    else assert.equal((await send).turn_id, "t0");
+    assert.equal(writes, stale ? 0 : 1);
+    assert.ok(s.calls.some(call => call.method === "thread/turns/list" && call.itemsView === "full"), "v1 must still validate the full user-input history");
+  }
 });
 
 test("paged reads deliver old running-command updates outside the visible tail without rescanning the turn", async () => {

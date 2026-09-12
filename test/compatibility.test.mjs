@@ -7,7 +7,7 @@ const modern = { codex_steer_protocol: 1, codex_steer_capabilities: RUNTIME_CAPA
 const ID = "11111111-1111-4111-8111-111111111111";
 
 test("package releases do not define protocol compatibility", () => {
-  for (const version of [undefined, "0.13.0", "0.14.0", "0.14.1", "99.1.0", "untrusted\ntext"]) {
+  for (const version of [undefined, "0.13.0", "0.14.0", "0.14.1", "0.15.0", "0.15.1", "99.1.0", "untrusted\ntext"]) {
     const result = assertRuntimeOperation({ ...modern, codex_steer_version: version }, "send");
     assert.equal(result.operations.send.status, "supported");
     assert.equal(JSON.stringify(result).includes("untrusted"), false);

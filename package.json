@@ -1,6 +1,6 @@
 {
   "name": "codexteer",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "Send steering messages to running Codex Desktop threads from a terminal.",
   "type": "module",
   "bin": {

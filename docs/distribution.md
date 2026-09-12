@@ -1,11 +1,11 @@
 # 配布と永続実行
 
 パッケージ名は `codexteer`、CLI名は `codexteer`、ライセンスはMITです。
-旧npmパッケージは`@vinhphatfsg/codex-steer`です。`codexteer@0.14.1`は公開済みで、このブランチは次期版`0.15.0`を準備します。GitHubのPR作成・マージはnpm公開を行う操作ではありません。公開時は`npm whoami`でnpm側のユーザーを確認してください。
+旧npmパッケージは`@vinhphatfsg/codex-steer`です。`codexteer@0.15.0`は公開済みで、このブランチは修正版`0.15.1`を準備します。GitHubのPR作成・マージはnpm公開を行う操作ではありません。公開時は`npm whoami`でnpm側のユーザーを確認してください。
 `package.json` は `private` を持たず、`publishConfig` でnpm公式レジストリへのpublic公開を指定しています。公開可能な設定であることと、実際に公開済みであることは別です。
 
 公開後の基本的な実行形式は次のとおりです。通常はバージョン指定なしで使えます。監督開始後は保存したCLIを使い続けるため、監督中の一貫性を保つために版を明示する必要はありません。起動側と操作側の製品バージョンも、必要な通信仕様が対応していれば異なっていても使えます。
-以下の新しい監督機能をnpxで使うには0.15.0の公開が必要です。公開前はこのブランチをソースから導入してください。`-y` はnpmの取得確認を省略します。
+以下の監督機能は公開済みの0.15.0から利用できます。長いタスクへの送信前確認の修正は0.15.1に含みます。修正版の公開前はこのブランチをソースから導入してください。`-y` はnpmの取得確認を省略します。
 
 ```text
 npx -y codexteer desktop start
@@ -148,6 +148,10 @@ APIの検証中に`CAPABILITY_UNVERIFIED`または`RUNTIME_PROTOCOL_UNVERIFIED`�
 
 送信ではDesktopへの再開要求と実際の送信直前にも必要な仕様とruntimeの同一性を確認します。`--based-on`等の安全確認も再開前と送信直前に検証し、必要なAPIが使えないままタスクを再開しません。切り替わっていれば`RUNTIME_CHANGED`で拒否します。新規ターン用ソケットも使用前に所有者・権限・種類を再検査します。不明な受付結果の自動再送はしません。`help`・`supervise prompt`・ローカル履歴一覧・`--dry-run`はruntimeの版に依存しません。
 
+送信前の状態確認では、`historyMode: paginated`のタスクは`thread/read`の`includeTurns:false`と`thread/turns/list`の`itemsView:notLoaded`を使います。全ページからターンIDと状態を確認し、タスク情報を再確認してから送信します。ページ取得の失敗・非対応時は送信とDesktop経由の再開を拒否し、全履歴取得へ切り替えません。旧形式の履歴は従来の取得方式を使います。`--based-on`がv1の場合は従来どおり全履歴で鮮度を確認し、v2の場合は分割取得で確認します。
+
+WebSocketの受信上限は1メッセージ64 MiBです。超過は`PAYLOAD_TOO_LARGE`として停止し、サーバーの本文や生のエラーは表示しません。送信APIを呼ぶ前なら`not_sent`、呼び出した後で受付を確認できなければ`unknown`を維持します。個別の履歴ページや旧形式の全履歴が上限を超える場合にも上限は解除しません。
+
 ## 公開前の検証
 
 ```bash
@@ -171,7 +175,7 @@ npxから模擬Claudeと模擬Codexを起動して保存したCLIへの参照を
 
 レビュー・検証を終えた版を、npm側の公開権限を持つアカウントで公開します。手動公開には2FAを有効にしたアカウントを使ってください。
 
-公開済みのパッケージ名とバージョンの組み合わせは再公開できません。既存の`codexteer@0.14.1`は変更せず、今回の配布物は`codexteer@0.15.0`として準備します。公開は別途実行します。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
+公開済みのパッケージ名とバージョンの組み合わせは再公開できません。既存の`codexteer@0.15.0`は変更せず、今回の配布物は`codexteer@0.15.1`として準備します。公開は別途実行します。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
 
 ```bash
 npm login
@@ -180,11 +184,11 @@ npm run test:package
 npm publish --access public
 ```
 
-公開後は、公開した版と起動コマンドの登録を確認します。次は0.15.0を公開した場合の例です。
+公開後は、公開した版と起動コマンドの登録を確認します。次は0.15.1を公開した場合の例です。
 
 ```bash
-npm view codexteer@0.15.0 version bin --json
-npx -y codexteer@0.15.0 --version
+npm view codexteer@0.15.1 version bin --json
+npx -y codexteer@0.15.1 --version
 ```
 
 `EPRIVATE`はリポジトリの`package.json`に公開禁止設定が残っていることを示します。`--access public`はその禁止を解除しません。
@@ -194,7 +198,7 @@ npx -y codexteer@0.15.0 --version
 
 ## 監督状態・指摘と接続方式
 
-ここからの監督制御、指摘管理、Codex CLI起動、接続方式の選択は0.15.0で追加します。保存済みCLIの機能自体は0.14.1から利用できます。製品の機能追加に伴うminor更新であり、runtime protocolと既存capabilityのv1契約は維持します。
+ここからの監督制御、指摘管理、Codex CLI起動、接続方式の選択は0.15.0で追加しました。保存済みCLIの機能自体は0.14.1から利用できます。0.15.1は送信前確認の修正を含むpatch更新です。runtime protocolと既存capabilityのv1契約は維持し、0.15.0で起動したDesktopとの通信に再起動は不要です。
 
 保存したCLIへのコマンドは、canonical CODEX_HOME、Node guard、`--supervisor <session-id>`、`--connection shared|desktop`を一緒に保持します。各プロンプト生成は新しいIDを発行しますが、生成だけでは登録しません。直接起動はエージェント起動前に登録し、終了時に停止します。コピーした本文は最初のregisterで開始します。
 
