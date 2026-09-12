@@ -203,9 +203,33 @@ test("v1 is explicit full-history mode and fast mode never silently hydrates it"
 
 test("Monitor uses paged reads and stays quiet after delivering changes", async () => {
   const t = task([msg("a")]), s = server(t), stop = new AbortController(), events = []; let n = 0;
-  await streamThread(ID, { signal: stop.signal }, async r => events.push(...r.events), { discover: async () => ({ paths: { socket: "fake" } }), connect: async () => s.client, sleep: async () => {
+  await streamThread(ID, { signal: stop.signal }, async r => { if (r.type === "observation") events.push(...r.events); }, { discover: async () => ({ paths: { socket: "fake" } }), connect: async () => s.client, sleep: async () => {
     if (++n === 1) t.turns[0].items.push(msg("b")); if (n === 3) stop.abort();
   } });
   assert.deepEqual(events.map(e => e.id), ["b"]);
   assert.ok(s.calls.every(c => c.includeTurns !== true && c.itemsView !== "full"));
+});
+
+test("Monitor retries a partial paged read from the last flushed v2 cursor", async () => {
+  const t = task([msg("initial")]), stop = new AbortController();
+  let cut = false, connections = 0;
+  const s = server(t, method => {
+    if (cut && method === "thread/items/list") { cut = false; throw Object.assign(new Error("cut mid-read"), { code: "CONNECTION_FAILED" }); }
+  });
+  const initial = await s.read(), output = [];
+  t.turns[0].items.push(msg("a"), msg("b"));
+  await streamThread(ID, { since: initial.cursor, limit: 1, signal: stop.signal }, async data => {
+    output.push(data);
+    if (data.type !== "observation") return;
+    if (data.events.some(e => e.id === "a")) cut = true;
+    if (data.events.some(e => e.id === "c")) stop.abort();
+  }, {
+    discover: async () => ({ paths: { socket: "fake" } }),
+    connect: async () => { if (++connections === 2) t.turns[0].items.push(msg("c")); return s.client; },
+    sleep: async () => {},
+  });
+  assert.deepEqual(output.filter(x => x.type === "observation").flatMap(x => x.events.map(e => e.id)), ["a", "b", "c"]);
+  const resumed = output.find(x => x.state === "recovered");
+  assert.ok(resumed); assert.equal(decodeCursor(resumed.resume_cursor, ID).v, 2);
+  assert.equal(connections, 2);
 });

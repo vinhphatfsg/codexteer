@@ -1,4 +1,6 @@
 import test from "node:test";
+import { VERSION, PACKAGE_NAME, RUNTIME_PROTOCOL } from "../src/version.mjs";
+const steerState = { codex_steer_version: VERSION, codex_steer_package: PACKAGE_NAME, codex_steer_protocol: RUNTIME_PROTOCOL };
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { sendOnClient, sendAppServerMessage } from "../src/app-server.mjs";
@@ -118,7 +120,7 @@ test("lost acknowledgement is unknown, never automatically retried", async () =>
   let closed = false;
   try {
     await assert.rejects(sendAppServerMessage(ID, "private synthetic text", {
-      discover: async () => ({ paths: { lease: root, socket: "unused" } }),
+      discover: async () => ({ state: steerState, paths: { lease: root, socket: "unused" } }),
       connect: async () => ({ close() { closed = true; }, async request(method) {
         if (method === "thread/read") return { thread: thread() };
         sends++;
@@ -137,7 +139,7 @@ test("concurrent sends for one task cannot bypass its lock", async () => {
   let connected;
   const started = new Promise(resolve => { connected = resolve; });
   const options = {
-    discover: async () => ({ paths: { lease: root, socket: "unused" } }),
+    discover: async () => ({ state: steerState, paths: { lease: root, socket: "unused" } }),
     connect: async () => ({ close() {}, async request(method) {
       if (method === "thread/read") return { thread: thread() };
       connected(); await blocked;
@@ -158,7 +160,7 @@ test("cleanup errors cannot replace an accepted receipt with a send error", asyn
   const root = await mkdtemp("/private/tmp/cs-cleanup-test-");
   try {
     const result = await sendAppServerMessage(ID, "test", {
-      discover: async () => ({ paths: { lease: root, socket: "unused" } }),
+      discover: async () => ({ state: steerState, paths: { lease: root, socket: "unused" } }),
       connect: async () => ({
         async request(method) { return method === "thread/read" ? { thread: thread() } : { turnId: TURN }; },
         close() { throw new Error("synthetic cleanup failure"); },
@@ -168,4 +170,22 @@ test("cleanup errors cannot replace an accepted receipt with a send error", asyn
     assert.equal(result.delivery_status, "accepted");
     assert.equal(result.runtime_cleanup_required, true);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("unknown or mixed codex-steer versions never connect or send", async () => {
+  for (const state of [undefined, {}, { ...steerState, codex_steer_version: "0.0.1" }, { ...steerState, codex_steer_protocol: 999 }]) {
+    await assert.rejects(sendAppServerMessage(ID, "test", {
+      discover: async () => ({ paths: {}, state }), connect: async () => assert.fail("must fail before connecting"),
+    }), error => error.delivery_status === "not_sent" && /^STEER_VERSION_/.test(error.code));
+  }
+});
+
+test("a runtime replaced after observation cannot receive the send", async t => {
+  const root = await mkdtemp("/private/tmp/cs-send-replaced-"); t.after(() => rm(root, { recursive: true, force: true }));
+  let discoveries = 0, writes = 0;
+  await assert.rejects(sendAppServerMessage(ID, "test", {
+    discover: async () => ({ paths: { lease: root, socket: "unused" }, state: { ...steerState, instance: String(++discoveries) } }),
+    connect: async () => ({ close() {}, async request(method) { if (method === "thread/read") return { thread: thread() }; writes++; } }),
+  }), error => error.code === "RUNTIME_CHANGED" && error.delivery_status === "not_sent");
+  assert.equal(writes, 0);
 });

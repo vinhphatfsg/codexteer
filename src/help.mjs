@@ -1,6 +1,7 @@
 import { supervisionSteps } from "./prompt.mjs";
 
-export const VERSION = "0.11.0";
+export { VERSION } from "./version.mjs";
+import { VERSION } from "./version.mjs";
 
 export const topics = {
   supervise: {
@@ -24,9 +25,9 @@ export const topics = {
     title: "Codexタスクを観測・介入・結果確認の順で監督する",
     when: "ユーザーから対象と範囲を委任され、Claudeなどが継続して進捗を観測し、必要な軌道修正を判断する運用。",
     usage: ["supervise prompt <THREAD>", "watch <THREAD> --stream [--since CURSOR] [--poll-ms N] [--limit N] [--max-chars N] [--include-output]", "read <THREAD> [--since CURSOR]", "help supervise", "help send", "help checkpoint", "help history"],
-    returns: "--streamは変化ごとに1行のJSONを返します。data.events、attention、cursorをClaudeが読み、必要なときだけ次の操作を選びます。",
+    returns: "--streamは作業差分（data.type=observation）と接続状態（data.type=connection）をJSON Linesで返します。差分のevents、attention、cursorを読み、必要なときだけ次の操作を選びます。",
     examples: ["codex-steer watch <THREAD> --stream --since <CURSOR> --include-output --json", "codex-steer read <THREAD> --since <LAST-CURSOR> --include-output --json", "codex-steer send <THREAD> '失敗箇所を先に確認してください' --source claude-code --kind review --based-on <CURSOR> --json", "codex-steer history check <THREAD> <MESSAGE-ID> --json"],
-    notes: [...supervisionSteps(), "--streamは常にJSON Linesで、初回は黙って基準を取り、変化時だけ出力します。SIGINT/SIGTERMまたはMonitorのキャンセルで終了し、--until/--timeout-msとは併用しません。切断・古いcursorではエラーを1行返して終了し、自動再接続・再送はしません。", "既存のログ監視を続け、その通知後にread --sinceを呼ぶ運用も可能です。複数AIの共有リソース利用調整はhelp resourceを参照してください。"],
+    notes: [...supervisionSteps(), "--streamは常にJSON Linesです。初回にwatchingを通知し、平常時は差分だけを出力します。観測成功後の一時切断は1→2→4→8→最大10秒間隔で、接続・初期化・読み取りを含め60秒まで復帰を試みます。初回失敗はすぐ終了します。SIGINT/SIGTERMまたはMonitorのキャンセルで停止し、--until/--timeout-msとは併用しません。", "無効cursorはneeds_review、復帰上限・権限・プロトコル等の異常はfailedを含むok:falseのJSONを返し、終了コード1です。観測の再接続は送信の再試行を行いません。", "既存のログ監視を続け、その通知後にread --sinceを呼ぶ運用も可能です。複数AIの共有リソース利用調整はhelp resourceを参照してください。"],
   },
   resource: {
     title: "画面・Unity・Gitなどの利用予定をAI間で共有する",
@@ -105,9 +106,9 @@ export const topics = {
     title: "変化・完了・ユーザー対応待ちまで待つ",
     when: "同じログを繰り返し読まず、次のレビューが必要なタイミングを待ちたいとき。",
     usage: ["watch <THREAD> [--since CURSOR] [--until change|idle|attention] [--timeout-ms N] [--poll-ms N] [--limit N] [--max-chars N] [--include-output] [--full-history]", "watch <THREAD> --stream [--since CURSOR] [--poll-ms N] [--limit N] [--max-chars N] [--include-output] [--full-history]"],
-    returns: "通常は条件成立または時間切れで1回返します（reason、timed_out、events、cursor）。--streamは変化ごとに1行のJSONを出し続けます。",
+    returns: "通常は条件成立または時間切れで1回返します（reason、timed_out、events、cursor）。--streamはdata.type=observationの差分とdata.type=connectionの接続状態をJSON Linesで返します。",
     examples: ["codex-steer watch <THREAD> --since <CURSOR> --json", "codex-steer watch <THREAD> --until idle --timeout-ms 60000 --json"],
-    notes: ["既定はchange、30秒待ち、1秒間隔。timeoutは0〜60000ms、pollは250〜10000ms。", "readと同じ差分取得を使います。--full-history は毎回の全取得になるため、通常の監視は既定の方式を使ってください。旧cursorの移行と確認範囲は help read へ。", "--sinceなしのchangeは現在を基準に次の変化を待ちます。idle/attentionは既に成立していればすぐ返します。", "--streamは中断までJSON Linesで変化だけを通知します。--until/--timeout-msと併用不可。Claude Code向けの手順はhelp monitorへ。", "読み取り専用のポーリングです。自動送信・再開・承認回答・常駐登録は行いません。"],
+    notes: ["既定はchange、30秒待ち、1秒間隔。timeoutは0〜60000ms、pollは250〜10000ms。", "readと同じ差分取得を使います。--full-history は毎回の全取得になるため、通常の監視は既定の方式を使ってください。旧cursorの移行と確認範囲は help read へ。", "--sinceなしのchangeは現在を基準に次の変化を待ちます。idle/attentionは既に成立していればすぐ返します。", "--streamの接続状態はwatching/reconnecting/recovered/needs_review/failedです。観測成功後の一時切断だけ、最大10秒間隔・合計60秒まで同じタスクへ再接続します。通常のwatchと初回接続失敗は再試行しません。", "接続行のresume_cursorはCLIの出力完了位置または初回の基準です。AIの読了確認ではありません。再起動時は監督側が読了済みcursorを指定してください。復帰後もhas_moreなら差分を読み切ります。", "--streamは--until/--timeout-msと併用不可。平常時の定期通知はなく、SIGINT/SIGTERMで接続中・復帰待ちでも停止します。詳細はhelp monitorへ。", "読み取り専用のポーリングです。自動送信・タスク再開・承認回答・常駐登録は行いません。"],
   },
   send: {
     title: "実行中タスクに方針やレビューを伝える",
@@ -117,8 +118,8 @@ export const topics = {
     examples: ["codex-steer send <THREAD> '失敗したテストの原因を先に確認してください' --dry-run --json", "codex-steer send <THREAD> '競合が原因か確認してください' --source claude --kind hypothesis --evidence results.xml --based-on <CURSOR> --json", "codex-steer send <THREAD> '続けてください' --new-turn --no-sound --json", "printf '%s\\n' '理由' '変更方針' | codex-steer send <THREAD> -"],
     notes: ["MESSAGEに - を指定すると標準入力を読みます。本文中のオプション名は -- の後に置いてください。", "--kindはdecision=ユーザー決定の伝達、review=レビュー、hypothesis=未確定の仮説、suggestion=任意提案です。指定時は送信者・種類・根拠を本文の前に表示します。無指定なら従来の本文をそのまま送ります。", "decisionは送信者の分類で、新しいユーザー承認を作りません。元のユーザー指示を根拠として示してください。", "--based-onはread/statusのcursor。has_more:trueなら読み終えてから指定します。観測位置以降の新しいユーザー入力やターン変更があれば送信を止めます。通常の進捗報告だけでは止めません。根拠ファイルも送信直前にハッシュ照合します。URLは参照のみです。", "dry-runではファイル根拠を読めますが、接続・鮮度確認・保存・送信は行いません。鮮度確認と送信の間の変更を原子的には防げません。", "既定はapp-server。UI操作は --backend ui を明示した場合だけです。--keep-focusと--wait-msはUI専用です。", "送信音は既定でオンです。受付成功時に同梱の短い3音「プルッ」（約0.30秒）を再生します。--no-soundで今回だけ消音します。互換用の--soundはapp-server専用で、--no-soundと併用不可。dry-run・受付失敗・unknown・UI方式では鳴りません。通知設定は変更せず、音量・ミュートはMacの出力設定に従います。再生失敗でも送信成功を維持し、JSONのsound.played/reasonまたは警告で知らせます。", "unknownは受付未確認です。history checkで確認し、自動再送しないでください。"],
   },
-  doctor: { title: "接続と起動条件を診断する", when: "接続できないとき、または初回設定後。", usage: ["doctor [--backend app-server|ui]"], returns: "readyと各チェック結果。", examples: ["codex-steer doctor --json"], notes: ["Desktopの再起動や設定変更は行いません。readyは接続条件の確認です。"] },
-  desktop: { title: "共有接続を有効にしてDesktopを起動する", when: "現在の作業を終え、Desktopを終了した後の起動時。", usage: ["desktop start [--dry-run]"], returns: "起動結果。", examples: ["codex-steer desktop start --dry-run --json", "codex-steer desktop start"], notes: ["起動中のDesktopは終了させません。通常起動への復旧は、終了後にDock等から開き直します。"] },
+  doctor: { title: "接続・実行環境・観測APIを診断する", when: "接続できないとき、監督の開始時、またはDesktop更新後。", usage: ["doctor [--backend app-server|ui]", "doctor --thread <THREAD> [--backend app-server]"], returns: "ready、バージョン、connection、codex_steer_compatibility、compatibility.api_checks、failureと復旧案内。", examples: ["codex-steer doctor --json", "codex-steer doctor --thread <THREAD> --json"], notes: ["codex_steer_compatibilityは操作側と実行中wrapperのパッケージ名・版・runtime protocolの完全一致をmatchedとして返します。unverified/mismatchではready:falseです。read/watch/sendも版不明・不一致で停止します。", "対象未指定では接続を診断し、観測の互換性はunverifiedです。--threadで指定した対象の読み取り経路を検証します。readyは接続条件と指定された検証の結果です。", "compatibility.statusはverified/unverified/unsupported/failed。verifiedは対象の初回観測に成功したことを表し、履歴全体・送信・画面表示・承認往復の保証ではありません。呼び出していないAPIもunverifiedです。", "--threadはapp-server専用。本文を診断出力に含めず、タスクの再開・送信・承認回答・Desktop再起動・設定変更は行いません。failureにはコードと失敗したメソッドを返します。"] },
+  desktop: { title: "共有接続を有効にしてDesktopを起動する", when: "現在の作業を終え、Desktopを終了した後の起動時。", usage: ["desktop start [--dry-run]"], returns: "起動結果とdeployment（保存先、内容ハッシュ、版、再利用の有無）。", examples: ["codex-steer desktop start --dry-run --json", "codex-steer desktop start"], notes: ["呼び出した配布物をCODEX_HOME/codex-steer/runtimes/<version>-<sha256>へ検証して配置し、そのwrapperで起動します。保存先の所有者・権限・リンク・内容を検証し、既存の配置は上書きしません。npxの取得元は@vinhphatfsg/codex-steerです。公開版を確認し、起動と操作は同じ固定版を使ってください。", "dry-runは接続・配置・起動を行いません。配置ロックが残っている場合は自動で奪わずDEPLOYMENT_BUSYで停止します。", "起動中のDesktopは終了させません。通常起動への復旧は、終了後にDock等から開き直します。"] },
   threads: { title: "送信先のタスクを探す", when: "宛先の正確なIDを確認するとき。", usage: ["threads list [--desktop-only] [--limit N]"], returns: "ローカルタスクのID、作業場所、更新日時。", examples: ["codex-steer threads list --desktop-only --limit 20 --json"], notes: ["CODEX_HOMEに従います。本文は読みません。"] },
   thread: { title: "タスクURLをIDに変換する", when: "コピーしたURLをスクリプトで利用するとき。", usage: ["thread resolve <THREAD>"], returns: "正規化したthread_idとdeep_link。", examples: ["codex-steer thread resolve codex://threads/<UUID> --json"], notes: ["IDの書式を確認します。タスクの存在確認はstatusを使ってください。"] },
   open: { title: "タスクをDesktopで開く", when: "ユーザーが画面でタスクを見たいとき。", usage: ["open <THREAD>"], returns: "開いたタスクのURL。", examples: ["codex-steer open <THREAD>"], notes: ["画面を操作する明示的なコマンドです。"] },

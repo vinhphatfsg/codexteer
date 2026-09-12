@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, chmod, readFile, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { claimRuntime, readRuntime, runtimePaths } from "../src/runtime.mjs";
+import { claimRuntime, discoverRuntime, readRuntime, runtimePaths } from "../src/runtime.mjs";
 
 async function setup(t) {
   const home = await mkdtemp("/private/tmp/cs-home-test-");
@@ -33,7 +33,19 @@ test("unsafe permissions fail closed", async t => {
   const { home, paths } = await setup(t);
   await claimRuntime(home);
   await chmod(paths.state, 0o644);
-  await assert.rejects(readRuntime(paths), /unsafe/);
+  await assert.rejects(readRuntime(paths), { code: "RUNTIME_UNSAFE" });
+  await assert.rejects(discoverRuntime(home), { code: "RUNTIME_UNSAFE" });
+});
+
+test("discovery distinguishes missing, not-ready and malformed runtime state", async t => {
+  const { home, paths } = await setup(t);
+  await assert.rejects(discoverRuntime(home), { code: "RUNTIME_UNAVAILABLE" });
+  await claimRuntime(home);
+  await assert.rejects(discoverRuntime(home), { code: "RUNTIME_NOT_READY" });
+  for (const contents of ["invalid json", "null", "{}", '{"schema":2}']) {
+    await writeFile(paths.state, contents, { mode: 0o600 });
+    await assert.rejects(discoverRuntime(home), { code: "RUNTIME_INVALID" });
+  }
 });
 
 test("concurrent recovery cannot replace a newly acquired lease", async t => {

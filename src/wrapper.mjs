@@ -6,6 +6,8 @@ import { claimRuntime } from "./runtime.mjs";
 import { connectSocket } from "./rpc.mjs";
 import { relay } from "./bridge.mjs";
 import { DesktopSubscriptions, serveSubscriptions } from "./subscription.mjs";
+import { VERSION, PACKAGE_NAME, RUNTIME_PROTOCOL } from "./version.mjs";
+import { describeDistribution } from "./distribution.mjs";
 
 export const BUNDLED_CLI = "/Applications/ChatGPT.app/Contents/Resources/codex";
 export const BUNDLED_NODE = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node";
@@ -86,8 +88,11 @@ export async function runWrapper(args, { executable = BUNDLED_CLI, env = process
   const version = spawnSync(executable, ["--version"], { encoding: "utf8", timeout: 5000, env });
   const cliVersion = version.stdout?.match(/codex-cli ([\w.+-]+)/)?.[1];
   if (version.status !== 0 || !cliVersion) throw new Error("Could not verify the bundled Codex CLI.");
+  const distribution = await describeDistribution();
   const lease = await claimRuntime(env.CODEX_HOME, {
     cli_version: cliVersion, node_path: process.execPath, node_version: process.versions.node,
+    codex_steer_package: PACKAGE_NAME, codex_steer_version: VERSION, codex_steer_protocol: RUNTIME_PROTOCOL,
+    distribution_sha256: distribution.sha256,
   });
   let child;
   let socket;

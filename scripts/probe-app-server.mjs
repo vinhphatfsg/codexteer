@@ -7,7 +7,8 @@ import { execFile, spawn, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { createServer } from "node:http";
 import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { RpcClient } from "../src/rpc.mjs";
 import { sendAppServerMessage } from "../src/app-server.mjs";
@@ -15,6 +16,9 @@ import { observeThread } from "../src/observe.mjs";
 import { getMessage, reconcileMessages, listInstructions } from "../src/journal.mjs";
 import { discoverRuntime, runtimePaths } from "../src/runtime.mjs";
 import { BUNDLED_CLI, BUNDLED_NODE } from "../src/wrapper.mjs";
+import { appServerDoctor } from "../src/launcher.mjs";
+import { streamThread } from "../src/monitor.mjs";
+import { prepareDeployment } from "../src/distribution.mjs";
 
 class SimulatedDesktop {
   constructor(child) {
@@ -60,6 +64,7 @@ const paths = await runtimePaths(root);
 let child;
 let monitor;
 let desktop;
+let deployment;
 let diagnostics = "";
 const peers = new Set();
 const streams = [];
@@ -79,7 +84,8 @@ const provider = createServer(async (request, response) => {
 async function boot() {
   // Exercise the Desktop branch under the real bundled Node. A test runner is
   // deliberately not classified as Desktop by the executable entry point.
-  const code = `import { runWrapper } from ${JSON.stringify(new URL("../src/wrapper.mjs", import.meta.url).href)}; process.exitCode = await runWrapper(process.argv.slice(1), { desktopProcess: true });`;
+  deployment ??= await prepareDeployment(root);
+  const code = `import { runWrapper } from ${JSON.stringify(pathToFileURL(path.join(deployment.directory, "src/wrapper.mjs")).href)}; process.exitCode = await runWrapper(process.argv.slice(1), { desktopProcess: true });`;
   child = spawn(BUNDLED_NODE, ["--input-type=module", "-e", code, "--", "-c", "features.plugins=false", "app-server", "--analytics-default-enabled"], {
     env: { PATH: process.env.PATH, HOME: process.env.HOME, CODEX_HOME: root, RUST_LOG: "warn" },
     stdio: ["pipe", "pipe", "pipe"],
@@ -91,11 +97,12 @@ async function boot() {
   const runtime = await until(() => discoverRuntime(root).catch(() => false), "wrapper ready");
   assert.equal(runtime.state.node_path, BUNDLED_NODE, "Desktop wrapper must use the signed bundled Node runtime");
   assert.ok(Number(runtime.state.node_version.split(".")[0]) >= 20);
+  assert.equal(runtime.state.distribution_sha256, deployment.sha256);
 }
 
 async function checkHelperPassThrough() {
   const before = (await discoverRuntime(root)).state;
-  const helper = spawn(fileURLToPath(new URL("../bin/codex-steer-wrapper.mjs", import.meta.url)), ["-c", "features.plugins=false", "app-server"], {
+  const helper = spawn(deployment.wrapper_path, ["-c", "features.plugins=false", "app-server"], {
     env: { PATH: process.env.PATH, HOME: process.env.HOME, CODEX_HOME: root, RUST_LOG: "warn" },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -199,7 +206,12 @@ try {
   const { thread } = await desktop.request("thread/start", { cwd: root, model: "gpt-5.4", approvalPolicy: "on-request", sandbox: "read-only" });
   const { turn } = await desktop.request("turn/start", { threadId: thread.id, input: [{ type: "text", text: "probe initial" }] });
   const cli = await external();
-  const read = await cli.request("thread/read", { threadId: thread.id, includeTurns: true });
+  // The start response can precede visibility on another connection. Wait for
+  // this exact turn, with the same bounded wait used for other protocol events.
+  const read = await until(async () => {
+    const value = await cli.request("thread/read", { threadId: thread.id, includeTurns: true });
+    return value.thread.status.type === "active" && value.thread.turns.at(-1)?.id === turn.id ? value : null;
+  }, "started turn visible to the observer");
   assert.equal(read.thread.status.type, "active");
   assert.equal(read.thread.turns.at(-1).id, turn.id);
   const observation = await observeThread(thread.id, {}, { discover: () => discoverRuntime(root) });
@@ -262,6 +274,25 @@ try {
   assert.ok(completedRead.events.some(e => e.id === runningItem.params.item.id && e.change === (historyHadRunning ? "updated" : "added") && e.status === "completed"));
   console.log(JSON.stringify({ checkpoint: "changed-read-performance", result: "PASS", samples: deltaTimings, max_ms: Math.max(...deltaTimings.map(s => s.ms)), threshold_ms: 1000, includes_cli_startup: true, history_had_running_command: historyHadRunning }));
 
+  const beforeDoctorRequests = providerRequests;
+  const doctor = await appServerDoctor({ threadId: thread.id, discover: () => discoverRuntime(root) });
+  assert.equal(doctor.ready, true, doctor.remediation);
+  assert.equal(doctor.compatibility.status, "verified");
+  assert.equal(providerRequests, beforeDoctorRequests, "Doctor never invokes the model");
+  const reconnectStates = [], stopWatch = new AbortController(); let watchClient;
+  const watchDeadline = setTimeout(() => stopWatch.abort(), 5000);
+  try {
+    await streamThread(thread.id, { since: completedRead.cursor, pollMs: 250, signal: stopWatch.signal }, async data => {
+      if (data.type !== "connection") return;
+      reconnectStates.push(data.state);
+      if (data.state === "watching") watchClient.close();
+      if (data.state === "recovered") stopWatch.abort();
+    }, { discover: () => discoverRuntime(root), connect: async (...args) => (watchClient = await RpcClient.connect(...args)) });
+  } finally { clearTimeout(watchDeadline); }
+  assert.deepEqual(reconnectStates, ["watching", "reconnecting", "recovered"]);
+  assert.equal(providerRequests, beforeDoctorRequests, "Reconnect never sends or resumes a turn");
+  console.log(JSON.stringify({ checkpoint: "observation-recovery", result: "PASS", doctor: doctor.compatibility, reconnect_states: reconnectStates, real_desktop_validated: false }));
+
   // Exactly the command a Monitor consumer runs, including backlog pagination
   // and cancellation while the task's model call is still in progress.
   const monitorLines = []; let monitorErrors = "";
@@ -269,8 +300,8 @@ try {
   const monitorExit = once(monitor, "exit");
   createInterface({ input: monitor.stdout }).on("line", line => monitorLines.push(line));
   monitor.stderr.on("data", data => { monitorErrors += data; });
-  await until(() => monitorLines.map(line => JSON.parse(line)).find(line => line.data?.events.some(e => e.client_message_id === typed.client_message_id)), "Monitor typed message");
-  await until(() => monitorLines.map(line => JSON.parse(line)).find(line => line.data?.events.some(e => e.id === runningItem.params.item.id && e.status === "completed")), "Monitor completed command");
+  await until(() => monitorLines.map(line => JSON.parse(line)).find(line => line.data?.type === "observation" && line.data.events.some(e => e.client_message_id === typed.client_message_id)), "Monitor typed message");
+  await until(() => monitorLines.map(line => JSON.parse(line)).find(line => line.data?.type === "observation" && line.data.events.some(e => e.id === runningItem.params.item.id && e.status === "completed")), "Monitor completed command");
   assert.ok(monitorLines.every(line => JSON.parse(line).ok === true));
   const lineCount = monitorLines.length;
   await delay(600); assert.equal(monitorLines.length, lineCount, "Unchanged task does not produce Monitor heartbeats");

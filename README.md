@@ -27,7 +27,11 @@ codex-steer doctor --json
 
 `desktop start`はDesktopを起動するたびに実行します。すでに起動している場合は、一度終了してから実行してください。通常の起動に戻すには、Desktopを終了し、Dockなどから開き直します。
 
-インストール先はこのリポジトリへのシンボリックリンクです。リポジトリを移動した場合は`make install-local`を再実行してください。削除する場合は`make uninstall-local`を実行します。
+インストールしたCLIはこのリポジトリへのシンボリックリンクです。リポジトリを移動した場合は`make install-local`を再実行してください。削除する場合は`make uninstall-local`を実行します。
+
+`desktop start`は実行ファイルと依存を`CODEX_HOME/codex-steer/runtimes/<version>-<sha256>`へ検証して配置し、そのwrapperからDesktopを起動します。元のリポジトリやnpxキャッシュに依存せず、起動後のhelperも同じ保存先を使います。配置済みの版は自動削除・上書きしません。
+
+npm配布用の名前は`@vinhphatfsg/codex-steer`です。無指定の`codex-steer`は別パッケージが登録済みです。現在は公開前のため`private: true`を維持しています。MITライセンス、固定版での実行例、保存先の検証・復旧と公開前テストは[配布ドキュメント](docs/distribution.md)を参照してください。
 
 ## 使い方
 
@@ -58,7 +62,7 @@ codex-steer supervise prompt <thread-id>
 監督手順は`codex-steer help monitor`と生成プロンプトで共通です。
 
 1. 接続を診断し、対象タスクの最新の依頼・制約・進捗、有効な指示と対応待ちの履歴を確認する。
-2. 差分を読み切ったcursorから観測を続ける。[Monitorツール](https://code.claude.com/docs/en/tools-reference#monitor-tool)が使えれば`watch --stream`、使えなければ短い`watch`を繰り返す。
+2. 差分を読み切ったcursorから観測を続ける。[Monitorツール](https://code.claude.com/docs/en/tools-reference#monitor-tool)が使えれば`watch --stream`、使えなければ短い`watch`を繰り返す。接続状態の通知を読み、復帰待ちの間は介入を控える。
 3. 過剰設計・スコープ逸脱・より小さな修正の余地を判断し、必要なら最新の差分を読み切ってから`send --based-on`で介入する。同じ指摘が対応中なら結果を待つ。
 4. 送信したmessage_idを保持し、受付・対応報告・検証結果を区別して追う。`unknown`は`history check`で照合し、自動再送しない。
 5. 介入内容・確認結果・未確認事項を短く報告する。停止指示を受けたら、自分のMonitor/watchと追加送信を止める。
@@ -192,6 +196,9 @@ codex-steer desktop start --dry-run --json
 # 接続と起動条件を診断
 codex-steer doctor --json
 
+# 指定タスクの観測APIも検証
+codex-steer doctor --thread <thread-id> --json
+
 # 最近のタスクを一覧表示
 codex-steer threads list --desktop-only --limit 20 --json
 
@@ -200,6 +207,18 @@ codex-steer thread resolve codex://threads/<thread-id> --json
 
 # 対象タスクをDesktopの画面で開く
 codex-steer open <thread-id>
+```
+
+`doctor`はDesktop・同梱CLI・実行中のwrapper Node・手元のCLIを動かすNodeのバージョンと、`connection.status`、`compatibility.api_checks`、`failure`を返します。対象未指定では接続だけを診断するため、観測の互換性は`unverified`です。
+
+さらに`codex_steer_compatibility`で、操作側と実行中wrapperのパッケージ名・バージョン・runtime protocolを照合します。不明・不一致なら`ready: false`です。`read`・`watch`・`send`は`STEER_VERSION_UNVERIFIED`または`STEER_VERSION_MISMATCH`で止まります。旧wrapperの利用後は作業を終えてDesktopを終了し、同じ版のCLIで`desktop start`してください。
+
+`doctor --thread`は指定タスクの読み取り経路を検証し、成功すれば`compatibility.status: verified`を返します。呼び出していないAPIは`unverified`、メソッド未対応は`unsupported`、応答異常等は`failed`です。通信が途切れて検証を完了できなければ`unverified`のまま理由を返します。本文は診断出力に含めず、タスクの再開・送信・承認回答は行いません。`--thread`は`app-server`専用です。
+
+`ready`は接続条件と今回指定した検証の結果です。`verified`の範囲は対象タスクの初回観測で、履歴全体、送信、画面表示、承認往復は保証しません。未検証の機能は`unverified_features`に明示します。例えば、従来の履歴形式を読み取った場合の結果は次の形です（主要項目のみ）。
+
+```json
+{"ready":true,"connection":{"status":"connected"},"compatibility":{"status":"verified","scope":"target-observation","thread_id":"aaaaaaaa-aaaa-4aaa-8aaa-000000000001","api_checks":{"initialize":"verified","thread/loaded/list":"verified","thread/read":"verified","thread/turns/list":"unverified","thread/items/list":"unverified"},"unverified_features":["steering","desktop_ui","approval_roundtrip"]},"failure":null}
 ```
 
 `threads list`は`--desktop-only`を外すとDesktop以外のローカルタスクも含みます。`--limit`は1〜500件、既定は20件です。タスクや各種記録の保存先は`CODEX_HOME`に従い、未指定時は`~/.codex`を使います。
@@ -288,7 +307,28 @@ codex-steer watch <thread-id> --stream --since <cursor> --include-output --json
 | `--poll-ms <n>` | `watch`の確認間隔。250〜10000ms、既定1000ms。 |
 | `--stream` | `watch`で停止まで監視を継続。`--until`・`--timeout-ms`とは併用不可。 |
 
-`has_more: true`なら`changed: false`でも返されたcursorで続きを読み、読み終えてから判断・送信してください。`--stream`は初回に現在を基準とし、変化時だけ出力します。開始時の状況も読む場合は先に`read`し、そのcursorを渡します。停止はCtrl-C、Monitorで起動した場合はClaudeに停止を依頼します。
+`has_more: true`なら`changed: false`でも返されたcursorで続きを読み、読み終えてから判断・送信してください。`--stream`は初回に現在を基準とし、監視開始を1回通知します。その後は作業差分と接続状態の変化を出力します。開始時の状況も読む場合は先に`read`し、そのcursorを渡します。停止はCtrl-C、Monitorで起動した場合はClaudeに停止を依頼します。
+
+`--stream`のJSONは、`data.type`で次の2種類を区別します。
+
+| `data.type` | 内容 |
+|---|---|
+| `observation` | 作業差分。従来の`events`・`attention`・`cursor`・`has_more`等を含みます。 |
+| `connection` | 接続状態。`state`、`resume_cursor`、`last_observed_at`、`reconnect_attempts`等を含みます。作業差分は含みません。 |
+
+接続状態は`watching`（監視開始）、`reconnecting`（観測不能・復帰待ち）、`recovered`（読み取り復帰）、`needs_review`（履歴の再確認が必要）、`failed`（監視終了）です。平常時の定期通知はありません。
+
+観測に一度成功した後の通信切断・読み取りタイムアウト・一時的なruntime不在は、接続先を再確認し、同じタスクとcursorで再接続します。待機間隔は1→2→4→8→最大10秒、接続・初期化・読み取りを含む復帰待ちは合計60秒までです。復帰後も`has_more`があれば続きを読みます。初回の接続失敗、権限異常、不正な応答、未対応API、無効cursorでは停止します。通常の`watch`には再接続処理はありません。
+
+接続行の`resume_cursor`はCLIの出力完了位置、または初回の基準です。監督AIが内容を読んだ証明にはなりません。watchプロセス自体が終了した場合は、監督側が読了済みcursorを指定して明示的に再開してください。無効cursorを自動で捨てたり、配送が`unknown`の指示を再送したりはしません。
+
+接続状態の通知例です。`<cursor>`は実際の値に置き換わります。
+
+```json
+{"ok":true,"command":"watch","data":{"type":"connection","thread_id":"aaaaaaaa-aaaa-4aaa-8aaa-000000000001","state":"reconnecting","resume_cursor":"<cursor>","last_observed_at":"2026-09-12T10:00:00.000Z","observed_at":"2026-09-12T10:00:08.000Z","reconnect_attempts":0,"cause_code":"CONNECTION_FAILED","retry_timeout_ms":60000}}
+```
+
+監視の接続・読み取りで停止を伴うエラーは`ok:false`、`data.type:connection`、`data.state:needs_review|failed`、`error.code`と理由を返し、終了コード1です。復帰待ちの上限は`WATCH_RECONNECT_TIMEOUT`、無効cursorは`STALE_CURSOR`です。Ctrl-Cは接続・初期化・復帰待ちの途中でも監視だけを停止します。
 
 #### 指示の一覧・訂正・撤回
 

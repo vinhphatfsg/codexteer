@@ -70,6 +70,44 @@ test("server errors never echo sensitive server-provided data into CLI errors", 
   await assert.rejects(client.request("turn/steer", {}, { mutation: true }), error => !error.uncertain && error.rpcCode === -1 && !error.message.includes("synthetic-private"));
 });
 
+test("malformed protocol input stays terminal and preserves uncertain writes", async t => {
+  const root = await fixture(t, socket => socket.on("message", bytes => {
+    const request = JSON.parse(bytes);
+    if (request.method === "initialize") socket.send(JSON.stringify({ id: request.id, result: {} }));
+    else if (request.id) socket.send("{invalid-private-data");
+  }));
+  const client = await RpcClient.connect(`${root}/s.sock`);
+  t.after(() => client.close());
+  await assert.rejects(client.request("turn/steer", {}, { mutation: true }), error => error.code === "PROTOCOL_ERROR" && error.uncertain && !error.message.includes("private"));
+  await assert.rejects(client.request("thread/read"), error => error.code === "PROTOCOL_ERROR" && !error.uncertain);
+});
+
+test("initialization is cancellable and read timeouts are not uncertain deliveries", async t => {
+  const root = await fixture(t, socket => socket.on("message", bytes => {
+    const request = JSON.parse(bytes);
+    if (request.method === "initialize") socket.send(JSON.stringify({ id: request.id, result: {} }));
+  }));
+  const client = await RpcClient.connect(`${root}/s.sock`, { timeoutMs: 20 });
+  t.after(() => client.close());
+  await assert.rejects(client.request("thread/read"), error => error.code === "TIMEOUT" && !error.uncertain);
+  const stalled = await fixture(t, socket => socket.on("message", () => {}));
+  const stop = new AbortController();
+  const pending = RpcClient.connect(`${stalled}/s.sock`, { signal: stop.signal });
+  setTimeout(() => stop.abort(), 20);
+  await assert.rejects(pending, { code: "CANCELLED" });
+});
+
+test("malformed error codes cannot leak server data or masquerade as supported RPC errors", async t => {
+  const root = await fixture(t, socket => socket.on("message", bytes => {
+    const request = JSON.parse(bytes);
+    if (request.method === "initialize") socket.send(JSON.stringify({ id: request.id, result: {} }));
+    else if (request.id) socket.send(JSON.stringify({ id: request.id, error: { code: { text: "private-data" } } }));
+  }));
+  const client = await RpcClient.connect(`${root}/s.sock`);
+  t.after(() => client.close());
+  await assert.rejects(client.request("turn/steer", {}, { mutation: true }), error => error.code === "PROTOCOL_ERROR" && error.uncertain && error.rpcCode === undefined && !error.message.includes("private"));
+});
+
 test("relay handles split UTF-8, multiline/large text, response IDs, and backpressure", async t => {
   const messages = [];
   const root = await fixture(t, socket => socket.on("message", bytes => {

@@ -25,6 +25,9 @@ test("default live send uses App Server and fails without UI fallback when unava
   assert.equal(doctor.result.data.default_send_backend, "app-server");
   assert.equal(doctor.result.data.rollout_status, "enabled");
   assert.equal(doctor.result.data.ready, false);
+  assert.equal(doctor.result.data.compatibility.status, "unverified");
+  assert.equal(cli(["doctor", "--thread", "not-a-thread"], undefined, { CODEX_HOME: home }).status, 1);
+  assert.equal(cli(["doctor", "--thread", ID, "--backend", "ui"], undefined, { CODEX_HOME: home }).status, 1);
 });
 
 test("background dry run keeps command, UUID/link, shorthand and stdin interfaces", () => {
@@ -119,6 +122,8 @@ test("Monitor stream rejects one-shot flags before connecting and always uses JS
   assert.equal(result.status, 1);
   assert.equal(result.stdout.trim().split("\n").length, 1);
   assert.equal(JSON.parse(result.stdout).ok, false);
+  assert.equal(JSON.parse(result.stdout).data.type, "connection");
+  assert.equal(JSON.parse(result.stdout).data.state, "failed");
 });
 
 test("metadata dry-run validates kind and evidence without exposing message text", () => {

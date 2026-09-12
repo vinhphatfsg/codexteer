@@ -22,9 +22,9 @@ function success(command, data, json) {
 
 function fail(error, json) {
   const message = error instanceof Error ? error.message : String(error);
-  if (json) console.log(JSON.stringify({ ok: false, error: {
+  if (json) console.log(JSON.stringify({ ok: false, ...(error.watch ? { command: "watch", data: error.watch } : {}), error: {
     message, code: error.code, delivery_status: error.delivery_status,
-    sent: error.sent, thread_id: error.thread_id, rpc_code: error.rpc_code,
+    sent: error.sent, thread_id: error.thread_id, rpc_code: error.rpc_code ?? error.rpcCode,
     message_id: error.message_id, client_message_id: error.client_message_id, journal_update_required: error.journal_update_required,
   } }));
   else console.error(`codex-steer: ${message}`);
@@ -227,8 +227,11 @@ export async function main(argv) {
     }
     if (command === "doctor") {
       const backend = backendOption(args, "app-server");
+      const target = takeOption(args, "--thread", undefined);
+      if (target !== undefined && backend !== "app-server") throw new Error("doctor --thread requires --backend app-server.");
+      const threadId = target === undefined ? undefined : normalizeThreadId(target);
       if (args.length) throw new Error(`Unexpected argument: ${args[0]}`);
-      const report = backend === "ui" ? desktopDoctor() : await appServerDoctor();
+      const report = backend === "ui" ? desktopDoctor() : await appServerDoctor({ threadId });
       report.default_send_backend = DEFAULT_SEND_BACKEND;
       report.rollout_status = "enabled";
       success("doctor", report, json);
@@ -236,6 +239,15 @@ export async function main(argv) {
         console.log(`${report.backend}: ${report.ready ? "ready" : "not ready"}`);
         for (const [name, ok] of Object.entries(report.checks)) {
           console.log(`  ${ok ? "ok" : "missing"}  ${name}`);
+        }
+        if (report.compatibility) {
+          console.log(`  connection: ${report.connection.status}`);
+          console.log(`  Desktop: ${report.desktop_version ?? "unknown"}, CLI: ${report.running_cli_version ?? "unknown"}, wrapper Node: ${report.running_wrapper_node_version ?? "unknown"}, local Node: ${report.cli_node_version}`);
+          console.log(`  codex-steer: ${report.codex_steer_compatibility.status} (local ${report.codex_steer_version}, running ${report.codex_steer_compatibility.runtime.version ?? "unknown"})`);
+          console.log(`  observation compatibility: ${report.compatibility.status} (${report.compatibility.scope})`);
+          for (const [method, status] of Object.entries(report.compatibility.api_checks)) console.log(`    ${method}: ${status}`);
+          if (target === undefined) console.log("  Verify a target: codex-steer doctor --thread <THREAD> --json");
+          if (report.failure) console.log(`  failure: ${report.failure.code}${report.failure.rpc_code === null ? "" : ` (RPC ${report.failure.rpc_code})`}`);
         }
         if (report.remediation) console.log(`\n${report.remediation}`);
       }

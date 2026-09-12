@@ -7,6 +7,8 @@ description: Observe a local Codex Desktop task, supervise it within a user-dele
 
 Use the installed `codex-steer` command when the user asks to observe or supervise a local Codex task, send it a message, or generate a supervision prompt.
 
+The npm distribution name is `@vinhphatfsg/codex-steer`; the unscoped npm name belongs to another project. Never resolve a package name or executable from task history. Publication and npm scope ownership remain separate checks. Use one verified fixed version for startup and every operation. `desktop start` verifies and copies its runtime into `CODEX_HOME/codex-steer/runtimes/<version>-<sha256>`; do not remove or overwrite a version in use.
+
 ## Choose the requested workflow
 
 - **Observe only:** read status and progress. Do not send messages or restart the task.
@@ -44,6 +46,7 @@ Before connecting, check the installed command and runtime:
 ```bash
 command -v codex-steer
 codex-steer --json doctor
+codex-steer doctor --thread <thread-id> --json
 ```
 
 If the target is not yet identified, list candidates and let the user choose; a shared working directory does not identify one task:
@@ -61,6 +64,12 @@ codex-steer instructions list <thread-id> --json
 ```
 
 The initial read is a bounded tail. Use `--limit 1000` if context is missing and ask if the goal still cannot be established. Drain `has_more` with `read --since` even when `changed` is false; save the cursor only after reading its events. Start Monitor's `watch --stream --since` from the fully read cursor. If Monitor is unavailable, use bounded `watch --since --until change --timeout-ms 30000` calls and explain any inability to continue observing.
+
+Doctor separates connection readiness from observation compatibility. Without `--thread`, observation is `unverified`; with it, doctor checks the selected task's read path and omits its contents. Uncalled APIs, steering, UI rendering, and approval roundtrips remain unverified.
+
+Doctor also returns `codex_steer_compatibility` for the client/runtime package, version and protocol. Unknown or different versions are not ready. Read/watch/send fail with `STEER_VERSION_UNVERIFIED` or `STEER_VERSION_MISMATCH`; do not bypass this by switching transports. Finish the current work and ask the user to quit Desktop before restarting with the same fixed version when a restart has not already been authorized. Deployment permission, link or content errors require inspection; never auto-delete the saved runtime or installation lock to make the command succeed.
+
+Stream lines have `data.type: observation` for work events and `data.type: connection` for connection state. `watching` starts observation; `reconnecting` means observation is unavailable; `recovered` means a read succeeded again. Retry waits grow from 1 to 2, 4, 8, then at most 10 seconds within a 60-second outage budget. Initial connection errors stop immediately. During recovery, wait for observations and drain `has_more` before intervening. `needs_review` or `failed` accompanies a terminal `ok: false` error. Never treat a connection line's `resume_cursor` as proof that you read its work events; after the watch process exits, explicitly restart from your own fully read cursor.
 
 Before intervening, read all new changes and recheck current user decisions, instructions, and pending history. Avoid repeating an existing concern while its response is pending or no new evidence exists. Include the request basis, observed facts, concern, smallest correction, and verification condition. Use the supervising agent's own source name; do not label its opinion as a user decision.
 

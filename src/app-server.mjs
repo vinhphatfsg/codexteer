@@ -5,6 +5,7 @@ import { discoverRuntime } from "./runtime.mjs";
 import { RpcClient, RpcFailure } from "./rpc.mjs";
 import { normalizeThreadId } from "./thread-id.mjs";
 import { ensureDesktopSubscription } from "./subscription.mjs";
+import { assertCompatibleVersion } from "./version.mjs";
 
 export class SendFailure extends Error {
   constructor(message, { code = "NOT_SENT", uncertain = false, threadId, rpcCode } = {}) {
@@ -69,7 +70,8 @@ export async function sendAppServerMessage(threadInput, message, { dryRun = fals
   let result;
   const token = randomUUID();
   try {
-    const { paths } = await discover();
+    const { paths, state } = await discover();
+    assertCompatibleVersion(state);
     const candidate = path.join(paths.lease, `send-${threadId}`);
     try { await mkdir(candidate, { mode: 0o700 }); } catch (error) {
       if (error.code === "EEXIST") throw new Error("Another send is in progress for this task, or a previous sender exited unexpectedly. Restart the shared Desktop after checking delivery before retrying.");
@@ -78,7 +80,16 @@ export async function sendAppServerMessage(threadInput, message, { dryRun = fals
     lock = candidate;
     await writeFile(path.join(lock, "owner"), token, { mode: 0o600 });
     client = await connect(paths.socket);
-    const receipt = await sendOnClient(client, threadId, message, { newTurn, clientMessageId, beforeSend, subscribe: id => subscribe(paths.control, id) });
+    const checkRuntime = async () => {
+      const current = await discover(); assertCompatibleVersion(current.state);
+      if (current.state.instance !== state.instance || current.paths.socket !== paths.socket || current.paths.control !== paths.control) {
+        throw Object.assign(new Error("Runtime changed before delivery. Read the target again before sending."), { code: "RUNTIME_CHANGED" });
+      }
+    };
+    const receipt = await sendOnClient(client, threadId, message, { newTurn, clientMessageId,
+      beforeSend: async (...args) => { await beforeSend?.(...args); await checkRuntime(); },
+      subscribe: async id => { await checkRuntime(); return subscribe(paths.control, id); },
+    });
     result = { ...plan, ...receipt, sent: true, delivery_status: "accepted" };
     return result;
   } catch (error) {

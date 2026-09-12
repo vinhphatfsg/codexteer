@@ -2,6 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, rename, rm, writeFile, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { assertCompatibleVersion } from "./version.mjs";
+
+const runtimeFailure = (message, code) => Object.assign(new Error(message), { code });
 
 export function codexHome() {
   return path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
@@ -28,7 +31,7 @@ async function checkOwned(file, type) {
   const info = await lstat(file);
   if (info.uid !== process.getuid() || (info.mode & 0o077) !== 0 || info.isSymbolicLink()
     || (type === "directory" ? !info.isDirectory() : type === "socket" ? !info.isSocket() : !info.isFile())) {
-    throw new Error("Shared App Server runtime has unsafe ownership, permissions, or file type.");
+    throw runtimeFailure("Shared App Server runtime has unsafe ownership, permissions, or file type.", "RUNTIME_UNSAFE");
   }
   return info;
 }
@@ -38,32 +41,40 @@ export function isAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) {
     if (error.code === "ESRCH") return false;
     // An inspection denial is not evidence of a dead process.
-    throw new Error("Cannot verify the shared App Server process. Run this command from your terminal.");
+    throw runtimeFailure("Cannot verify the shared App Server process. Run this command from your terminal.", "PERMISSION_DENIED");
   }
 }
 
 export async function readRuntime(paths) {
   for (const dir of [paths.root, paths.directory, paths.lease]) await checkOwned(dir, "directory");
   await checkOwned(paths.state, "file");
-  const state = JSON.parse(await readFile(paths.state, "utf8"));
-  if (state.schema !== 1 || state.codex_home !== paths.home || typeof state.instance !== "string" || !/^[0-9a-f-]{36}$/.test(state.instance)
-    || !Number.isSafeInteger(state.pid) || state.pid <= 0) throw new Error("Invalid shared App Server runtime record.");
+  let state;
+  try { state = JSON.parse(await readFile(paths.state, "utf8")); }
+  catch (error) {
+    if (error instanceof SyntaxError) throw runtimeFailure("Invalid shared App Server runtime record.", "RUNTIME_INVALID");
+    throw error;
+  }
+  if (state?.schema !== 1 || state.codex_home !== paths.home || typeof state.instance !== "string" || !/^[0-9a-f-]{36}$/.test(state.instance)
+    || !Number.isSafeInteger(state.pid) || state.pid <= 0) throw runtimeFailure("Invalid shared App Server runtime record.", "RUNTIME_INVALID");
   return state;
 }
 
-export async function discoverRuntime(home) {
+export async function discoverRuntime(home, { requireCompatible = true } = {}) {
   const paths = await runtimePaths(home);
-  let state;
-  try { state = await readRuntime(paths); } catch (error) {
-    if (error.code === "ENOENT") throw new Error("Shared App Server is unavailable. Finish current tasks, quit Desktop, then run: codex-steer desktop start");
+  try {
+    const state = await readRuntime(paths);
+    if (!isAlive(state.pid) || !isAlive(state.server_pid) || !state.desktop_connected) {
+      throw runtimeFailure("Shared App Server is not ready. Finish current tasks, quit Desktop, then run: codex-steer desktop start", "RUNTIME_NOT_READY");
+    }
+    await checkOwned(paths.socket, "socket");
+    await checkOwned(paths.control, "socket");
+    if (requireCompatible) assertCompatibleVersion(state);
+    return { paths, state };
+  } catch (error) {
+    if (error.code === "ENOENT") throw runtimeFailure("Shared App Server is unavailable. Finish current tasks, quit Desktop, then run: codex-steer desktop start", "RUNTIME_UNAVAILABLE");
+    if (["EACCES", "EPERM"].includes(error.code)) throw runtimeFailure("Cannot inspect the shared App Server runtime. Check access permissions.", "PERMISSION_DENIED");
     throw error;
   }
-  if (!isAlive(state.pid) || !isAlive(state.server_pid) || !state.desktop_connected) {
-    throw new Error("Shared App Server is not ready. Finish current tasks, quit Desktop, then run: codex-steer desktop start");
-  }
-  await checkOwned(paths.socket, "socket");
-  await checkOwned(paths.control, "socket");
-  return { paths, state };
 }
 
 export async function claimRuntime(home, details = {}) {

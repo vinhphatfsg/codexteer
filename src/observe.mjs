@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { normalizeThreadId } from "./thread-id.mjs";
 import { discoverRuntime } from "./runtime.mjs";
-import { RpcClient } from "./rpc.mjs";
+import { RpcClient, RpcFailure } from "./rpc.mjs";
 
 export const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const mutableStatus = new Set(["inProgress", "running", "pending"]);
+const protocolFailure = message => new RpcFailure(message, { code: "PROTOCOL_ERROR" });
 export function invalidCursor() { return Object.assign(new Error("Cursor is invalid or history changed. Read again without --since."), { code: "STALE_CURSOR" }); }
 
 export function decodeCursor(value, threadId) {
@@ -58,7 +59,7 @@ export function project(item, turnId) {
 export function threadSnapshot(thread) {
   const events = [];
   for (const turn of thread.turns ?? []) {
-    if (turn.itemsView && turn.itemsView !== "full") throw new Error("Incomplete turn history. Cannot produce a reliable cursor.");
+    if (turn.itemsView && turn.itemsView !== "full") throw protocolFailure("Incomplete turn history. Cannot produce a reliable cursor.");
     events.push({ id: turn.id, turn_id: turn.id, type: "turn", status: turn.status });
     for (const item of turn.items ?? []) { const event = project(item, turn.id); if (event) events.push(event); }
   }
@@ -108,18 +109,18 @@ export function readSnapshot(thread, { since, limit = 50, maxChars = 2000, inclu
 
 export async function fetchThread(client, threadId, metadata) {
   let thread = metadata ?? (await client.request("thread/read", { threadId, includeTurns: false })).thread;
-  if (thread?.id !== threadId || !Array.isArray(thread.turns)) throw new Error("App Server returned invalid task history.");
+  if (thread?.id !== threadId || !Array.isArray(thread.turns)) throw protocolFailure("App Server returned invalid task history.");
   if (thread.historyMode === "paginated") {
     const turns = [], seen = new Set(); let cursor;
     do {
       const page = await client.request("thread/turns/list", { threadId, itemsView: "full", sortDirection: "asc", limit: 100, ...(cursor ? { cursor } : {}) });
-      if (!Array.isArray(page.data) || (page.nextCursor && seen.has(page.nextCursor))) throw new Error("Invalid history pagination.");
+      if (!Array.isArray(page.data) || (page.nextCursor && seen.has(page.nextCursor))) throw protocolFailure("Invalid history pagination.");
       turns.push(...page.data); cursor = page.nextCursor; seen.add(cursor);
     } while (cursor);
     thread = { ...thread, turns };
   } else {
     thread = (await client.request("thread/read", { threadId, includeTurns: true })).thread;
-    if (thread?.id !== threadId || !Array.isArray(thread.turns)) throw new Error("App Server returned invalid task history.");
+    if (thread?.id !== threadId || !Array.isArray(thread.turns)) throw protocolFailure("App Server returned invalid task history.");
   }
   return thread;
 }
@@ -128,7 +129,7 @@ async function readAttempt(client, threadId, options) {
   const old = options.since ? decodeCursor(options.since, threadId) : null;
   if (options.fullHistory && old?.v === 2) throw new Error("A v2 cursor uses paged history. Omit --full-history, or read --full-history without --since to start a full check.");
   const { thread } = await client.request("thread/read", { threadId, includeTurns: false });
-  if (thread?.id !== threadId || !Array.isArray(thread.turns)) throw new Error("App Server returned invalid task metadata.");
+  if (thread?.id !== threadId || !Array.isArray(thread.turns)) throw protocolFailure("App Server returned invalid task metadata.");
   if (thread.historyMode === "paginated" && !options.fullHistory) {
     if (old?.v === 1) throw Object.assign(new Error("This v1 cursor requires --full-history. For fast reads, run read without --since once and use its new cursor."), { code: "CURSOR_UPGRADE_REQUIRED" });
     const { readPaged } = await import("./paged-read.mjs");
