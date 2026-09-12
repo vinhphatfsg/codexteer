@@ -7,7 +7,7 @@ import path from "node:path";
 import { listLocalThreads } from "../src/thread-store.mjs";
 
 test("lists local session metadata without exposing transcript content", async t => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "codex-steer-test-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "codexteer-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const day = path.join(root, "2026", "08", "27");
   await mkdir(day, { recursive: true });
@@ -32,12 +32,12 @@ test("lists local session metadata without exposing transcript content", async t
 });
 
 test("CLI thread listing respects CODEX_HOME", async t => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "codex-steer-home-test-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "codexteer-home-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, "sessions"));
   const id = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
   await writeFile(path.join(root, "sessions", `rollout-${id}.jsonl`), JSON.stringify({ type: "session_meta", payload: { id, originator: "Codex Desktop" } }) + "\n");
-  const result = spawnSync(process.execPath, ["bin/codex-steer.mjs", "threads", "list", "--json"], { encoding: "utf8", env: { ...process.env, CODEX_HOME: root } });
+  const result = spawnSync(process.execPath, ["bin/codexteer.mjs", "threads", "list", "--json"], { encoding: "utf8", env: { ...process.env, CODEX_HOME: root } });
   assert.equal(result.status, 0);
   assert.deepEqual(JSON.parse(result.stdout).data.threads.map(thread => thread.thread_id), [id]);
 });

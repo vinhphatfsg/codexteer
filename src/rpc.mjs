@@ -101,7 +101,7 @@ export class RpcClient extends EventEmitter {
     try {
       if (options.signal?.aborted) cancel();
       client.initialization = await client.request("initialize", {
-        clientInfo: { name: "codex_steer", title: "Codex Steer", version: VERSION },
+        clientInfo: { name: "codexteer", title: "Codexteer", version: VERSION },
         capabilities: { experimentalApi: true },
       });
       if (!client.initialization || typeof client.initialization !== "object" || Array.isArray(client.initialization)) {

@@ -7,13 +7,13 @@ import path from "node:path";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 function cli(args, input, env = {}) {
-  const result = spawnSync(process.execPath, ["bin/codex-steer.mjs", "--json", ...args], { encoding: "utf8", input, env: { ...process.env, ...env } });
+  const result = spawnSync(process.execPath, ["bin/codexteer.mjs", "--json", ...args], { encoding: "utf8", input, env: { ...process.env, ...env } });
   return { status: result.status, result: JSON.parse(result.stdout), stderr: result.stderr };
 }
 
 test("default live send uses App Server and fails without UI fallback when unavailable", t => {
   // Never let this live-send test discover the user's real Desktop runtime.
-  const home = mkdtempSync(path.join(os.tmpdir(), "codex-steer-default-test-"));
+  const home = mkdtempSync(path.join(os.tmpdir(), "codexteer-default-test-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const { status, result } = cli(["send", ID, "test"], undefined, { CODEX_HOME: home });
   assert.equal(status, 1);
@@ -101,13 +101,13 @@ test("command help explains purpose, results and examples without contacting Des
       assert.equal(result.data.topic, topic); assert.ok(result.data.when); assert.ok(result.data.returns); assert.ok(result.data.examples.length);
     }
   }
-  const plain = spawnSync(process.execPath, ["bin/codex-steer.mjs", "read", "--help"], { encoding: "utf8" });
+  const plain = spawnSync(process.execPath, ["bin/codexteer.mjs", "read", "--help"], { encoding: "utf8" });
   assert.match(plain.stdout, /使い所:/); assert.match(plain.stdout, /確認できること:/);
   for (const args of [["--help"], ["supervise", "prompt", "--help"]]) {
-    const help = spawnSync(process.execPath, ["bin/codex-steer.mjs", ...args], { encoding: "utf8" });
+    const help = spawnSync(process.execPath, ["bin/codexteer.mjs", ...args], { encoding: "utf8" });
     assert.equal(help.status, 0);
-    assert.match(help.stdout, /codex-steer supervise prompt <THREAD> \[--json\]/);
-    assert.doesNotMatch(help.stdout, /codex-steer prompt <THREAD>/);
+    assert.match(help.stdout, /codexteer supervise prompt <THREAD> \[--json\]/);
+    assert.doesNotMatch(help.stdout, /codexteer prompt <THREAD>/);
   }
 });
 
@@ -118,7 +118,7 @@ test("Monitor stream rejects one-shot flags before connecting and always uses JS
     const result = cli(["watch", ID, "--stream", ...args], undefined, { CODEX_HOME: home });
     assert.equal(result.status, 1); assert.match(result.result.error.message, /do not combine/);
   }
-  const result = spawnSync(process.execPath, ["bin/codex-steer.mjs", "watch", ID, "--stream"], { encoding: "utf8", env: { ...process.env, CODEX_HOME: home } });
+  const result = spawnSync(process.execPath, ["bin/codexteer.mjs", "watch", ID, "--stream"], { encoding: "utf8", env: { ...process.env, CODEX_HOME: home } });
   assert.equal(result.status, 1);
   assert.equal(result.stdout.trim().split("\n").length, 1);
   assert.equal(JSON.parse(result.stdout).ok, false);

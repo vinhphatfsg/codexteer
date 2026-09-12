@@ -1,12 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat, symlink, chmod } from "node:fs/promises";
+import { mkdtemp, rm, stat, symlink, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { sendTrackedMessage, getMessage, listMessages, reconcileMessages, markMessage } from "../src/journal.mjs";
 import { readRecord, writeRecord, withStoreLock, storePath } from "../src/store.mjs";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 async function fixture(t) { const home = await mkdtemp("/private/tmp/cs-journal-"); t.after(() => rm(home, { recursive: true, force: true })); return { home }; }
 const accepted = async (threadId, text, options) => ({ thread_id: threadId, turn_id: "turn", client_message_id: options.clientMessageId, sent: true, delivery_status: "accepted" });
+
+test("codexteer reads pre-rename history from its original namespace without rewriting it", async t => {
+  const storage = await fixture(t), messageId = "11111111-1111-4111-8111-111111111111";
+  const directory = path.join(storage.home, "codex-steer", "messages");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const entry = { schema: 1, id: messageId, client_message_id: messageId, thread_id: ID, created_at: "2026-09-12T00:00:00Z",
+    body: "previous instruction", wire_text: `[codex-steer ${messageId}]\n\nprevious instruction`, delivery_status: "unknown", response: { status: "unreported" } };
+  const file = path.join(directory, `${messageId}.json`), bytes = JSON.stringify(entry) + "\n";
+  await writeFile(file, bytes, { mode: 0o600 });
+  assert.deepEqual(await getMessage(ID, messageId, storage), entry);
+  assert.deepEqual(await listMessages(ID, { ...storage, includeText: true, pending: true }), [entry]);
+  assert.equal(await readFile(file, "utf8"), bytes);
+});
 
 test("journal is written before sending; plain wire text and receipt ID are preserved", async t => {
   const storage = await fixture(t);

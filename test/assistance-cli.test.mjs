@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
-const entrypoint = fileURLToPath(new URL("../bin/codex-steer.mjs", import.meta.url));
+const entrypoint = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 async function fixture(t) {
   const home = await mkdtemp("/private/tmp/cs-assistance-cli-");
   t.after(() => rm(home, { recursive: true, force: true }));

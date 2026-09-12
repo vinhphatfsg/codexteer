@@ -14,7 +14,7 @@ test:
 install-local: deps
 	$(MAKE) check test
 	mkdir -p "$(PREFIX)/bin"
-	ln -sfn "$(CURDIR)/bin/codex-steer.mjs" "$(PREFIX)/bin/codex-steer"
+	ln -sfn "$(CURDIR)/bin/codexteer.mjs" "$(PREFIX)/bin/codexteer"
 
 uninstall-local:
-	rm "$(PREFIX)/bin/codex-steer"
+	rm "$(PREFIX)/bin/codexteer"

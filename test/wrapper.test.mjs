@@ -1,5 +1,6 @@
 import test from "node:test";
-import { VERSION, PACKAGE_NAME, RUNTIME_PROTOCOL } from "../src/version.mjs";
+import { VERSION, PACKAGE_NAME } from "../src/version.mjs";
+import { RUNTIME_PROTOCOL, RUNTIME_CAPABILITIES } from "../src/compatibility.mjs";
 const steerState = { codex_steer_version: VERSION, codex_steer_package: PACKAGE_NAME, codex_steer_protocol: RUNTIME_PROTOCOL };
 import assert from "node:assert/strict";
 import { BUNDLED_NODE, isDesktopProcess, serverArguments } from "../src/wrapper.mjs";
@@ -61,6 +62,7 @@ function doctorFixture(extraState = {}) {
     calls,
     options: {
       versions: { desktop_version: "26.903.71938", cli_version: "0.153.4" },
+      inspectControl: async () => {},
       discover: async () => ({ paths: { socket: "/unused" }, state: { ...steerState, cli_version: "0.153.4", ...extraState } }),
       connect: async () => ({
         request: async method => { calls.push(method); return { data: [] }; },
@@ -98,6 +100,7 @@ test("doctor reports the running bundled Node version and only reads server stat
 });
 
 const TARGET = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
+const unknownLegacyState = { schema: 1, node_path: BUNDLED_NODE, cli_version: "0.150.0", codex_steer_protocol: undefined, codex_steer_version: undefined, codex_steer_package: undefined };
 test("doctor verifies the requested observation path without returning task contents or mutating it", async () => {
   const { options } = doctorFixture({ node_path: BUNDLED_NODE, node_version: "24.20.0" }), calls = [];
   options.threadId = `codex://threads/${TARGET.toUpperCase()}`;
@@ -119,22 +122,58 @@ test("doctor verifies the requested observation path without returning task cont
   assert.equal(calls.length, 3);
 });
 
-test("doctor distinguishes unsupported APIs, invalid responses and unavailable transport", async () => {
-  for (const mode of ["unsupported", "invalid", "offline"]) {
+test("doctor distinguishes unsupported APIs, invalid responses, safety stops and unavailable transport", async () => {
+  for (const [mode, code, status] of [
+    ["unsupported", "RPC_REJECTED", "unsupported"],
+    ["invalid", "PROTOCOL_ERROR", "failed"],
+    ["offline", "CONNECTION_FAILED", "unverified"],
+    ["safety-stop", "CAPABILITY_UNVERIFIED", "unverified"],
+    ["safety-stop", "RUNTIME_PROTOCOL_UNVERIFIED", "unverified"],
+  ]) {
     const { options } = doctorFixture({ node_path: BUNDLED_NODE });
     options.threadId = TARGET;
     options.connect = async () => ({ close() {}, async request(method) {
       if (method === "thread/loaded/list") return { data: [] };
       if (mode === "unsupported") throw new RpcFailure("method not found", { code: "RPC_REJECTED", rpcCode: -32601 });
       if (mode === "offline") throw new RpcFailure("offline");
+      if (mode === "safety-stop") throw Object.assign(new Error("Cannot verify the required contract."), { code });
       return { thread: { id: "wrong-task", turns: [] } };
     } });
     const result = await appServerDoctor(options);
     assert.equal(result.ready, false);
-    assert.equal(result.compatibility.status, mode === "offline" ? "unverified" : mode === "unsupported" ? "unsupported" : "failed");
-    assert.equal(result.failure.code, mode === "offline" ? "CONNECTION_FAILED" : mode === "unsupported" ? "RPC_REJECTED" : "PROTOCOL_ERROR");
+    assert.equal(result.compatibility.status, status, code);
+    assert.equal(result.compatibility.api_checks["thread/read"], status, code);
+    assert.equal(result.failure.code, code);
     assert.equal(result.connection.status, mode === "offline" ? "unavailable" : "connected");
     assert.equal(result.checks.observation, false);
+  }
+});
+
+test("doctor preserves local pagination guard results without calling the blocked API", async () => {
+  for (const [versions, status, code] of [
+    [null, "unverified", "CAPABILITY_UNVERIFIED"],
+    [[], "unsupported", "CAPABILITY_UNSUPPORTED"],
+  ]) {
+    const { options, calls } = doctorFixture({ node_path: BUNDLED_NODE, codex_steer_capabilities: { ...RUNTIME_CAPABILITIES, history_pagination: versions } });
+    options.threadId = TARGET;
+    options.connect = async () => ({ close() { calls.push("close"); }, async request(method) {
+      calls.push(method);
+      if (method === "thread/loaded/list") return { data: [TARGET] };
+      assert.equal(method, "thread/read", "the pagination guard must stop before the runtime call");
+      return { thread: { id: TARGET, status: { type: "idle" }, turns: [], historyMode: "paginated" } };
+    } });
+    const result = await appServerDoctor(options);
+    assert.equal(result.ready, false);
+    assert.equal(result.checks.observation, false);
+    assert.equal(result.connection.status, "connected");
+    assert.equal(result.compatibility.status, status);
+    assert.deepEqual(result.compatibility.api_checks, {
+      initialize: "verified", "thread/loaded/list": "verified", "thread/read": "verified",
+      "thread/turns/list": status, "thread/items/list": "unverified",
+    });
+    assert.equal(result.runtime_compatibility.features.history_pagination.status, status);
+    assert.deepEqual(result.failure, { code, rpc_code: null, method: "thread/turns/list", capability: "history_pagination" });
+    assert.deepEqual(calls, ["thread/loaded/list", "thread/read", "close"]);
   }
 });
 
@@ -149,14 +188,129 @@ test("doctor leaves unattempted compatibility checks unverified when discovery f
   assert.equal(result.failure.method, null);
 });
 
-test("doctor diagnoses missing versions, different packages and protocol mismatches without certifying them", async () => {
-  for (const extra of [{ codex_steer_version: undefined }, { codex_steer_version: "0.1.0" }, { codex_steer_package: "codex-steer" }, { codex_steer_protocol: 2 }]) {
+test("doctor treats unknown or different product versions and package names as diagnostics", async () => {
+  for (const extra of [{ codex_steer_version: undefined }, { codex_steer_version: "0.1.0" }, { codex_steer_package: "@vinhphatfsg/codex-steer" }, { cli_version: "0.153.3" }]) {
     const { options } = doctorFixture({ node_path: BUNDLED_NODE, ...extra });
     const result = await appServerDoctor(options);
-    assert.equal(result.ready, false); assert.equal(result.checks.codex_steer_version, false);
-    assert.equal(result.codex_steer_compatibility.status, extra.codex_steer_version === undefined && "codex_steer_version" in extra ? "unverified" : "mismatch");
-    assert.match(result.failure.code, /^STEER_VERSION_/);
+    assert.equal(result.ready, process.platform === "darwin"); assert.equal(result.checks.codex_steer_version, undefined);
+    assert.equal(result.codex_steer_compatibility.status, "cli_version" in extra ? "matched" : extra.codex_steer_version === undefined && "codex_steer_version" in extra ? "unverified" : "mismatch");
+    assert.equal(result.runtime_compatibility.operations.send.status, "supported");
+    assert.equal(result.failure, null);
+    assert.equal(result.cli_version_status, "cli_version" in extra ? "mismatch" : "matched");
   }
+});
+
+test("doctor rejects incompatible common protocol before connecting", async () => {
+  const { options } = doctorFixture({ node_path: BUNDLED_NODE, codex_steer_protocol: 2 });
+  options.connect = () => assert.fail("unknown wire protocol must not connect");
+  const result = await appServerDoctor(options);
+  assert.equal(result.ready, false); assert.equal(result.failure.code, "RUNTIME_PROTOCOL_UNSUPPORTED");
+  assert.equal(result.runtime_compatibility.operations.read.status, "unsupported");
+  assert.equal(result.codex_steer_compatibility.status, "matched");
+});
+
+test("doctor isolates missing/unsafe subscription endpoints from observation readiness", async () => {
+  for (const code of ["DESKTOP_SUBSCRIPTION_UNAVAILABLE", "RUNTIME_UNSAFE", "PERMISSION_DENIED"]) {
+    const { options, calls } = doctorFixture({ node_path: BUNDLED_NODE });
+    options.inspectControl = async () => { throw Object.assign(new Error("test"), { code }); };
+    const result = await appServerDoctor(options);
+    assert.equal(result.ready, process.platform === "darwin");
+    assert.equal(result.runtime_compatibility.operations.read.status, "supported");
+    assert.equal(result.runtime_compatibility.operations.send.status, "supported");
+    assert.equal(result.runtime_compatibility.operations.send_new_turn.status, code === "DESKTOP_SUBSCRIPTION_UNAVAILABLE" ? "unsupported" : "failed");
+    assert.equal(result.desktop_subscription.code, code);
+    assert.deepEqual(calls, ["thread/loaded/list", "close"]);
+  }
+});
+
+test("doctor reports unsupported individual features without blocking other operations", async () => {
+  const { options } = doctorFixture({ node_path: BUNDLED_NODE, codex_steer_capabilities: { ...RUNTIME_CAPABILITIES, turn_steer: [2] } });
+  const result = await appServerDoctor(options);
+  assert.equal(result.ready, process.platform === "darwin");
+  assert.equal(result.runtime_compatibility.operations.send.status, "unsupported");
+  assert.equal(result.runtime_compatibility.operations.send_new_turn.status, "supported");
+});
+
+test("doctor verifies observation for unknown legacy runtimes without probing mutations", async () => {
+  const { options } = doctorFixture(unknownLegacyState);
+  options.threadId = TARGET;
+  options.connect = async () => ({ close() {}, async request(method) {
+    if (method === "thread/loaded/list") return { data: [] };
+    assert.equal(method, "thread/read");
+    return { thread: { id: TARGET, status: { type: "idle" }, turns: [] } };
+  } });
+  const result = await appServerDoctor(options);
+  assert.equal(result.ready, process.platform === "darwin");
+  assert.equal(result.codex_steer_compatibility.status, "unverified");
+  assert.equal(result.compatibility.status, "verified");
+  assert.equal(result.runtime_compatibility.operations.read.status, "supported");
+  assert.equal(result.runtime_compatibility.features.thread_read.source, "probe-verified");
+  assert.equal(result.runtime_compatibility.operations.send.status, "unverified");
+});
+
+test("doctor propagates method-not-found from legacy read probes into the affected capability", async () => {
+  const methods = ["thread/read", "thread/turns/list", "thread/items/list"];
+  for (const missing of methods) {
+    const { options, calls } = doctorFixture(unknownLegacyState);
+    options.threadId = TARGET;
+    options.connect = async () => ({ close() { calls.push("close"); }, async request(method) {
+      calls.push(method);
+      if (method === missing) throw new RpcFailure("method not found", { code: "RPC_REJECTED", rpcCode: -32601 });
+      if (method === "thread/read") return { thread: { id: TARGET, status: { type: "idle" }, turns: [], historyMode: "paginated" } };
+      assert.ok(["thread/loaded/list", "thread/turns/list"].includes(method));
+      return { data: [] };
+    } });
+    const result = await appServerDoctor(options), contracts = result.runtime_compatibility;
+    assert.equal(result.ready, false);
+    assert.equal(result.compatibility.status, "unsupported");
+    assert.equal(result.compatibility.api_checks[missing], "unsupported");
+    assert.deepEqual(result.failure, { code: "RPC_REJECTED", rpc_code: -32601, method: missing });
+    const feature = missing === "thread/read" ? "thread_read" : "history_pagination";
+    assert.equal(contracts.features[feature].status, "unsupported", missing);
+    assert.equal(contracts.features[feature].source, "probe-unsupported");
+    assert.equal(contracts.features[feature].runtime, null, "A missing API does not advertise a runtime version");
+    assert.equal(contracts.protocol.status, "supported");
+    assert.equal(contracts.features.turn_steer.status, "unverified");
+    assert.equal(contracts.operations.read.status, missing === "thread/read" ? "unsupported" : "supported");
+    if (missing !== "thread/read") assert.equal(contracts.features.thread_read.source, "probe-verified");
+    assert.deepEqual(calls, ["thread/loaded/list", ...methods.slice(0, methods.indexOf(missing) + 1), "close"]);
+  }
+});
+
+test("doctor does not infer unsupported legacy pagination from uncertain or failed probes", async () => {
+  for (const [code, rpcCode, status] of [
+    ["TIMEOUT", undefined, "unverified"],
+    ["CAPABILITY_UNVERIFIED", undefined, "unverified"],
+    ["RPC_REJECTED", -32602, "failed"],
+    ["PROTOCOL_ERROR", undefined, "failed"],
+  ]) {
+    const { options } = doctorFixture(unknownLegacyState);
+    options.threadId = TARGET;
+    options.connect = async () => ({ close() {}, async request(method) {
+      if (method === "thread/loaded/list") return { data: [] };
+      if (method === "thread/read") return { thread: { id: TARGET, status: { type: "idle" }, turns: [], historyMode: "paginated" } };
+      assert.equal(method, "thread/turns/list");
+      throw new RpcFailure("probe failed", { code, rpcCode });
+    } });
+    const result = await appServerDoctor(options);
+    assert.equal(result.ready, false);
+    assert.equal(result.compatibility.api_checks["thread/turns/list"], status);
+    assert.equal(result.runtime_compatibility.features.history_pagination.status, "unverified");
+    assert.equal(result.runtime_compatibility.features.history_pagination.source, "probe");
+  }
+});
+
+test("doctor reports an unsupported initialization probe in the common protocol", async () => {
+  const { options } = doctorFixture(unknownLegacyState);
+  options.connect = async () => { throw new RpcFailure("method not found", { code: "RPC_REJECTED", rpcCode: -32601 }); };
+  const result = await appServerDoctor(options);
+  assert.equal(result.ready, false);
+  assert.equal(result.compatibility.api_checks.initialize, "unsupported");
+  assert.equal(result.runtime_compatibility.protocol.status, "unsupported");
+  assert.equal(result.runtime_compatibility.protocol.source, "probe-unsupported");
+  assert.equal(result.runtime_compatibility.protocol.runtime, null);
+  assert.ok(Object.values(result.runtime_compatibility.operations).every(operation => operation.status === "unsupported"));
+  assert.ok(Object.values(result.runtime_compatibility.features).every(feature => feature.status === "unverified"));
 });
 
 test("startup uses the prepared path and rejects another runtime's distribution", { skip: process.platform !== "darwin" }, async () => {

@@ -10,7 +10,7 @@ export class DesktopSubscriptions {
     this.socket = socket;
     this.timeoutMs = timeoutMs;
     this.pending = new Map();
-    this.prefix = `codex-steer-subscribe-${randomUUID()}-`;
+    this.prefix = `codexteer-subscribe-${randomUUID()}-`;
     this.ready = false;
   }
 

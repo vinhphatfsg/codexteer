@@ -21,7 +21,7 @@ if (!input || ["--help", "-h"].includes(input)) {
     else throw new Error(`Unknown option: ${name}`);
   }
   if (!Number.isInteger(options.samples) || options.samples < 1 || options.samples > 1000 || !Number.isFinite(options.maxMs) || options.maxMs <= 0) throw new Error("Invalid sample count or threshold.");
-  const threadId = normalizeThreadId(input), run = promisify(execFile), cli = fileURLToPath(new URL("../bin/codex-steer.mjs", import.meta.url));
+  const threadId = normalizeThreadId(input), run = promisify(execFile), cli = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
   const measure = async extra => {
     const started = performance.now();
     const { stdout } = await run(process.execPath, [cli, "read", threadId, "--json", ...extra], { timeout: 30000, maxBuffer: 32 * 1024 * 1024 });

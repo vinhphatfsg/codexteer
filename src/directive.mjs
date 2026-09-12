@@ -16,7 +16,7 @@ export async function prepareDirective(threadId, body, options, id, storage = {}
   const observed = basedOn ? decodeCursor(basedOn, threadId) : null;
   const refs = await collectEvidence(evidence);
   const metadata = { source: source ?? "external", kind: kind ?? "review", evidence: refs, based_on: basedOn ?? null, supersedes: supersedes ?? null, retracts: retracts ?? null, expires_at: expiresAt ?? null, checkpoint_id: checkpoint ?? null };
-  const lines = [`[codex-steer ${id}]`, `送信者: ${metadata.source}`, `種類: ${kindLabels[metadata.kind]}`];
+  const lines = [`[codexteer ${id}]`, `送信者: ${metadata.source}`, `種類: ${kindLabels[metadata.kind]}`];
   for (const ref of refs) lines.push(`根拠: ${JSON.stringify(ref.ref)}${ref.sha256 ? ` (sha256:${ref.sha256})` : " (参照URL)"}`);
   if (observed) lines.push(`観測対象ターン: ${observed.active_turn_id ?? "停止中"}`);
   if (supersedes) lines.push(`置き換える指示: ${supersedes}。この指示を以後の方針として扱ってください。`);

@@ -6,7 +6,8 @@ import { claimRuntime } from "./runtime.mjs";
 import { connectSocket } from "./rpc.mjs";
 import { relay } from "./bridge.mjs";
 import { DesktopSubscriptions, serveSubscriptions } from "./subscription.mjs";
-import { VERSION, PACKAGE_NAME, RUNTIME_PROTOCOL } from "./version.mjs";
+import { VERSION, PACKAGE_NAME } from "./version.mjs";
+import { RUNTIME_PROTOCOL, RUNTIME_CAPABILITIES } from "./compatibility.mjs";
 import { describeDistribution } from "./distribution.mjs";
 
 export const BUNDLED_CLI = "/Applications/ChatGPT.app/Contents/Resources/codex";
@@ -92,6 +93,7 @@ export async function runWrapper(args, { executable = BUNDLED_CLI, env = process
   const lease = await claimRuntime(env.CODEX_HOME, {
     cli_version: cliVersion, node_path: process.execPath, node_version: process.versions.node,
     codex_steer_package: PACKAGE_NAME, codex_steer_version: VERSION, codex_steer_protocol: RUNTIME_PROTOCOL,
+    codex_steer_capabilities: RUNTIME_CAPABILITIES,
     distribution_sha256: distribution.sha256,
   });
   let child;

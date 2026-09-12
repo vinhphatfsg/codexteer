@@ -5,6 +5,6 @@ try {
   process.exitCode = await runWrapper(process.argv.slice(2));
 } catch (error) {
   // Protocol stdout is reserved exclusively for Desktop. Never print argv/env.
-  console.error(`codex-steer wrapper: ${error.message}`);
+  console.error(`codexteer wrapper: ${error.message}`);
   process.exitCode = 1;
 }

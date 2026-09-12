@@ -4,6 +4,7 @@ import { normalizeThreadId } from "./thread-id.mjs";
 import { digest, fetchThread } from "./observe.mjs";
 import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
 import { discoverRuntime } from "./runtime.mjs";
+import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 import { RpcClient } from "./rpc.mjs";
 import { prepareDirective } from "./directive.mjs";
 
@@ -82,7 +83,9 @@ export async function reconcileMessages(threadInput, id, options = {}, { discove
   const threadId = normalizeThreadId(threadInput);
   // Validate the local target before connecting.
   if (id) await getMessage(threadId, id, options);
-  const { paths } = await discover(); const client = await connect(paths.socket);
+  const { paths, state } = await discover();
+  assertRuntimeOperation(state, "history_check");
+  const client = compatibleClient(await connect(paths.socket), state);
   try {
     const thread = await fetchThread(client, threadId);
     return await withStoreLock(`message-${threadId}`, async () => {

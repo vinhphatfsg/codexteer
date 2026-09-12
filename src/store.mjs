@@ -4,6 +4,7 @@ import path from "node:path";
 import { codexHome, isAlive } from "./runtime.mjs";
 
 const valid = value => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,150}$/.test(value);
+// The persisted namespace predates the codexteer rename; keep existing records.
 export function storePath(bucket, id, home = codexHome()) {
   if (!valid(bucket) || (id != null && !valid(id))) throw new Error("Invalid local record identifier.");
   return path.join(home, "codex-steer", bucket, ...(id == null ? [] : [`${id}.json`]));
