@@ -10,6 +10,13 @@ import { fileURLToPath } from "node:url";
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 
+
+const withoutSession = text => text.replaceAll(/--supervisor '[0-9a-f-]{36}'/g, "--supervisor '<SESSION>'");
+
+function capturedAgent(output) {
+  const data = JSON.parse(output); data.args = data.args.map(withoutSession); return data;
+}
+
 function fixture(t) {
   const cwd = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cs-supervise-")));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
@@ -34,13 +41,14 @@ if (process.env.CS_SUPERVISE_TEST_WAIT) {
   process.exitCode = Number(process.env.CS_SUPERVISE_TEST_EXIT ?? 0);
 }
 `, { mode: 0o755 });
+  symlinkSync(path.join(bin, "claude"), path.join(bin, "codex"));
   return { cwd, env, encoding: "utf8", timeout: 10000 };
 }
 
-function prompt(options) {
-  const result = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID], options);
+function prompt(options, policy, agent = "claude") {
+  const result = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID, ...(policy === undefined ? [] : [policy]), "--agent", agent], options);
   assert.equal(result.status, 0, result.stderr);
-  return result.stdout.slice(0, -1);
+  return withoutSession(result.stdout.slice(0, -1));
 }
 
 test("supervise preserves forwarded argv and prompt boundaries, inherits cwd and all standard streams", t => {
@@ -49,10 +57,10 @@ test("supervise preserves forwarded argv and prompt boundaries, inherits cwd and
   const result = spawnSync(process.execPath, [BIN, "supervise", ID, "--agent", "claude", "--", ...forwarded], { ...options, input: "interactive input\n" });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, "agent stderr\n", "The CLI must not mix status output into agent streams");
-  assert.deepEqual(JSON.parse(result.stdout), { args: [...forwarded, "--", prompt(options)], cwd: options.cwd, input: "interactive input\n" });
+  assert.deepEqual(capturedAgent(result.stdout), { args: [...forwarded, "--", prompt(options)], cwd: options.cwd, input: "interactive input\n" });
   assert.equal(existsSync(path.join(options.cwd, "INJECTED")), false);
   assert.equal(existsSync(path.join(options.cwd, "INJECTED_TOO")), false);
-  assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["runtimes"], "The launcher places only its distribution and does not connect to Desktop");
+  assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["locks", "runtimes", "supervisors"], "The launcher saves its session without connecting to Desktop");
 });
 
 test("supervise uses the normalized target and propagates the agent's normal exit code", t => {
@@ -60,13 +68,43 @@ test("supervise uses the normalized target and propagates the agent's normal exi
   for (const exitCode of [0, 23]) {
     const result = spawnSync(process.execPath, [BIN, "supervise", "--agent", "claude", `codex://threads/${ID.toUpperCase()}?prompt=discard-me`], { ...options, env: { ...options.env, CS_SUPERVISE_TEST_EXIT: String(exitCode) } });
     assert.equal(result.status, exitCode);
-    assert.deepEqual(JSON.parse(result.stdout).args, ["--", expected]);
+    assert.deepEqual(capturedAgent(result.stdout).args, ["--", expected]);
   }
 });
 
-test("invalid IDs, missing or unsupported agent options, and misplaced flags never start an agent", t => {
+test("supervise defaults to Claude and accepts the same literal custom policy as prompt output", t => {
   const options = fixture(t);
-  for (const args of [[], [ID], [ID, "--agent"], ["invalid-id", "--agent", "claude"], [ID, "--agent", "codex"], [ID, "--agent", "/bin/sh"], [ID, "--agent", "claude", "--agent", "claude"], [ID, "--agent", "claude", "--model", "model"], [ID, "--", "--agent", "claude"]]) {
+  const policy = '  監視だけにしてください。\n"quoted" $(touch INJECTED) `touch INJECTED_TOO` {{threadId}} --json\n';
+  const forwarded = ["--model", "model with spaces", "--json", "--agent", "preserved"];
+  for (const message of [undefined, policy]) {
+    const expected = prompt(options, message);
+    for (const agent of [[], ["--agent", "claude"]]) {
+      const result = spawnSync(process.execPath, [BIN, "supervise", ID, ...(message === undefined ? [] : [message]), ...agent, "--", ...forwarded], { ...options, input: "interactive input\n" });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(capturedAgent(result.stdout), { args: [...forwarded, "--", expected], cwd: options.cwd, input: "interactive input\n" });
+    }
+  }
+  assert.equal(existsSync(path.join(options.cwd, "INJECTED")), false);
+  assert.equal(existsSync(path.join(options.cwd, "INJECTED_TOO")), false);
+});
+
+test("Codex CLI receives the selected policy and unchanged agent flags, with a stopped session after exit", t => {
+  const options = fixture(t), policy = "観測を続けて確認結果を報告してください。";
+  const expected = prompt(options, policy, "codex");
+  const forwarded = ["--model", "example-model", "--config", 'model_reasoning_effort="high"'];
+  const result = spawnSync(process.execPath, [BIN, "supervise", ID, policy, "--agent", "codex", "--", ...forwarded], { ...options, input: "input\n" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(capturedAgent(result.stdout), { args: [...forwarded, "--", expected], cwd: options.cwd, input: "input\n" });
+  assert.match(expected, /supervise register .* --owner codex/);
+  assert.match(expected, /--source codex --kind review/);
+  const status = spawnSync(process.execPath, [BIN, "supervise", "status", ID, "--json"], options);
+  assert.equal(JSON.parse(status.stdout).data.state, "stopped");
+  assert.equal(JSON.parse(status.stdout).data.owner, "codex");
+});
+
+test("invalid IDs, empty policies, unsupported agents and misplaced flags never start an agent", t => {
+  const options = fixture(t);
+  for (const args of [[], [ID, ""], [ID, " \t\n"], [ID, "policy", "extra"], [ID, "--agent"], ["invalid-id", "--agent", "claude"], [ID, "--agent", "gemini"], [ID, "--agent", "/bin/sh"], [ID, "--agent", "claude", "--agent", "claude"], [ID, "--agent", "claude", "--model", "model"], [ID, "--unexpected"]]) {
     const result = spawnSync(process.execPath, [BIN, "supervise", ...args], options);
     assert.equal(result.status, 1);
     assert.equal(result.stdout, "");

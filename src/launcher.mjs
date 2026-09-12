@@ -42,11 +42,12 @@ export async function appServerDoctor({ threadId: threadInput, versions = instal
   try {
     const { paths, state } = await discover();
     runtimeState = state; runtimePaths = paths;
+    if (state.native_observation_only) delete checks.bundled_wrapper_node;
     checks.runtime = true;
     serverVersion = state.cli_version;
     steerCompatibility = versionCompatibility(state);
     wrapperNodeVersion = state.node_version ?? null;
-    checks.bundled_wrapper_node = state.node_path === BUNDLED_NODE;
+    if (!state.native_observation_only) checks.bundled_wrapper_node = state.node_path === BUNDLED_NODE;
     assertRuntimeOperation(state, "read");
     method = "initialize";
     client = compatibleClient(await connect(paths.socket), state);
@@ -60,7 +61,7 @@ export async function appServerDoctor({ threadId: threadInput, versions = instal
     compatibility.api_checks[method] = "verified";
     checks.initialized = true;
     method = null;
-    if (!checks.bundled_wrapper_node) throw Object.assign(new Error("The running wrapper does not confirm Desktop's bundled Node runtime. App tools may fail code-signing authorization. Finish current tasks, quit Desktop, then run: codexteer desktop start"), { code: "WRAPPER_NODE_UNVERIFIED" });
+    if (!state.native_observation_only && !checks.bundled_wrapper_node) throw Object.assign(new Error("The running wrapper does not confirm Desktop's bundled Node runtime. App tools may fail code-signing authorization. Finish current tasks, quit Desktop, then run: codexteer desktop start"), { code: "WRAPPER_NODE_UNVERIFIED" });
     if (threadId) {
       const probe = { async request(name, ...args) { method = name; const result = await client.request(name, ...args); compatibility.api_checks[name] = "verified"; return result; } };
       const observation = await readOnClient(probe, threadId, { limit: 1, maxChars: 100 });
@@ -102,7 +103,7 @@ export async function appServerDoctor({ threadId: threadInput, versions = instal
     codex_steer_compatibility: steerCompatibility,
     runtime_compatibility: contracts, desktop_subscription: desktopSubscription,
     cli_version_status: !serverVersion || !versions.cli_version ? "unverified" : serverVersion === versions.cli_version ? "matched" : "mismatch",
-    connection: { status: connectionStatus }, compatibility, failure, checks, remediation };
+    connection: { status: connectionStatus, mode: runtimeState?.native_observation_only ? "desktop" : "shared", observation_only: !!runtimeState?.native_observation_only }, compatibility, failure, checks, remediation };
 }
 
 export function desktopLaunchArgs(home, wrapper) {

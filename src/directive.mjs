@@ -2,12 +2,14 @@ import { collectEvidence, verifyEvidence } from "./evidence.mjs";
 import { decodeCursor, threadSnapshot, fetchThread } from "./observe.mjs";
 import { getCheckpoint, verifyCheckpoint } from "./checkpoint.mjs";
 import { verifyPagedFreshness } from "./paged-read.mjs";
+import { assertFindingSend, getFinding } from "./findings.mjs";
 
 export const kindLabels = { decision: "ユーザー決定の伝達", review: "レビュー", hypothesis: "仮説（未確定）", suggestion: "任意提案" };
 
 export async function prepareDirective(threadId, body, options, id, storage = {}) {
-  const { source, kind, evidence = [], basedOn, supersedes, retracts, expiresAt, checkpoint } = options;
-  if (!source && !kind && !evidence.length && !basedOn && !supersedes && !retracts && !expiresAt && !checkpoint) return { wireText: body, metadata: null };
+  const { source, kind, evidence = [], basedOn, supersedes, retracts, expiresAt, checkpoint, finding, supervisor } = options;
+  if (!source && !kind && !evidence.length && !basedOn && !supersedes && !retracts && !expiresAt && !checkpoint && !finding && !supervisor) return { wireText: body, metadata: null };
+  const concern = finding ? await assertFindingSend(threadId, finding, storage) : null;
   if (checkpoint) await getCheckpoint(threadId, checkpoint, storage);
   if (supersedes && retracts) throw new Error("Use either supersedes or retracts, not both.");
   if (expiresAt && (!/(Z|[+-]\d{2}:\d{2})$/.test(expiresAt) || !Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now())) throw new Error("--expires-at must be a future ISO timestamp with timezone.");
@@ -15,7 +17,8 @@ export async function prepareDirective(threadId, body, options, id, storage = {}
   if (source != null && (!source.trim() || source.length > 80 || /[\r\n\x00-\x1f]/.test(source))) throw new Error("--source must be a non-empty single line (up to 80 characters).");
   const observed = basedOn ? decodeCursor(basedOn, threadId) : null;
   const refs = await collectEvidence(evidence);
-  const metadata = { source: source ?? "external", kind: kind ?? "review", evidence: refs, based_on: basedOn ?? null, supersedes: supersedes ?? null, retracts: retracts ?? null, expires_at: expiresAt ?? null, checkpoint_id: checkpoint ?? null };
+  const metadata = { source: source ?? "external", kind: kind ?? "review", evidence: refs, based_on: basedOn ?? null, supersedes: supersedes ?? null, retracts: retracts ?? null, expires_at: expiresAt ?? null, checkpoint_id: checkpoint ?? null,
+    ...(concern ? { finding_id: concern.id, finding_revision: concern.revision } : {}), ...(supervisor ? { supervisor_id: supervisor } : {}) };
   const lines = [`[codexteer ${id}]`, `送信者: ${metadata.source}`, `種類: ${kindLabels[metadata.kind]}`];
   for (const ref of refs) lines.push(`根拠: ${JSON.stringify(ref.ref)}${ref.sha256 ? ` (sha256:${ref.sha256})` : " (参照URL)"}`);
   if (observed) lines.push(`観測対象ターン: ${observed.active_turn_id ?? "停止中"}`);
@@ -23,6 +26,7 @@ export async function prepareDirective(threadId, body, options, id, storage = {}
   if (retracts) lines.push(`撤回する指示: ${retracts}。以後の方針から除外してください。`);
   if (expiresAt) lines.push(`有効期限: ${expiresAt}`);
   if (checkpoint) lines.push(`検証チェックポイント: ${checkpoint}`);
+  if (concern) lines.push(`指摘: ${concern.id} (revision ${concern.revision})`, `解決条件: ${JSON.stringify(concern.condition)}`);
   return { metadata, wireText: lines.join("\n") + "\n\n" + body, async beforeSend(thread, client) {
     if (expiresAt && Date.parse(expiresAt) <= Date.now()) throw Object.assign(new Error("Directive expired before sending."), { code: "EXPIRED_DIRECTIVE" });
     if (observed) {
@@ -35,5 +39,10 @@ export async function prepareDirective(threadId, body, options, id, storage = {}
     }
     await verifyEvidence(refs);
     if (checkpoint && !(await verifyCheckpoint(threadId, checkpoint, storage)).valid) throw Object.assign(new Error("Checkpoint is no longer valid. Verify the inputs and results before sending."), { code: "STALE_CHECKPOINT" });
+    if (concern) {
+      const current = await getFinding(threadId, concern.id, storage);
+      if (current.revision !== concern.revision || current.disposition !== "open") throw Object.assign(new Error("The finding changed before sending. Reassess it before intervening."), { code: "STALE_FINDING" });
+      await verifyEvidence(concern.evidence);
+    }
   } };
 }

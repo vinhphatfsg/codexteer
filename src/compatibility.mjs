@@ -63,6 +63,9 @@ export function runtimeCompatibility(state, { verifiedMethods = [], unsupportedM
       }
     }
     const probes = name === "thread_read" ? ["thread/read"] : name === "history_pagination" ? ["thread/turns/list", "thread/items/list"] : [];
+    if (state?.native_observation_only && ["turn_steer", "turn_start", "desktop_subscribe"].includes(name)) {
+      status = "unsupported"; source = "observation-only"; versions = [];
+    }
     if (source === "probe" && probes.length) {
       // One missing required API disproves support even if another probe succeeded.
       if (probes.some(method => unsupportedMethods.includes(method))) {
