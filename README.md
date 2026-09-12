@@ -31,7 +31,7 @@ npx -y codexteer doctor --json
 不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。次は`0.14.1`を選ぶ例です。
 
 ```bash
-npx -y codexteer@0.14.1 supervise <thread-id> --agent claude
+npx -y codexteer@0.14.1 supervise <thread-id>
 ```
 
 </details>
@@ -86,13 +86,23 @@ codexteer doctor --json
 
 ```bash
 # npxで起動する場合
-npx -y codexteer supervise <thread-id> --agent claude
+npx -y codexteer supervise <thread-id>
 
 # ソースから導入した場合
-codexteer supervise <thread-id> --agent claude
+codexteer supervise <thread-id>
 ```
 
 対象IDを埋め込んだ監督プロンプトでClaudeを[対話起動](https://code.claude.com/docs/en/cli-reference#cli-commands)します。端末の標準入出力をそのまま使い、起動後もClaudeへ追加の指示を入力できます。
+
+監督方針を変える場合は、対象IDの後ろにメッセージを一つの引数として渡します。npx経由でも同じ書式です。
+
+```bash
+codexteer supervise <thread-id> "セキュリティの問題だけを私へ報告し、Codexへは送信しないでください。"
+```
+
+本文は、必須の共通テンプレートと監督方針を組み合わせて生成します。メッセージを省略すると、ユーザーの目的・制約の範囲で必要最小限の介入と結果確認を行い、簡潔に報告する標準方針を使います。指定すると、その標準方針全体を指定文に置き換えます。対象ID、CLIの実行コマンド、`help`・`read`・`watch`の操作、送信時の確認、停止手順はどちらにも含まれます。監視だけを指定した場合は、送信例を介入の許可として扱わないよう指示します。
+
+上書きは今回の生成・起動だけに適用し、次回の既定設定や保存したCLIには書き込みません。改行・空白・プレースホルダーに見える文字も指定文のまま本文に含めます。空文字・空白だけのメッセージはエラーです。呼び出し元のシェルで一つの引数として引用してください。`$`やバッククォートを文字として含めるときは、シェルが展開しない引用方法を使ってください。
 
 両方とも、起動したCLI本体と依存を`CODEX_HOME/codex-steer/runtimes/<version>-<sha256>`へ検証して保存し、そのコピーへの実行コマンドを監督プロンプトに埋め込みます。監督役に渡す切り替えオプションは不要です。npxのキャッシュが新版に更新された場合や、ソース導入先を`git pull`・削除した場合も、開始済みの監督は保存した内容を使い続けます。
 
@@ -105,7 +115,8 @@ Node本体はコピーせず、開始時の実体への絶対パスとNodeバー
 モデルなどClaude側の起動引数は、`--`の後ろへ渡します。
 
 ```bash
-codexteer supervise <thread-id> --agent claude -- --model <model> --effort <level>
+codexteer supervise <thread-id> -- --model <model> --effort <level>
+codexteer supervise <thread-id> "テスト失敗を優先して監督してください。" -- --model <model>
 ```
 
 同じPCで既にClaudeを起動している場合は、監督役（オーケストレーター）向けのプロンプトを出力し、そのセッションに貼り付けても使えます。
@@ -116,17 +127,20 @@ npx -y codexteer supervise prompt <thread-id>
 
 # ソースから導入した場合
 codexteer supervise prompt <thread-id>
+
+# 同じ監督方針で本文だけを生成する場合
+codexteer supervise prompt <thread-id> "セキュリティの問題だけを私へ報告し、Codexへは送信しないでください。"
 ```
 
-直接起動と本文だけの出力は、同じ保存・検証・生成処理を使います。`supervise prompt`もCLI一式を保存してから本文を出力します。監督手順は`codexteer help monitor`と共通で、生成プロンプト中の`doctor`・`read`・`watch`・`send`等の例には同じ実行コマンドを使います。監督役には、ヘルプ中の`codexteer`表記も指定された実行コマンドに置き換えるよう指示します。
+直接起動と本文だけの出力は、同じ保存・検証・生成処理を使います。`supervise prompt`もCLI一式を保存してから本文を出力します。共通テンプレートの操作手順は`codexteer help monitor`と同じで、ヘルプを読んでも上書き前の標準方針は追加されません。生成プロンプト中の`doctor`・`read`・`watch`・`send`等の例には同じ実行コマンドを使います。監督役には、ヘルプ中の`codexteer`表記も指定された実行コマンドに置き換えるよう指示します。
 
 1. 接続を診断し、対象タスクの最新の依頼・制約・進捗、有効な指示と対応待ちの履歴を確認する。
 2. 差分を読み切ったcursorから観測を続ける。[Monitorツール](https://code.claude.com/docs/en/tools-reference#monitor-tool)が使えれば`watch --stream`、使えなければ短い`watch`を繰り返す。接続状態の通知を読み、復帰待ちの間は介入を控える。
-3. 過剰設計・スコープ逸脱・より小さな修正の余地を判断し、必要なら最新の差分を読み切ってから`send --based-on`で介入する。同じ指摘が対応中なら結果を待つ。
+3. 選択した監督方針に従って観測する。方針で送信が許され、介入する場合は`help send`を確認し、最新の差分を読み切ってから`send --based-on`を使う。同じ指摘が対応中なら結果を待つ。
 4. 送信したmessage_idを保持し、受付・対応報告・検証結果を区別して追う。`unknown`は`history check`で照合し、自動再送しない。
-5. 介入内容・確認結果・未確認事項を短く報告する。停止指示を受けたら、自分のMonitor/watchと追加送信を止める。
+5. 選択した監督方針に従って報告する。停止指示を受けたら、自分のMonitor/watchと追加送信を止める。
 
-このプロンプトは、ユーザーの最新の目的・制約の範囲内で監督と介入を委任します。その範囲の介入に毎回の確認は不要です。目的・制約が不明な場合や要件自体を変える必要がある場合は確認します。監督の委任だけで停止中タスクを再開したり、承認・質問へ代理回答したりはしません。単発送信では、ユーザーが指定した宛先・内容を使います。
+標準方針は、ユーザーの最新の目的・制約の範囲内で監督と介入を委任します。その範囲の介入に毎回の確認は不要です。上書き時の観測の観点・介入の判断基準・報告方法は指定文に従います。どちらの場合も、目的・制約が不明な場合や要件自体を変える必要がある場合は確認します。監督の委任だけで停止中タスクを再開したり、承認・質問へ代理回答したりはしません。単発送信では、ユーザーが指定した宛先・内容を使います。
 
 停止するときは、同じClaudeセッションで「監視とステアリングを停止して」と伝えてください。Codexの作業自体は継続します。監督はCLIとOSの既存の権限設定に従います。
 
@@ -177,7 +191,7 @@ codexteer watch <thread-id> --stream --json
 
 以下は用途別のコマンド一覧です。`<...>`は実際の値に置き換えてください。`<cursor>`は`read`・`status`・`watch`の結果、`<message-id>`は`send`・`history list`、`<checkpoint-id>`は`checkpoint capture`・`checkpoint list`、`<token>`は`resource acquire`の結果から取得します。
 
-対話起動の`supervise <thread-id> --agent claude`を除き、各コマンドに`--json`を付けるとJSONで結果を返します。`supervise prompt`もJSONに対応します。別コマンドを実行する`run`や監督役の起動では、codexteer側のオプションを区切りの`--`より前に置いてください。
+対話起動の`supervise <thread-id> [MESSAGE]`を除き、各コマンドに`--json`を付けるとJSONで結果を返します。`supervise prompt`もJSONに対応します。別コマンドを実行する`run`や監督役の起動では、codexteer側のオプションを区切りの`--`より前に置いてください。
 
 #### ヘルプ・バージョン
 
@@ -202,18 +216,19 @@ codexteer --version
 #### 監督役の起動
 
 ```bash
-codexteer supervise <thread-id> --agent claude
-codexteer supervise <thread-id> --agent claude -- --model <model> --effort <level>
+codexteer supervise <thread-id>
+codexteer supervise <thread-id> "監督方針を指定するメッセージ"
+codexteer supervise <thread-id> "監督方針を指定するメッセージ" --agent claude -- --model <model> --effort <level>
 codexteer help supervise
 ```
 
-`--agent`は必須で、現在の対応値は`claude`です。PATH上の実行ファイルを、現在の作業ディレクトリ・環境変数・標準入力・標準出力・標準エラーを引き継いで起動します。シェルのaliasやfunctionは使いません。
+`--agent`を省略すると`claude`を使います。明示的な`--agent claude`も使え、現在の対応値は`claude`だけです。PATH上の実行ファイルを、現在の作業ディレクトリ・環境変数・標準入力・標準出力・標準エラーを引き継いで起動します。シェルのaliasやfunctionは使いません。
 
-最初の`--`以降は対象エージェントの引数です。順序・空文字・空白・改行を保ち、codexteer側では解釈もシェルでの再展開もしません。例えば区切り後の`--help`・`--version`・`--json`もClaudeへ渡します。呼び出し元のシェルで必要な引用は付けてください。
+最初の`--`以降は対象エージェントの引数です。上書きメッセージはその前に置きます。順序・空文字・空白・改行を保ち、codexteer側では解釈もシェルでの再展開もしません。例えば区切り後の`--help`・`--version`・`--json`もClaudeへ渡します。呼び出し元のシェルで必要な引用は付けてください。
 
 追加引数の後ろには、Claude側の区切り`--`と、`supervise prompt`と同じ生成処理による監督プロンプトを一つの引数として付加します。追加引数の意味や組み合わせの妥当性はClaudeが判断します。
 
-不正なID形式、`--agent`の不足・未対応値、区切り前の未知の引数では起動しません。Claudeが未導入・実行不可などの起動失敗は標準エラーに理由を表示し、終了コード1です。Desktopの接続と対象タスクの存在は、起動した監督役が最初に確認します。
+不正なID形式、空のメッセージ、`--agent`の値不足・未対応値、区切り前の未知・過剰な引数では起動しません。Claudeが未導入・実行不可などの起動失敗は標準エラーに理由を表示し、終了コード1です。Desktopの接続と対象タスクの存在は、起動した監督役が最初に確認します。
 
 通常終了ではClaudeの終了コードを返します。`SIGINT`・`SIGTERM`・`SIGHUP`は起動したClaudeへ転送し、シグナル終了時は`128 + シグナル番号`を返します。対話出力を引き継ぐため、この起動形式では`--json`は非対応です。ヘルプは`help supervise --json`、本文だけの取得は`supervise prompt <thread-id> --json`を使ってください。
 
@@ -225,6 +240,9 @@ codexteer supervise prompt <thread-id>
 
 # タスクURLからも生成可能
 codexteer supervise prompt codex://threads/<thread-id>
+
+# 標準の監督方針を置き換えて本文を生成
+codexteer supervise prompt <thread-id> "監督方針を指定するメッセージ"
 
 # JSONで対象IDと本文を取得
 codexteer supervise prompt <thread-id> --json
@@ -259,7 +277,7 @@ codexteer help supervise prompt
 }
 ```
 
-IDが不正な場合や引数が不足・過剰な場合は終了コード1です。通常は標準エラーへ理由を出し、本文は出力しません。`--json`では標準出力に`{"ok":false,"error":{"message":"理由"}}`を返します。起動に使う本文の生成には`--json`を付けないでください。
+IDが不正な場合、引数が不足・過剰な場合、メッセージが空文字・空白だけの場合は終了コード1です。通常は標準エラーへ理由を出し、本文は出力しません。`--json`では標準出力に`{"ok":false,"error":{"message":"理由"}}`を返します。空のメッセージでは`error.code`に`INVALID_SUPERVISION_POLICY`も返します。起動に使う本文の生成には`--json`を付けないでください。
 
 Codex CLIでも、`steer_prompt=$(codexteer supervise prompt <thread-id>) && codex "$steer_prompt"`のように初期プロンプトを渡せます。生成プロンプトには、Monitorが使えない場合の短い`watch`による手順と、監督AI自身の送信元名を使う案内を含みます。
 

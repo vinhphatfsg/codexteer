@@ -37,8 +37,8 @@ if (process.env.CS_SUPERVISE_TEST_WAIT) {
   return { cwd, env, encoding: "utf8", timeout: 10000 };
 }
 
-function prompt(options) {
-  const result = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID], options);
+function prompt(options, policy) {
+  const result = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID, ...(policy === undefined ? [] : [policy])], options);
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.slice(0, -1);
 }
@@ -64,9 +64,25 @@ test("supervise uses the normalized target and propagates the agent's normal exi
   }
 });
 
-test("invalid IDs, missing or unsupported agent options, and misplaced flags never start an agent", t => {
+test("supervise defaults to Claude and accepts the same literal custom policy as prompt output", t => {
   const options = fixture(t);
-  for (const args of [[], [ID], [ID, "--agent"], ["invalid-id", "--agent", "claude"], [ID, "--agent", "codex"], [ID, "--agent", "/bin/sh"], [ID, "--agent", "claude", "--agent", "claude"], [ID, "--agent", "claude", "--model", "model"], [ID, "--", "--agent", "claude"]]) {
+  const policy = '  監視だけにしてください。\n"quoted" $(touch INJECTED) `touch INJECTED_TOO` {{threadId}} --json\n';
+  const forwarded = ["--model", "model with spaces", "--json", "--agent", "preserved"];
+  for (const message of [undefined, policy]) {
+    const expected = prompt(options, message);
+    for (const agent of [[], ["--agent", "claude"]]) {
+      const result = spawnSync(process.execPath, [BIN, "supervise", ID, ...(message === undefined ? [] : [message]), ...agent, "--", ...forwarded], { ...options, input: "interactive input\n" });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), { args: [...forwarded, "--", expected], cwd: options.cwd, input: "interactive input\n" });
+    }
+  }
+  assert.equal(existsSync(path.join(options.cwd, "INJECTED")), false);
+  assert.equal(existsSync(path.join(options.cwd, "INJECTED_TOO")), false);
+});
+
+test("invalid IDs, empty policies, unsupported agents and misplaced flags never start an agent", t => {
+  const options = fixture(t);
+  for (const args of [[], [ID, ""], [ID, " \t\n"], [ID, "policy", "extra"], [ID, "--agent"], ["invalid-id", "--agent", "claude"], [ID, "--agent", "codex"], [ID, "--agent", "/bin/sh"], [ID, "--agent", "claude", "--agent", "claude"], [ID, "--agent", "claude", "--model", "model"], [ID, "--unexpected"]]) {
     const result = spawnSync(process.execPath, [BIN, "supervise", ...args], options);
     assert.equal(result.status, 1);
     assert.equal(result.stdout, "");

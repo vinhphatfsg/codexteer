@@ -105,8 +105,8 @@ export async function main(argv) {
     let command = args.shift();
     if (command === "supervise" && args[0] === "prompt") {
       args.shift();
-      if (args.length !== 1) throw new Error("Expected: supervise prompt <THREAD>. See codexteer help supervise prompt.");
-      const data = await prepareSupervisorPrompt(args[0]);
+      if (args.length < 1 || args.length > 2 || args.some(arg => arg.startsWith("--"))) throw new Error("Expected: supervise prompt <THREAD> [MESSAGE]. See codexteer help supervise prompt.");
+      const data = await prepareSupervisorPrompt(args[0], args[1]);
       success("supervise.prompt", data, json);
       if (!json) console.log(data.prompt);
       return;
@@ -116,9 +116,9 @@ export async function main(argv) {
       const separator = args.indexOf("--");
       const ownArgs = separator < 0 ? args : args.slice(0, separator);
       const agentArgs = separator < 0 ? [] : args.slice(separator + 1);
-      const agent = takeOption(ownArgs, "--agent", undefined);
-      if (ownArgs.length !== 1 || !agent) throw new Error("Expected: supervise <THREAD> --agent claude [-- <AGENT-ARGS...>].");
-      process.exitCode = await superviseAgent(ownArgs[0], { agent, agentArgs });
+      const agent = takeOption(ownArgs, "--agent", "claude");
+      if (ownArgs.length < 1 || ownArgs.length > 2 || ownArgs.some(arg => arg.startsWith("--"))) throw new Error("Expected: supervise <THREAD> [MESSAGE] [--agent claude] [-- <AGENT-ARGS...>].");
+      process.exitCode = await superviseAgent(ownArgs[0], { agent, agentArgs, policy: ownArgs[1] });
       return;
     }
     if (command === "resource") {

@@ -106,7 +106,7 @@ test("command help explains purpose, results and examples without contacting Des
   for (const args of [["--help"], ["supervise", "prompt", "--help"]]) {
     const help = spawnSync(process.execPath, ["bin/codexteer.mjs", ...args], { encoding: "utf8" });
     assert.equal(help.status, 0);
-    assert.match(help.stdout, /codexteer supervise prompt <THREAD> \[--json\]/);
+    assert.match(help.stdout, /codexteer supervise prompt <THREAD> \[MESSAGE\] \[--json\]/);
     assert.doesNotMatch(help.stdout, /codexteer prompt <THREAD>/);
   }
 });

@@ -10,8 +10,10 @@
 ```text
 npx -y codexteer desktop start
 npx -y codexteer doctor --thread <thread-id> --json
-npx -y codexteer supervise <thread-id> --agent claude
+npx -y codexteer supervise <thread-id>
+npx -y codexteer supervise <thread-id> "監督方針を指定するメッセージ"
 npx -y codexteer supervise prompt <thread-id>
+npx -y codexteer supervise prompt <thread-id> "監督方針を指定するメッセージ"
 npx -y codexteer read <thread-id> --json
 npx -y codexteer send <thread-id> "message" --json
 ```
@@ -24,6 +26,10 @@ CLIはDesktopを自動終了しません。
 ## 監督役が使うCLI
 
 `0.14.1`以降の`supervise`と`supervise prompt`は、開始時のCLI本体と依存を内容ハッシュ別の永続配置へコピーし、その保存先を使う実行コマンドを本文に埋め込みます。npxで取得したパッケージもソースのチェックアウトも、同じ保存・検証・生成処理を使います。起動経路を推測する環境変数や切り替えオプションは不要です。本文の生成処理自体も保存したCLI一式から読み込みます。
+
+両形式で対象IDの後ろに任意の`MESSAGE`を一つの引数として渡せます。省略時は保存したCLIの標準方針を使い、指定時は標準方針全体をその文に置き換えます。必須の共通テンプレートは保存したCLIから常に生成し、対象・実行コマンド・操作時の確認を保ちます。指定文は生成・起動ごとの入力で、永続配置のファイルやマニフェストへ書き込まず、内容ハッシュにも含めません。同じCLIなら異なる方針でも保存先を検証して再利用します。空文字・空白だけの文は保存処理前に`INVALID_SUPERVISION_POLICY`で拒否します。本文の文字列はテンプレートやシェルとして評価しません。
+
+直接起動の`supervise`はClaudeを既定にし、`--agent claude`の明示も受け付けます。監督方針は最初の`--`より前、Claude側の起動引数はその後ろへ置いてください。
 
 監督役の`doctor`・`read`・`watch`・`send`等はこのコピーを使います。パスはシェル引数として引用し、空白・引用符・コマンド置換に見える文字も文字列として扱います。本文に埋め込むパスに改行や制御文字があれば、`SUPERVISION_PATH_UNSAFE`で拒否します。ヘルプの`codexteer`表記も、監督役には指定された実行コマンドに置き換えるよう指示します。
 

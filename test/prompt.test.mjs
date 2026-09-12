@@ -68,6 +68,31 @@ test("JSON prompt output preserves the text as one field with the standard CLI e
   }
 });
 
+test("a custom policy replaces the default policy while retaining the shared template and saved invocation", t => {
+  const options = fixture(t);
+  const policy = "  セキュリティの問題だけを私へ報告し、Codexへは送信しないでください。\n{{threadId}} ${command} --help --json は本文のまま保持。  ";
+  function prepare(message) {
+    const result = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID, ...message, "--json"], options);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    return JSON.parse(result.stdout).data;
+  }
+  const standard = prepare([]), custom = prepare([policy]);
+  const marker = "\n\n■ 監督方針\n";
+  assert.ok(standard.prompt.includes(marker));
+  assert.ok(custom.prompt.endsWith(marker + policy), "Custom policy must remain a single unchanged text section");
+  assert.equal(custom.prompt.slice(0, -marker.length - policy.length), standard.prompt.split(marker)[0]);
+  assert.match(standard.prompt.split(marker)[1], /不要な抽象化・汎用化/);
+  assert.doesNotMatch(custom.prompt, /不要な抽象化・汎用化|変化のない定期報告は控え/);
+  assert.equal(custom.deployment.directory, standard.deployment.directory, "Policy must not create another executable distribution");
+  assert.equal(custom.deployment.reused, true);
+  assert.equal(versionCommand(custom.prompt), versionCommand(standard.prompt));
+  const after = prepare([]);
+  assert.equal(after.prompt, standard.prompt, "An override must not persist into the next invocation");
+  const help = spawnSync(process.execPath, [BIN, "help", "monitor"], options);
+  assert.equal(help.status, 0, help.stderr);
+  assert.doesNotMatch(help.stdout, /不要な抽象化・汎用化|変化のない定期報告は控え/);
+});
+
 test("generated commands use the saved CLI despite missing or shadowed PATH commands", t => {
   const options = fixture(t);
   const poison = path.join(options.cwd, "poison"); mkdirSync(poison);
@@ -237,7 +262,7 @@ test("help remains read-only and does not place a supervision distribution", t =
 
 test("invalid prompt arguments fail without producing a partial prompt or touching state", t => {
   const options = fixture(t);
-  for (const args of [[], ["invalid-id"], [ID, "extra"], [ID, "--unexpected"], [`codex://other/${ID}`], [`${ID}; echo injected`]]) {
+  for (const args of [[], ["invalid-id"], [ID, "policy", "extra"], [ID, ""], [ID, " \t\n"], [ID, "--unexpected"], [`codex://other/${ID}`], [`${ID}; echo injected`]]) {
     const plain = spawnSync(process.execPath, [BIN, "supervise", "prompt", ...args], options);
     assert.equal(plain.status, 1);
     assert.equal(plain.stdout, "");

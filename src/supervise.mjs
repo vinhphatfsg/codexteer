@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { prepareDeployment } from "./distribution.mjs";
 import { normalizeThreadId } from "./thread-id.mjs";
 import { codexHome } from "./runtime.mjs";
+import { validateSupervisionPolicy } from "./prompt.mjs";
 
 function shellArgument(value) {
   if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(value)) {
@@ -15,8 +16,9 @@ function shellArgument(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export async function prepareSupervisorPrompt(threadInput) {
+export async function prepareSupervisorPrompt(threadInput, policy) {
   const threadId = normalizeThreadId(threadInput);
+  validateSupervisionPolicy(policy);
   const node = { path: await realpath(process.execPath), version: process.version };
   const home = codexHome();
   shellArgument(node.path); shellArgument(home);
@@ -26,16 +28,16 @@ export async function prepareSupervisorPrompt(threadInput) {
   // Render with the saved distribution's implementation as well as its CLI.
   // An update to the source/cache after placement cannot mix prompt and code.
   const { supervisorPrompt } = await import(pathToFileURL(path.join(deployment.directory, "src/prompt.mjs")).href);
-  return { ...supervisorPrompt(threadId, command), deployment, node };
+  return { ...supervisorPrompt(threadId, command, policy), deployment, node };
 }
 
 function launchFailure(agent, error) {
   return Object.assign(new Error(`Could not start ${agent} (${error.code ?? "START_FAILED"}). Check that it is installed and executable on PATH.`), { code: error.code ?? "START_FAILED" });
 }
 
-export async function superviseAgent(threadInput, { agent, agentArgs = [] } = {}) {
-  if (agent !== "claude") throw new Error("supervise requires --agent claude. See codexteer help supervise.");
-  const { prompt } = await prepareSupervisorPrompt(threadInput);
+export async function superviseAgent(threadInput, { agent = "claude", agentArgs = [], policy } = {}) {
+  if (agent !== "claude") throw new Error("supervise supports only the claude agent. See codexteer help supervise.");
+  const { prompt } = await prepareSupervisorPrompt(threadInput, policy);
 
   let child;
   try {
