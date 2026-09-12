@@ -136,6 +136,8 @@ runtimeには製品名・版、共通の通信仕様 `codex_steer_protocol`、�
 
 `ready`は従来どおり接続条件と指定された観測の結果です。送信だけ未対応でも観測可能ならreadyになります。観測APIの検証結果は`compatibility.api_checks`、送信・画面表示・承認往復の未検証範囲は`unverified_features`を参照してください。新規ターン用ソケットは`desktop_subscription`で別に検査し、欠落・権限異常は`operations.send_new_turn`だけに反映します（異常なら`failed`）。
 
+APIの検証中に`CAPABILITY_UNVERIFIED`または`RUNTIME_PROTOCOL_UNVERIFIED`で呼び出し前に停止した場合、`compatibility.status`と該当する`api_checks`は`unverified`です。`ready`は`false`となり、停止理由とメソッドを`failure`に残します。明示的なAPI非対応は`unsupported`、不正な応答など実際の検証失敗は`failed`として区別します。
+
 送信ではDesktopへの再開要求と実際の送信直前にも必要な仕様とruntimeの同一性を確認します。`--based-on`等の安全確認も再開前と送信直前に検証し、必要なAPIが使えないままタスクを再開しません。切り替わっていれば`RUNTIME_CHANGED`で拒否します。新規ターン用ソケットも使用前に所有者・権限・種類を再検査します。不明な受付結果の自動再送はしません。`help`・`supervise prompt`・ローカル履歴一覧・`--dry-run`はruntimeの版に依存しません。
 
 ## 公開前の検証

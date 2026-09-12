@@ -121,22 +121,58 @@ test("doctor verifies the requested observation path without returning task cont
   assert.equal(calls.length, 3);
 });
 
-test("doctor distinguishes unsupported APIs, invalid responses and unavailable transport", async () => {
-  for (const mode of ["unsupported", "invalid", "offline"]) {
+test("doctor distinguishes unsupported APIs, invalid responses, safety stops and unavailable transport", async () => {
+  for (const [mode, code, status] of [
+    ["unsupported", "RPC_REJECTED", "unsupported"],
+    ["invalid", "PROTOCOL_ERROR", "failed"],
+    ["offline", "CONNECTION_FAILED", "unverified"],
+    ["safety-stop", "CAPABILITY_UNVERIFIED", "unverified"],
+    ["safety-stop", "RUNTIME_PROTOCOL_UNVERIFIED", "unverified"],
+  ]) {
     const { options } = doctorFixture({ node_path: BUNDLED_NODE });
     options.threadId = TARGET;
     options.connect = async () => ({ close() {}, async request(method) {
       if (method === "thread/loaded/list") return { data: [] };
       if (mode === "unsupported") throw new RpcFailure("method not found", { code: "RPC_REJECTED", rpcCode: -32601 });
       if (mode === "offline") throw new RpcFailure("offline");
+      if (mode === "safety-stop") throw Object.assign(new Error("Cannot verify the required contract."), { code });
       return { thread: { id: "wrong-task", turns: [] } };
     } });
     const result = await appServerDoctor(options);
     assert.equal(result.ready, false);
-    assert.equal(result.compatibility.status, mode === "offline" ? "unverified" : mode === "unsupported" ? "unsupported" : "failed");
-    assert.equal(result.failure.code, mode === "offline" ? "CONNECTION_FAILED" : mode === "unsupported" ? "RPC_REJECTED" : "PROTOCOL_ERROR");
+    assert.equal(result.compatibility.status, status, code);
+    assert.equal(result.compatibility.api_checks["thread/read"], status, code);
+    assert.equal(result.failure.code, code);
     assert.equal(result.connection.status, mode === "offline" ? "unavailable" : "connected");
     assert.equal(result.checks.observation, false);
+  }
+});
+
+test("doctor preserves local pagination guard results without calling the blocked API", async () => {
+  for (const [versions, status, code] of [
+    [null, "unverified", "CAPABILITY_UNVERIFIED"],
+    [[], "unsupported", "CAPABILITY_UNSUPPORTED"],
+  ]) {
+    const { options, calls } = doctorFixture({ node_path: BUNDLED_NODE, codex_steer_capabilities: { ...RUNTIME_CAPABILITIES, history_pagination: versions } });
+    options.threadId = TARGET;
+    options.connect = async () => ({ close() { calls.push("close"); }, async request(method) {
+      calls.push(method);
+      if (method === "thread/loaded/list") return { data: [TARGET] };
+      assert.equal(method, "thread/read", "the pagination guard must stop before the runtime call");
+      return { thread: { id: TARGET, status: { type: "idle" }, turns: [], historyMode: "paginated" } };
+    } });
+    const result = await appServerDoctor(options);
+    assert.equal(result.ready, false);
+    assert.equal(result.checks.observation, false);
+    assert.equal(result.connection.status, "connected");
+    assert.equal(result.compatibility.status, status);
+    assert.deepEqual(result.compatibility.api_checks, {
+      initialize: "verified", "thread/loaded/list": "verified", "thread/read": "verified",
+      "thread/turns/list": status, "thread/items/list": "unverified",
+    });
+    assert.equal(result.runtime_compatibility.features.history_pagination.status, status);
+    assert.deepEqual(result.failure, { code, rpc_code: null, method: "thread/turns/list", capability: "history_pagination" });
+    assert.deepEqual(calls, ["thread/loaded/list", "thread/read", "close"]);
   }
 });
 

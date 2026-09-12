@@ -73,7 +73,12 @@ export async function appServerDoctor({ threadId: threadInput, versions = instal
     failure = { code: error.code ?? "DIAGNOSTIC_FAILED", rpc_code: error.rpcCode ?? null, method, ...(error.capability ? { capability: error.capability } : {}) };
     const unavailable = ["CONNECTION_FAILED", "TIMEOUT", "RUNTIME_UNAVAILABLE", "RUNTIME_NOT_READY"].includes(error.code);
     if (method && !unavailable) {
-      compatibility.status = error.rpcCode === -32601 || error.code === "CAPABILITY_UNSUPPORTED" ? "unsupported" : "failed";
+      if (["CAPABILITY_UNVERIFIED", "RUNTIME_PROTOCOL_UNVERIFIED"].includes(error.code)) {
+        // The client stopped before calling the runtime, so there is no API result to classify.
+        compatibility.status = "unverified";
+      } else {
+        compatibility.status = error.rpcCode === -32601 || error.code === "CAPABILITY_UNSUPPORTED" ? "unsupported" : "failed";
+      }
       compatibility.api_checks[method] = compatibility.status;
     }
     if (unavailable) connectionStatus = "unavailable";
