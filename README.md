@@ -73,8 +73,11 @@ IDのコピーを省く場合は、Claudeに`codex-steer threads list --desktop-
 # 最近のタスクを表示
 codex-steer threads list --desktop-only --limit 20 --json
 
-# 実行中のタスクに追加入力
+# 実行中のタスクに追加入力（受付成功時に「プルッ」の通知音）
 codex-steer send <thread-id> "失敗したテストの原因を先に確認してください"
+
+# 今回だけ通知音を鳴らさずに送信
+codex-steer send <thread-id> "失敗したテストの原因を先に確認してください" --no-sound
 
 # 停止中のタスクを再開
 codex-steer send <thread-id> "続きをお願いします" --new-turn
@@ -182,6 +185,8 @@ codex-steer send <thread-id> -- '--new-turn の処理を確認してください
 | --- | --- |
 | `--new-turn` | 停止中のタスクを再開。実行中は拒否します。 |
 | `--dry-run` | 接続・送信せず、送信内容をプレビュー。 |
+| `--no-sound` | 今回の送信を消音。既定は受付成功時に「プルッ」の通知音。 |
+| `--sound` | 音ありを明示する互換オプション。`app-server`方式専用。`--no-sound`と併用不可。 |
 | `--backend app-server\|ui` | 送信方式。既定は`app-server`。 |
 | `--source <name>` | 送信者名。例: `claude-code`。 |
 | `--kind <kind>` | `decision`（ユーザー決定の伝達）、`review`、`hypothesis`、`suggestion`。 |
@@ -194,6 +199,8 @@ codex-steer send <thread-id> -- '--new-turn の処理を確認してください
 | `--wait-ms <milliseconds>` | UI方式の画面待機時間。既定は1500ms。 |
 
 `--source`から`--checkpoint`までの指示メタデータは`app-server`方式で使います。`accepted`は入力の受付を表します。`unknown`の場合は`history check`で確認してから再送を判断してください。
+
+送信音は既定でオンです。同梱の短い3音「プルッ」（約0.30秒、`assets/send-pururu.wav`）を、今回の入力が受け付けられた直後に鳴らします。`--no-sound`・`--dry-run`・受付失敗・受付未確認（UI方式を含む）では鳴りません。CodexやmacOSの通知設定は変更せず、音量・ミュートはMacの出力設定に従います。再生に失敗しても送信成功は維持され、`--json`では`data.sound.played`と鳴らなかった`reason`、通常出力では再生失敗の警告で確認できます。
 
 #### 状態・発言・変更の読み取りと監視
 

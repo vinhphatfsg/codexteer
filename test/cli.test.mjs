@@ -57,6 +57,28 @@ test("option terminator preserves literal flags in messages", () => {
   assert.equal(result.data.message_characters, "--backend ui".length);
 });
 
+test("sound defaults on, supports explicit mute, and stays silent in dry runs", () => {
+  for (const args of [["send", ID], [ID]]) for (const flag of [[], ["--sound"], ["--no-sound"]]) {
+    const { status, result } = cli([...args, "test", ...flag, "--dry-run"]);
+    assert.equal(status, 0);
+    assert.equal(result.data.message_characters, 4);
+    assert.deepEqual(result.data.sound, { played: false, reason: flag.includes("--no-sound") ? "disabled" : "dry_run" });
+  }
+  for (const flag of ["--sound", "--no-sound"]) {
+    const literal = cli(["send", ID, "--dry-run", "--", flag]);
+    assert.equal(literal.result.data.message_characters, flag.length);
+    assert.deepEqual(literal.result.data.sound, { played: false, reason: "dry_run" });
+  }
+  for (const flags of [["--sound", "--no-sound"], ["--no-sound", "--sound"]]) {
+    const conflict = cli(["send", ID, "test", ...flags]);
+    assert.equal(conflict.status, 1);
+    assert.match(conflict.result.error.message, /cannot be combined/);
+  }
+  const ui = cli(["send", ID, "test", "--sound", "--backend", "ui", "--dry-run"]);
+  assert.equal(ui.status, 1);
+  assert.match(ui.result.error.message, /--sound requires --backend app-server/);
+});
+
 test("desktop start dry run does not launch or inspect Desktop", () => {
   const { status, result } = cli(["desktop", "start", "--dry-run"]);
   assert.equal(status, 0);

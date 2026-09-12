@@ -9,6 +9,7 @@ import { observeThread, printObservation } from "./observe.mjs";
 import { monitorCommand } from "./monitor.mjs";
 import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, verifyCheckpoint, runCheckpoint, attachArtifacts } from "./checkpoint.mjs";
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
+import { playSendSound } from "./sound.mjs";
 
 const DEFAULT_SEND_BACKEND = "app-server";
 
@@ -281,6 +282,10 @@ export async function main(argv) {
 
     const dryRun = takeFlag(args, "--dry-run");
     const backend = backendOption(args, DEFAULT_SEND_BACKEND);
+    const explicitSound = takeFlag(args, "--sound");
+    const noSound = takeFlag(args, "--no-sound");
+    if (explicitSound && noSound) throw new Error("--sound and --no-sound cannot be combined.");
+    if (explicitSound && backend !== "app-server") throw new Error("--sound requires --backend app-server so receipt can be confirmed.");
     const newTurn = takeFlag(args, "--new-turn");
     const directive = { source: takeOption(args, "--source", undefined), kind: takeOption(args, "--kind", undefined), evidence: takeOptions(args, "--evidence"), basedOn: takeOption(args, "--based-on", undefined), supersedes: takeOption(args, "--supersedes", undefined), expiresAt: takeOption(args, "--expires-at", undefined), checkpoint: takeOption(args, "--checkpoint", undefined) };
     if (backend === "ui" && (directive.source || directive.kind || directive.evidence.length || directive.basedOn || directive.supersedes || directive.expiresAt || directive.checkpoint)) throw new Error("Directive metadata requires --backend app-server.");
@@ -296,6 +301,7 @@ export async function main(argv) {
     const data = backend === "app-server"
       ? await sendTrackedMessage(threadId, message, { dryRun, newTurn, ...directive })
       : sendDesktopMessage(threadId, message, { dryRun, waitMs, newTurn, keepFocus });
+    data.sound = noSound ? { played: false, reason: "disabled" } : playSendSound(data);
     success("send", data, json);
     if (!json) {
       console.log(dryRun
@@ -304,6 +310,7 @@ export async function main(argv) {
           ? `Submitted through Desktop UI for ${threadId}; delivery is unverified.`
           : `App Server accepted input for ${threadId} (turn ${data.turn_id}).`);
       if (data.message_id) console.log(`message_id: ${data.message_id}`);
+      if (!noSound && !dryRun && data.sent === true && !data.sound.played) console.error(`codex-steer: Input was accepted, but the sound could not be played (${data.sound.reason}).`);
     }
   } catch (error) {
     fail(error, json);
