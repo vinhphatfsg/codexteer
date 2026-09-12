@@ -5,7 +5,7 @@ import { VERSION } from "./version.mjs";
 
 const supervisionExecutionNotes = [
   "CLI本体と依存をCODEX_HOME/codex-steer/runtimes/<version>-<sha256>へ検証して保存し、そのコピーへの実行コマンドを本文に埋め込みます。supervise promptもこの保存処理を行います。同じ内容は検証して再利用し、既存のコピーは上書き・自動削除しません。保存・検証に失敗した場合は本文を出力せず、Claudeも起動しません。",
-  "同じPC・同じCODEX_HOMEで使い、監督中は保存したコピーを保持してください。元のnpxキャッシュやチェックアウトを更新・削除しても、監督は保存した内容を使います。ヘルプ中のcodexteer表記も、引用とオプションを含む指定の実行コマンドに置き換えてください。",
+  "同じPCで使い、監督中は保存したコピーを保持してください。全コマンドの先頭に生成時に検証したCODEX_HOMEの実体パスを指定するため、監督役のCODEX_HOMEが未設定・別設定でも生成元の接続先と履歴を使います。元のnpxキャッシュやチェックアウトを更新・削除しても、監督は保存した内容を使います。ヘルプ中のcodexteer表記も、先頭のCODEX_HOME指定・引用・オプションを含む指定の実行コマンドに置き換えてください。",
   "Node本体はコピーせず、開始時の実体への絶対パスと--require-node-versionを各コマンドに埋め込みます。Nodeの版が変われば操作前にNODE_VERSION_MISMATCHで停止します。同じ版のNodeの改変や共有ライブラリまで固定するものではないため、元のNodeは保持してください。保存先やNodeが使えなければ介入を止めて報告し、意図した環境から生成し直すよう指示します。",
 ];
 
@@ -24,7 +24,7 @@ export const topics = {
     title: "監督役（オーケストレーター）向けのプロンプトを出力する",
     when: "Claude Codeなどの監督役へ渡す、対象タスク入りの初期プロンプト本文を取得・確認するとき。",
     usage: ["supervise prompt <THREAD>"],
-    returns: "通常はプロンプト本文だけを標準出力へ返します。--jsonではdata.thread_id、data.prompt、保存先・版・ハッシュ・再利用の有無を示すdata.deployment、Nodeのパスと版を示すdata.nodeを返します。",
+    returns: "通常はプロンプト本文だけを標準出力へ返します。--jsonではdata.thread_id、data.prompt、元のホーム（codex_home）・保存先・版・ハッシュ・再利用の有無を示すdata.deployment、Nodeのパスと版を示すdata.nodeを返します。",
     examples: ["codexteer supervise prompt <THREAD>", "codexteer supervise prompt codex://threads/<UUID> --json", "codexteer supervise <THREAD> --agent claude"],
     notes: [...supervisionExecutionNotes,
       "出力は監督役（オーケストレーター）へ渡す初期指示です。THREADはUUIDまたはcodex://threads/...。IDの書式を確認して正規化し、本文へ埋め込みます。Desktopへの接続・履歴取得・送信・Claudeの起動・設定変更は行いません。タスクの存在と接続は監督開始時に確認します。", "Claudeを起動する場合はsupervise <THREAD> --agent claudeを使います。追加の起動引数は -- の後ろへ渡してください。", "生成される本文はhelp monitorと同じ監督手順です。ユーザーの目的・制約の範囲内で自律介入し、Monitorが使えない場合は短いwatchで観測します。", "生成した本文を既存のClaudeセッションへ貼り付けても使えます。監督停止はそのセッションへ指示してください。プロンプトはCLIやOSの権限設定を変更しません。"],

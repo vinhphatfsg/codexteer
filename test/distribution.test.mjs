@@ -111,8 +111,10 @@ test("a private CODEX_HOME beneath a writable non-sticky ancestor is refused", a
 test("a fresh nested CODEX_HOME is created privately and a configured home symlink is canonicalized", async t => {
   const { root, options } = await fixture(t), home = path.join(root, "new", "home");
   const first = await prepareDeployment(home, options);
+  assert.equal(first.codex_home, home);
   assert.equal((await lstat(home)).mode & 0o777, 0o700);
   const alias = path.join(root, "home-alias"); await symlink(home, alias);
   const second = await prepareDeployment(alias, options);
+  assert.equal(second.codex_home, home);
   assert.equal(first.directory, second.directory); assert.equal(second.reused, true);
 });

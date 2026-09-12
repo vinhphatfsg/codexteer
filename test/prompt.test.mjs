@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeRecord } from "../src/store.mjs";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
@@ -94,6 +95,45 @@ test("generated commands use the saved CLI despite missing or shadowed PATH comm
     }
   }
   assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["runtimes"]);
+});
+
+test("pasted commands retain the generating profile when the receiving environment or home alias changes", async t => {
+  for (const source of ["absolute", "relative", "symlink", "default"]) {
+    const options = fixture(t);
+    const producerUser = path.join(options.cwd, "producer-user");
+    const originalHome = source === "default" ? path.join(producerUser, ".codex")
+      : path.join(options.cwd, "home 日本語 'quoted' $(touch INJECTED) `touch ALSO_INJECTED`");
+    mkdirSync(originalHome, { recursive: true, mode: 0o700 });
+    options.env.HOME = producerUser;
+    options.env.CODEX_HOME = source === "relative" ? path.relative(options.cwd, originalHome) : originalHome;
+    const alias = path.join(options.cwd, "home-alias");
+    if (source === "symlink") { symlinkSync(originalHome, alias); options.env.CODEX_HOME = alias; }
+    if (source === "default") delete options.env.CODEX_HOME;
+    const prepared = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID, "--json"], options);
+    assert.equal(prepared.status, 0, prepared.stderr);
+    const data = JSON.parse(prepared.stdout).data;
+    const command = data.prompt.split("\n").find(line => line.endsWith(` history list ${ID} --pending --json`));
+    assert.ok(command);
+    const recipientUser = path.join(options.cwd, "recipient-user"), differentHome = path.join(options.cwd, "different-home");
+    for (const [home, id] of [[originalHome, "original"], [differentHome, "different"], [path.join(recipientUser, ".codex"), "recipient-default"]]) {
+      mkdirSync(home, { recursive: true, mode: 0o700 });
+      await writeRecord("messages", id, { id, thread_id: ID, created_at: "2026-01-01T00:00:00Z" }, { home });
+    }
+    // The saved executable and profile must stay paired even if this alias moves.
+    if (source === "symlink") { unlinkSync(alias); symlinkSync(differentHome, alias); }
+    for (const receivingHome of [undefined, differentHome]) {
+      const env = { ...options.env, HOME: recipientUser, PATH: "/no-supervisor-cli" };
+      if (receivingHome === undefined) delete env.CODEX_HOME;
+      else env.CODEX_HOME = receivingHome;
+      for (const shell of ["/bin/sh", "/bin/bash", "/bin/zsh"]) {
+        const executed = spawnSync(shell, ["-f", "-c", command], { ...options, cwd: recipientUser, env });
+        assert.equal(executed.status, 0, executed.stderr);
+        assert.deepEqual(JSON.parse(executed.stdout).data.map(entry => entry.id), ["original"], `${source} home via ${shell}`);
+        for (const marker of ["INJECTED", "ALSO_INJECTED"]) assert.equal(existsSync(path.join(recipientUser, marker)), false);
+      }
+    }
+    assert.equal(data.deployment.codex_home, realpathSync(originalHome));
+  }
 });
 
 test("generated shell arguments preserve spaces, quotes, unicode and command substitution text in CLI paths", t => {

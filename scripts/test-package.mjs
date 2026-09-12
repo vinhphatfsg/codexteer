@@ -172,11 +172,21 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   assert.equal((await cli(["send", ID, "synthetic after cache removal", "--no-sound"])).data.delivery_status, "accepted");
   assert.equal(sends, 6);
   const savedCommand = savedVersionCommand.slice(0, -" --version".length);
-  const savedRead = await exec("/bin/sh", ["-c", `${savedCommand} read ${ID} --json`], { cwd: root, env, timeout: 10000 });
-  assert.equal(JSON.parse(savedRead.stdout).data.thread_id, ID);
-  const savedSend = await exec("/bin/sh", ["-c", `${savedCommand} send ${ID} 'synthetic saved supervisor' --no-sound --json`], { cwd: root, env, timeout: 10000 });
-  assert.equal(JSON.parse(savedSend.stdout).data.delivery_status, "accepted");
-  assert.equal(sends, 7);
+  const recipientUser = path.join(root, "recipient-user"); await mkdir(recipientUser);
+  for (const receivingHome of [undefined, path.join(root, "different-home")]) {
+    const recipientEnv = { ...env, HOME: recipientUser };
+    if (receivingHome === undefined) delete recipientEnv.CODEX_HOME;
+    else recipientEnv.CODEX_HOME = receivingHome;
+    const runSaved = args => exec("/bin/sh", ["-c", `${savedCommand} ${args} --json`], { cwd: recipientUser, env: recipientEnv, timeout: 10000 });
+    assert.equal(JSON.parse((await runSaved(`read ${ID}`)).stdout).data.thread_id, ID);
+    assert.equal(JSON.parse((await runSaved(`watch ${ID} --timeout-ms 0`)).stdout).data.thread_id, ID);
+    const receipt = JSON.parse((await runSaved(`send ${ID} 'synthetic saved supervisor' --no-sound`)).stdout).data;
+    assert.equal(receipt.delivery_status, "accepted");
+    assert.ok((await cli(["history", "list", ID])).data.some(entry => entry.id === receipt.message_id), "Saved sends must be journaled in the original profile");
+    assert.ok(JSON.parse((await runSaved(`history list ${ID}`)).stdout).data.some(entry => entry.id === receipt.message_id));
+    assert.equal(await lstat(receivingHome ?? path.join(recipientUser, ".codex")).catch(error => { if (error.code !== "ENOENT") throw error; return null; }), null, "The receiving profile must not be created or written");
+  }
+  assert.equal(sends, 8);
   const pkg = JSON.parse(await readFile(path.join(deployment.directory, "package.json")));
   assert.equal(pkg.license, "MIT"); assert.equal(Object.hasOwn(pkg, "private"), false);
   assert.deepEqual(pkg.bin, { "codexteer": "bin/codexteer.mjs" });

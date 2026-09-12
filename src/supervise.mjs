@@ -21,7 +21,8 @@ export async function prepareSupervisorPrompt(threadInput) {
   const home = codexHome();
   shellArgument(node.path); shellArgument(home);
   const deployment = await prepareDeployment(home);
-  const command = `${shellArgument(node.path)} ${shellArgument(path.join(deployment.directory, "bin/codexteer.mjs"))} --require-node-version ${shellArgument(node.version)}`;
+  // Bind the validated canonical profile as well as the saved executable.
+  const command = `CODEX_HOME=${shellArgument(deployment.codex_home)} ${shellArgument(node.path)} ${shellArgument(path.join(deployment.directory, "bin/codexteer.mjs"))} --require-node-version ${shellArgument(node.version)}`;
   // Render with the saved distribution's implementation as well as its CLI.
   // An update to the source/cache after placement cannot mix prompt and code.
   const { supervisorPrompt } = await import(pathToFileURL(path.join(deployment.directory, "src/prompt.mjs")).href);

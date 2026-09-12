@@ -171,7 +171,7 @@ export async function prepareDeployment(home, { sourceRoot = PACKAGE_ROOT } = {}
   let stage, stageInfo;
   try {
     const existing = await lstat(target).catch(e => { if (e.code !== "ENOENT") throw e; return null; });
-    if (existing) return { ...await verifyDeployment(target, distribution), reused: true };
+    if (existing) return { ...await verifyDeployment(target, distribution), codex_home: canonicalHome, reused: true };
     stage = await mkdtemp(path.join(root, ".stage-")); stageInfo = await ownedDirectory(stage);
     for (const file of distribution.manifest.files) {
       const parts = file.path.split("/"); parts.pop(); let parent = stage;
@@ -184,7 +184,7 @@ export async function prepareDeployment(home, { sourceRoot = PACKAGE_ROOT } = {}
     // private. Refuse even an empty existing directory rather than replacing it.
     if (await lstat(target).catch(e => { if (e.code !== "ENOENT") throw e; return null; })) throw failure("Deployment destination appeared during placement.");
     await rename(stage, target); stage = null;
-    return { ...await verifyDeployment(target, distribution), reused: false };
+    return { ...await verifyDeployment(target, distribution), codex_home: canonicalHome, reused: false };
   } finally {
     if (stage && sameFile(stageInfo, await lstat(stage).catch(() => ({})))) await rm(stage, { recursive: true });
     if (sameFile(lockInfo, await lstat(lock).catch(() => ({})))) await rm(lock, { recursive: true });
