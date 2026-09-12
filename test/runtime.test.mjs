@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, chmod, readFile, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { claimRuntime, discoverRuntime, readRuntime, runtimePaths } from "../src/runtime.mjs";
+import { createServer } from "node:net";
+import { once } from "node:events";
+import { claimRuntime, discoverRuntime, readRuntime, runtimePaths, verifyControlEndpoint } from "../src/runtime.mjs";
 
 async function setup(t) {
   const home = await mkdtemp("/private/tmp/cs-home-test-");
@@ -35,6 +37,23 @@ test("unsafe permissions fail closed", async t => {
   await chmod(paths.state, 0o644);
   await assert.rejects(readRuntime(paths), { code: "RUNTIME_UNSAFE" });
   await assert.rejects(discoverRuntime(home), { code: "RUNTIME_UNSAFE" });
+});
+
+test("discovery verifies the RPC endpoint independently of the new-turn endpoint", async t => {
+  const { home, paths } = await setup(t);
+  const lease = await claimRuntime(home, { codex_steer_version: "0.0.0" });
+  const server = createServer(socket => socket.destroy());
+  try {
+    server.listen(paths.socket); await once(server, "listening"); await chmod(paths.socket, 0o600);
+    await lease.update({ server_pid: process.pid, desktop_connected: true });
+    assert.equal((await discoverRuntime(home)).state.codex_steer_version, "0.0.0");
+    await assert.rejects(verifyControlEndpoint(paths), { code: "DESKTOP_SUBSCRIPTION_UNAVAILABLE" });
+    await writeFile(paths.control, "not a socket", { mode: 0o600 });
+    await discoverRuntime(home);
+    await assert.rejects(verifyControlEndpoint(paths), { code: "RUNTIME_UNSAFE" });
+    await chmod(paths.socket, 0o666);
+    await assert.rejects(discoverRuntime(home), { code: "RUNTIME_UNSAFE" });
+  } finally { if (server.listening) await new Promise(resolve => server.close(resolve)); }
 });
 
 test("discovery distinguishes missing, not-ready and malformed runtime state", async t => {

@@ -3,6 +3,7 @@ import { normalizeThreadId } from "./thread-id.mjs";
 import { codexHome, discoverRuntime } from "./runtime.mjs";
 import { RpcClient } from "./rpc.mjs";
 import { decodeCursor, readOnClient } from "./observe.mjs";
+import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 
 const retryable = new Set(["CONNECTION_FAILED", "TIMEOUT", "RUNTIME_UNAVAILABLE", "RUNTIME_NOT_READY"]);
 const needsReview = new Set(["STALE_CURSOR", "CURSOR_UPGRADE_REQUIRED", "OBSERVATION_CHANGED"]);
@@ -35,10 +36,11 @@ export async function streamThread(threadInput, options, onChange, { discover = 
     try {
       if (signal?.aborted) cancel();
       if (!client && !current.signal.aborted) {
-        const { paths } = await discover(home);
+        const { paths, state } = await discover(home);
+        assertRuntimeOperation(state, "monitor");
         home = paths.home ?? home;
         if (current.signal.aborted) throw current.signal.reason;
-        client = await connect(paths.socket, { signal: current.signal, timeoutMs: Math.min(8000, remaining ?? 8000) });
+        client = compatibleClient(await connect(paths.socket, { signal: current.signal, timeoutMs: Math.min(8000, remaining ?? 8000) }), state);
       }
       if (current.signal.aborted) throw current.signal.reason;
       const data = await readOnClient(client, threadId, { ...options, since: cursor });

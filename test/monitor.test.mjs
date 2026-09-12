@@ -4,6 +4,7 @@ import { Writable } from "node:stream";
 import { streamThread, writeObservationLine } from "../src/monitor.mjs";
 import { readSnapshot } from "../src/observe.mjs";
 import { RpcFailure } from "../src/rpc.mjs";
+import { RUNTIME_CAPABILITIES } from "../src/compatibility.mjs";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 const task = () => ({ id: ID, status: { type: "active", activeFlags: [] }, turns: [{ id: "turn", status: "inProgress", items: [] }] });
@@ -106,6 +107,38 @@ test("a cut between pages rediscovers the runtime and resumes after flushed even
   assert.equal(states[1].resume_cursor, observations[0].cursor);
   assert.deepEqual(sockets, ["socket-1", "socket-2"]);
   assert.equal(new Set(homes).size, 1);
+});
+
+test("reconnect accepts different compatible releases and stops before an incompatible runtime", async () => {
+  for (const incompatible of [false, true]) {
+    const stop = new AbortController(), states = []; let connections = 0, discoveries = 0, reads = 0;
+    const run = streamThread(ID, { signal: stop.signal }, async data => {
+      if (data.type === "connection") states.push(data.state);
+      if (data.state === "recovered") stop.abort();
+    }, {
+      discover: async () => ({ paths: { socket: "same" }, state: {
+        codex_steer_version: ++discoveries === 1 ? "0.13.0" : "99.0.0", codex_steer_protocol: 1,
+        codex_steer_capabilities: { ...RUNTIME_CAPABILITIES, thread_read: incompatible && discoveries > 1 ? [2] : [1] },
+      } }),
+      connect: async () => {
+        const generation = ++connections;
+        return { close() {}, async request(method) {
+          assert.equal(method, "thread/read");
+          if (generation === 1 && ++reads > 2) throw new RpcFailure("disconnected");
+          return { thread: task() };
+        } };
+      }, sleep: async () => {},
+    });
+    if (incompatible) {
+      await assert.rejects(run, error => error.code === "CAPABILITY_UNSUPPORTED" && error.watch.state === "failed");
+      assert.equal(connections, 1);
+      assert.deepEqual(states, ["watching", "reconnecting"]);
+    } else {
+      await run;
+      assert.equal(connections, 2);
+      assert.deepEqual(states, ["watching", "reconnecting", "recovered"]);
+    }
+  }
 });
 
 test("reconnect backoff is capped and the complete outage has a finite deadline", async () => {

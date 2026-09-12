@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { normalizeThreadId } from "./thread-id.mjs";
 import { discoverRuntime } from "./runtime.mjs";
 import { RpcClient, RpcFailure } from "./rpc.mjs";
+import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 
 export const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const mutableStatus = new Set(["inProgress", "running", "pending"]);
@@ -152,7 +153,9 @@ export async function readOnClient(client, threadId, options = {}) {
 export async function observeThread(threadInput, options = {}, { discover = discoverRuntime, connect = RpcClient.connect, sleep = delay, now = () => performance.now() } = {}) {
   const threadId = normalizeThreadId(threadInput);
   if (options.since) decodeCursor(options.since, threadId);
-  const { paths } = await discover(); const client = await connect(paths.socket);
+  const { paths, state } = await discover();
+  assertRuntimeOperation(state, options.watch ? "watch" : "read");
+  const client = compatibleClient(await connect(paths.socket), state);
   try {
     if (!options.watch) return await readOnClient(client, threadId, options);
     const { until = "change", timeoutMs = 30000, pollMs = 1000 } = options;

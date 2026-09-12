@@ -1,5 +1,6 @@
 import test from "node:test";
-import { VERSION, PACKAGE_NAME, RUNTIME_PROTOCOL } from "../src/version.mjs";
+import { VERSION, PACKAGE_NAME } from "../src/version.mjs";
+import { RUNTIME_PROTOCOL, RUNTIME_CAPABILITIES } from "../src/compatibility.mjs";
 const steerState = { codex_steer_version: VERSION, codex_steer_package: PACKAGE_NAME, codex_steer_protocol: RUNTIME_PROTOCOL };
 import assert from "node:assert/strict";
 import { BUNDLED_NODE, isDesktopProcess, serverArguments } from "../src/wrapper.mjs";
@@ -61,6 +62,7 @@ function doctorFixture(extraState = {}) {
     calls,
     options: {
       versions: { desktop_version: "26.903.71938", cli_version: "0.153.4" },
+      inspectControl: async () => {},
       discover: async () => ({ paths: { socket: "/unused" }, state: { ...steerState, cli_version: "0.153.4", ...extraState } }),
       connect: async () => ({
         request: async method => { calls.push(method); return { data: [] }; },
@@ -149,14 +151,64 @@ test("doctor leaves unattempted compatibility checks unverified when discovery f
   assert.equal(result.failure.method, null);
 });
 
-test("doctor diagnoses missing versions, different packages and protocol mismatches without certifying them", async () => {
-  for (const extra of [{ codex_steer_version: undefined }, { codex_steer_version: "0.1.0" }, { codex_steer_package: "codex-steer" }, { codex_steer_protocol: 2 }]) {
+test("doctor treats unknown or different product versions and package names as diagnostics", async () => {
+  for (const extra of [{ codex_steer_version: undefined }, { codex_steer_version: "0.1.0" }, { codex_steer_package: "codex-steer" }, { cli_version: "0.153.3" }]) {
     const { options } = doctorFixture({ node_path: BUNDLED_NODE, ...extra });
     const result = await appServerDoctor(options);
-    assert.equal(result.ready, false); assert.equal(result.checks.codex_steer_version, false);
-    assert.equal(result.codex_steer_compatibility.status, extra.codex_steer_version === undefined && "codex_steer_version" in extra ? "unverified" : "mismatch");
-    assert.match(result.failure.code, /^STEER_VERSION_/);
+    assert.equal(result.ready, process.platform === "darwin"); assert.equal(result.checks.codex_steer_version, undefined);
+    assert.equal(result.codex_steer_compatibility.status, "cli_version" in extra ? "matched" : extra.codex_steer_version === undefined && "codex_steer_version" in extra ? "unverified" : "mismatch");
+    assert.equal(result.runtime_compatibility.operations.send.status, "supported");
+    assert.equal(result.failure, null);
+    assert.equal(result.cli_version_status, "cli_version" in extra ? "mismatch" : "matched");
   }
+});
+
+test("doctor rejects incompatible common protocol before connecting", async () => {
+  const { options } = doctorFixture({ node_path: BUNDLED_NODE, codex_steer_protocol: 2 });
+  options.connect = () => assert.fail("unknown wire protocol must not connect");
+  const result = await appServerDoctor(options);
+  assert.equal(result.ready, false); assert.equal(result.failure.code, "RUNTIME_PROTOCOL_UNSUPPORTED");
+  assert.equal(result.runtime_compatibility.operations.read.status, "unsupported");
+  assert.equal(result.codex_steer_compatibility.status, "matched");
+});
+
+test("doctor isolates missing/unsafe subscription endpoints from observation readiness", async () => {
+  for (const code of ["DESKTOP_SUBSCRIPTION_UNAVAILABLE", "RUNTIME_UNSAFE", "PERMISSION_DENIED"]) {
+    const { options, calls } = doctorFixture({ node_path: BUNDLED_NODE });
+    options.inspectControl = async () => { throw Object.assign(new Error("test"), { code }); };
+    const result = await appServerDoctor(options);
+    assert.equal(result.ready, process.platform === "darwin");
+    assert.equal(result.runtime_compatibility.operations.read.status, "supported");
+    assert.equal(result.runtime_compatibility.operations.send.status, "supported");
+    assert.equal(result.runtime_compatibility.operations.send_new_turn.status, code === "DESKTOP_SUBSCRIPTION_UNAVAILABLE" ? "unsupported" : "failed");
+    assert.equal(result.desktop_subscription.code, code);
+    assert.deepEqual(calls, ["thread/loaded/list", "close"]);
+  }
+});
+
+test("doctor reports unsupported individual features without blocking other operations", async () => {
+  const { options } = doctorFixture({ node_path: BUNDLED_NODE, codex_steer_capabilities: { ...RUNTIME_CAPABILITIES, turn_steer: [2] } });
+  const result = await appServerDoctor(options);
+  assert.equal(result.ready, process.platform === "darwin");
+  assert.equal(result.runtime_compatibility.operations.send.status, "unsupported");
+  assert.equal(result.runtime_compatibility.operations.send_new_turn.status, "supported");
+});
+
+test("doctor verifies observation for unknown legacy runtimes without probing mutations", async () => {
+  const { options } = doctorFixture({ schema: 1, node_path: BUNDLED_NODE, cli_version: "0.150.0", codex_steer_protocol: undefined, codex_steer_version: undefined, codex_steer_package: undefined });
+  options.threadId = TARGET;
+  options.connect = async () => ({ close() {}, async request(method) {
+    if (method === "thread/loaded/list") return { data: [] };
+    assert.equal(method, "thread/read");
+    return { thread: { id: TARGET, status: { type: "idle" }, turns: [] } };
+  } });
+  const result = await appServerDoctor(options);
+  assert.equal(result.ready, process.platform === "darwin");
+  assert.equal(result.codex_steer_compatibility.status, "unverified");
+  assert.equal(result.compatibility.status, "verified");
+  assert.equal(result.runtime_compatibility.operations.read.status, "supported");
+  assert.equal(result.runtime_compatibility.features.thread_read.source, "probe-verified");
+  assert.equal(result.runtime_compatibility.operations.send.status, "unverified");
 });
 
 test("startup uses the prepared path and rejects another runtime's distribution", { skip: process.platform !== "darwin" }, async () => {

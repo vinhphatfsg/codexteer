@@ -24,6 +24,7 @@ function fail(error, json) {
   const message = error instanceof Error ? error.message : String(error);
   if (json) console.log(JSON.stringify({ ok: false, ...(error.watch ? { command: "watch", data: error.watch } : {}), error: {
     message, code: error.code, delivery_status: error.delivery_status,
+    operation: error.operation, capability: error.capability,
     sent: error.sent, thread_id: error.thread_id, rpc_code: error.rpc_code ?? error.rpcCode,
     message_id: error.message_id, client_message_id: error.client_message_id, journal_update_required: error.journal_update_required,
   } }));
@@ -244,6 +245,8 @@ export async function main(argv) {
           console.log(`  connection: ${report.connection.status}`);
           console.log(`  Desktop: ${report.desktop_version ?? "unknown"}, CLI: ${report.running_cli_version ?? "unknown"}, wrapper Node: ${report.running_wrapper_node_version ?? "unknown"}, local Node: ${report.cli_node_version}`);
           console.log(`  codex-steer: ${report.codex_steer_compatibility.status} (local ${report.codex_steer_version}, running ${report.codex_steer_compatibility.runtime.version ?? "unknown"})`);
+          console.log(`  runtime protocol: ${report.runtime_compatibility.protocol.status}`);
+          for (const [operation, contract] of Object.entries(report.runtime_compatibility.operations)) console.log(`    ${operation}: ${contract.status}${contract.failure ? ` (${contract.failure})` : ""}`);
           console.log(`  observation compatibility: ${report.compatibility.status} (${report.compatibility.scope})`);
           for (const [method, status] of Object.entries(report.compatibility.api_checks)) console.log(`    ${method}: ${status}`);
           if (target === undefined) console.log("  Verify a target: codex-steer doctor --thread <THREAD> --json");

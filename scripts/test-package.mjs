@@ -38,7 +38,8 @@ try {
   const load = name => import(pathToFileURL(path.join(installed, "src", name)).href);
   const { prepareDeployment } = await load("distribution.mjs");
   const { claimRuntime } = await load("runtime.mjs");
-  const { VERSION, PACKAGE_NAME, RUNTIME_PROTOCOL } = await load("version.mjs");
+  const { VERSION, PACKAGE_NAME } = await load("version.mjs");
+  const { RUNTIME_PROTOCOL, RUNTIME_CAPABILITIES } = await load("compatibility.mjs");
   let cliPath = path.join(installed, "bin/codex-steer.mjs");
   async function cli(args, ok = true) {
     let result;
@@ -76,24 +77,41 @@ try {
   assert.equal((await cli(["read", ID])).data.thread_id, ID);
   assert.equal((await cli(["send", ID, "synthetic message", "--no-sound"])).data.delivery_status, "accepted");
   assert.equal(sends, 1);
-  const before = reads;
-  for (const version of [null, "0.0.0"]) {
+  for (const version of [null, "0.13.0", "99.0.0"]) {
     await lease.update({ codex_steer_version: version });
-    assert.match((await cli(["read", ID], false)).error.code, /^STEER_VERSION_/);
-    assert.match((await cli(["send", ID, "synthetic message", "--no-sound"], false)).error.code, /^STEER_VERSION_/);
+    assert.equal((await cli(["read", ID])).data.thread_id, ID);
+    assert.equal((await cli(["send", ID, "synthetic message", "--no-sound"])).data.sent, true);
   }
-  assert.equal(reads, before); assert.equal(sends, 1, "mixed versions must not send");
-  await lease.update({ codex_steer_version: VERSION });
+  assert.equal(sends, 4, "compatible mixed versions must send");
+  await lease.update({ codex_steer_capabilities: { ...RUNTIME_CAPABILITIES, desktop_subscribe: [2] } });
+  const before = reads;
+  const unavailable = await cli(["send", ID, "synthetic", "--new-turn", "--no-sound"], false);
+  assert.equal(unavailable.error.code, "CAPABILITY_UNSUPPORTED");
+  assert.equal(unavailable.error.capability, "desktop_subscribe");
+  assert.equal(reads, before); assert.equal(sends, 4);
+  assert.equal((await cli(["read", ID])).data.thread_id, ID);
+  assert.equal((await cli(["send", ID, "synthetic message", "--no-sound"])).data.sent, true);
+  await lease.update({ codex_steer_protocol: 2 });
+  const beforeProtocol = reads;
+  for (const args of [["read", ID], ["send", ID, "synthetic", "--no-sound"]]) {
+    assert.equal((await cli(args, false)).error.code, "RUNTIME_PROTOCOL_UNSUPPORTED");
+  }
+  await cli(["help"]); await cli(["supervise", "prompt", ID]); await cli(["history", "list", ID]);
+  assert.equal((await cli(["send", ID, "synthetic", "--dry-run"])).data.sent, false);
+  assert.equal(reads, beforeProtocol); assert.equal(sends, 5);
+  await lease.update({ codex_steer_version: VERSION, codex_steer_protocol: 1, codex_steer_capabilities: RUNTIME_CAPABILITIES });
+  // Normal read/steer must also work with no subscription endpoint at all.
+  await new Promise(resolve => control.close(resolve));
   await rm(workspace, { recursive: true }); await rm(cache, { recursive: true, force: true });
   cliPath = path.join(deployment.directory, "bin/codex-steer.mjs");
   assert.equal((await cli(["--version"])).data.version, VERSION);
   assert.equal((await cli(["read", ID])).data.thread_id, ID);
   assert.equal((await cli(["send", ID, "synthetic after cache removal", "--no-sound"])).data.delivery_status, "accepted");
-  assert.equal(sends, 2);
+  assert.equal(sends, 6);
   const pkg = JSON.parse(await readFile(path.join(deployment.directory, "package.json")));
   assert.equal(pkg.license, "MIT"); assert.equal(pkg.private, true);
   for (const hook of ["preinstall", "install", "postinstall", "prepare", "prepack"]) assert.equal(pkg.scripts[hook], undefined);
-  console.log(JSON.stringify({ suite: "package", result: "PASS", package: PACKAGE_NAME, version: VERSION, packed_files: artifact.files.length, offline_install: true, npm_exec: true, cache_removal: true, version_rejection: true, real_desktop_validated: false }));
+  console.log(JSON.stringify({ suite: "package", result: "PASS", package: PACKAGE_NAME, version: VERSION, packed_files: artifact.files.length, offline_install: true, npm_exec: true, cache_removal: true, mixed_versions: true, feature_isolation: true, real_desktop_validated: false }));
 } finally {
   for (const socket of ws?.clients ?? []) socket.terminate();
   if (ws) await new Promise(resolve => ws.close(resolve));

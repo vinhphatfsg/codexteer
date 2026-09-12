@@ -1,20 +1,22 @@
 import { mkdir, rm, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { discoverRuntime } from "./runtime.mjs";
+import { discoverRuntime, verifyControlEndpoint } from "./runtime.mjs";
 import { RpcClient, RpcFailure } from "./rpc.mjs";
 import { normalizeThreadId } from "./thread-id.mjs";
 import { ensureDesktopSubscription } from "./subscription.mjs";
-import { assertCompatibleVersion } from "./version.mjs";
+import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 
 export class SendFailure extends Error {
-  constructor(message, { code = "NOT_SENT", uncertain = false, threadId, rpcCode } = {}) {
+  constructor(message, { code = "NOT_SENT", uncertain = false, threadId, rpcCode, capability, operation } = {}) {
     super(message);
     this.code = code;
     this.delivery_status = uncertain ? "unknown" : "not_sent";
     this.sent = uncertain ? null : false;
     this.thread_id = threadId;
     this.rpc_code = rpcCode;
+    this.capability = capability;
+    this.operation = operation;
   }
 }
 
@@ -49,6 +51,9 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
   // Resume through Desktop's long-lived connection so approval ownership
   // survives the short-lived sender. Never resume only on the sender connection.
   if (!subscribe) throw new Error("Desktop subscription support is required for --new-turn.");
+  // Optional safety checks (e.g. a paged --based-on cursor) must be usable before
+  // resuming, too. Validate again after resume to catch intervening user input.
+  await beforeSend?.(thread, client);
   await subscribe(threadId);
   const resumed = await client.request("thread/read", { threadId, includeTurns: true });
   verifyThread(resumed.thread, threadId);
@@ -60,7 +65,7 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
   return { turn_id: accepted.turn.id, client_message_id: clientUserMessageId };
 }
 
-export async function sendAppServerMessage(threadInput, message, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend, connect = RpcClient.connect, discover = discoverRuntime, subscribe = ensureDesktopSubscription } = {}) {
+export async function sendAppServerMessage(threadInput, message, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend, connect = RpcClient.connect, discover = discoverRuntime, subscribe = ensureDesktopSubscription, inspectControl = verifyControlEndpoint } = {}) {
   const threadId = normalizeThreadId(threadInput);
   if (typeof message !== "string" || !message.trim()) throw new Error("Message must not be empty.");
   const plan = { thread_id: threadId, backend: "app-server", delivery_action: newTurn ? "new-turn" : "steer", message_characters: [...message].length, dry_run: dryRun };
@@ -69,9 +74,11 @@ export async function sendAppServerMessage(threadInput, message, { dryRun = fals
   let lock;
   let result;
   const token = randomUUID();
+  const operation = newTurn ? "send_new_turn" : "send";
   try {
     const { paths, state } = await discover();
-    assertCompatibleVersion(state);
+    assertRuntimeOperation(state, operation);
+    if (newTurn) await inspectControl(paths);
     const candidate = path.join(paths.lease, `send-${threadId}`);
     try { await mkdir(candidate, { mode: 0o700 }); } catch (error) {
       if (error.code === "EEXIST") throw new Error("Another send is in progress for this task, or a previous sender exited unexpectedly. Restart the shared Desktop after checking delivery before retrying.");
@@ -79,12 +86,13 @@ export async function sendAppServerMessage(threadInput, message, { dryRun = fals
     }
     lock = candidate;
     await writeFile(path.join(lock, "owner"), token, { mode: 0o600 });
-    client = await connect(paths.socket);
+    client = compatibleClient(await connect(paths.socket), state);
     const checkRuntime = async () => {
-      const current = await discover(); assertCompatibleVersion(current.state);
-      if (current.state.instance !== state.instance || current.paths.socket !== paths.socket || current.paths.control !== paths.control) {
+      const current = await discover(); assertRuntimeOperation(current.state, operation);
+      if (current.state.instance !== state.instance || current.paths.socket !== paths.socket || (newTurn && current.paths.control !== paths.control)) {
         throw Object.assign(new Error("Runtime changed before delivery. Read the target again before sending."), { code: "RUNTIME_CHANGED" });
       }
+      if (newTurn) await inspectControl(current.paths);
     };
     const receipt = await sendOnClient(client, threadId, message, { newTurn, clientMessageId,
       beforeSend: async (...args) => { await beforeSend?.(...args); await checkRuntime(); },
@@ -95,7 +103,7 @@ export async function sendAppServerMessage(threadInput, message, { dryRun = fals
   } catch (error) {
     throw new SendFailure(error.uncertain
       ? "Delivery is unknown because App Server did not confirm receipt. Check the target task before retrying."
-      : error.message, { code: error.code ?? "NOT_SENT", uncertain: error.uncertain, threadId, rpcCode: error.rpcCode });
+      : error.message, { code: error.code ?? "NOT_SENT", uncertain: error.uncertain, threadId, rpcCode: error.rpcCode, capability: error.capability, operation: error.operation });
   } finally {
     // Cleanup failure must never turn an acknowledged send into a retryable
     // error. Keep its acceptance receipt and leave any stale lock fail-closed.

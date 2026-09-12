@@ -1,5 +1,6 @@
 import test from "node:test";
-import { VERSION, PACKAGE_NAME, RUNTIME_PROTOCOL } from "../src/version.mjs";
+import { VERSION, PACKAGE_NAME } from "../src/version.mjs";
+import { RUNTIME_PROTOCOL, RUNTIME_CAPABILITIES } from "../src/compatibility.mjs";
 const steerState = { codex_steer_version: VERSION, codex_steer_package: PACKAGE_NAME, codex_steer_protocol: RUNTIME_PROTOCOL };
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -172,12 +173,96 @@ test("cleanup errors cannot replace an accepted receipt with a send error", asyn
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("unknown or mixed codex-steer versions never connect or send", async () => {
-  for (const state of [undefined, {}, { ...steerState, codex_steer_version: "0.0.1" }, { ...steerState, codex_steer_protocol: 999 }]) {
+test("unknown mutation contracts and incompatible protocols never connect or send", async () => {
+  for (const state of [undefined, {}, { ...steerState, codex_steer_protocol: 999 }]) {
     await assert.rejects(sendAppServerMessage(ID, "test", {
       discover: async () => ({ paths: {}, state }), connect: async () => assert.fail("must fail before connecting"),
-    }), error => error.delivery_status === "not_sent" && /^STEER_VERSION_/.test(error.code));
+    }), error => error.delivery_status === "not_sent" && /^RUNTIME_PROTOCOL_/.test(error.code));
   }
+});
+
+test("different and unknown product versions send using the compatible v1 contract", async t => {
+  const root = await mkdtemp("/private/tmp/cs-mixed-send-"); t.after(() => rm(root, { recursive: true, force: true }));
+  for (const codex_steer_version of [undefined, "0.1.0", "999.0.0"]) {
+    let writes = 0;
+    const receipt = await sendAppServerMessage(ID, "test", {
+      discover: async () => ({ paths: { lease: root, socket: "unused" }, state: { ...steerState, codex_steer_version } }),
+      inspectControl: () => assert.fail("steer must not inspect the new-turn endpoint"),
+      connect: async () => ({ close() {}, async request(method) {
+        if (method === "thread/read") return { thread: thread() };
+        assert.equal(method, "turn/steer"); writes++; return { turnId: TURN };
+      } }),
+    });
+    assert.equal(receipt.delivery_status, "accepted"); assert.equal(writes, 1);
+  }
+});
+
+test("unsupported new-turn contracts never subscribe, and do not block normal steering", async t => {
+  const root = await mkdtemp("/private/tmp/cs-feature-send-"); t.after(() => rm(root, { recursive: true, force: true }));
+  for (const feature of ["turn_start", "desktop_subscribe"]) {
+    let writes = 0;
+    const options = {
+      discover: async () => ({ paths: { lease: root, socket: "unused" }, state: { ...steerState, codex_steer_capabilities: { ...RUNTIME_CAPABILITIES, [feature]: [2] } } }),
+      inspectControl: () => assert.fail("incompatible new-turn must stop before inspecting control"),
+      subscribe: () => assert.fail("must not subscribe"),
+      connect: async () => ({ close() {}, async request(method) {
+        if (method === "thread/read") return { thread: thread() };
+        assert.equal(method, "turn/steer"); writes++; return { turnId: TURN };
+      } }),
+    };
+    await assert.rejects(sendAppServerMessage(ID, "test", { ...options, newTurn: true }), { code: "CAPABILITY_UNSUPPORTED", capability: feature, sent: false });
+    assert.equal((await sendAppServerMessage(ID, "test", options)).sent, true);
+    assert.equal(writes, 1);
+  }
+});
+
+test("compatible new-turn rechecks its endpoint before subscription and sending", async t => {
+  const root = await mkdtemp("/private/tmp/cs-newturn-compat-"); t.after(() => rm(root, { recursive: true, force: true }));
+  const calls = [];
+  const options = {
+    newTurn: true,
+    discover: async () => ({ paths: { lease: root, socket: "unused", control: "control" }, state: { ...steerState, codex_steer_version: "0.0.1" } }),
+    inspectControl: async paths => { assert.equal(paths.control, "control"); calls.push("inspect"); },
+    subscribe: async () => { calls.push("subscribe"); },
+    connect: async () => ({ close() {}, async request(method) {
+      calls.push(method); return method === "thread/read" ? { thread: thread("idle") } : { turn: { id: TURN } };
+    } }),
+  };
+  assert.equal((await sendAppServerMessage(ID, "test", options)).sent, true);
+  assert.deepEqual(calls, ["inspect", "thread/read", "inspect", "inspect", "subscribe", "thread/read", "inspect", "turn/start"]);
+  await assert.rejects(sendAppServerMessage(ID, "test", { ...options,
+    inspectControl: async () => { throw Object.assign(new Error("unsafe endpoint"), { code: "RUNTIME_UNSAFE" }); },
+    connect: () => assert.fail("unsafe endpoint must not connect"),
+  }), { code: "RUNTIME_UNSAFE", sent: false });
+});
+
+test("an unsupported optional freshness API prevents both sending and Desktop resume", async t => {
+  const root = await mkdtemp("/private/tmp/cs-optional-check-"); t.after(() => rm(root, { recursive: true, force: true }));
+  for (const newTurn of [false, true]) {
+    const calls = [];
+    await assert.rejects(sendAppServerMessage(ID, "test", {
+      newTurn,
+      discover: async () => ({ paths: { lease: root, socket: "unused" }, state: { ...steerState, codex_steer_capabilities: { ...RUNTIME_CAPABILITIES, history_pagination: [2] } } }),
+      inspectControl: async () => {},
+      beforeSend: async (_thread, client) => { await client.request("thread/items/list", { threadId: ID }); },
+      subscribe: () => assert.fail("must not resume before verifying required freshness APIs"),
+      connect: async () => ({ close() {}, async request(method) {
+        calls.push(method); assert.equal(method, "thread/read"); return { thread: thread(newTurn ? "idle" : "active") };
+      } }),
+    }), { code: "CAPABILITY_UNSUPPORTED", capability: "history_pagination", sent: false });
+    assert.deepEqual(calls, ["thread/read"]);
+  }
+});
+
+test("capabilities changing during the send are rechecked before mutation", async t => {
+  const root = await mkdtemp("/private/tmp/cs-cap-race-"); t.after(() => rm(root, { recursive: true, force: true }));
+  let discoveries = 0;
+  await assert.rejects(sendAppServerMessage(ID, "test", {
+    discover: async () => ({ paths: { lease: root, socket: "unused" }, state: { ...steerState, instance: "same", codex_steer_capabilities: {
+      ...RUNTIME_CAPABILITIES, turn_steer: ++discoveries === 1 ? [1] : [2],
+    } } }),
+    connect: async () => ({ close() {}, async request(method) { assert.equal(method, "thread/read"); return { thread: thread() }; } }),
+  }), { code: "CAPABILITY_UNSUPPORTED", sent: false });
 });
 
 test("a runtime replaced after observation cannot receive the send", async t => {

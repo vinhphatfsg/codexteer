@@ -211,11 +211,15 @@ codex-steer open <thread-id>
 
 `doctor`はDesktop・同梱CLI・実行中のwrapper Node・手元のCLIを動かすNodeのバージョンと、`connection.status`、`compatibility.api_checks`、`failure`を返します。対象未指定では接続だけを診断するため、観測の互換性は`unverified`です。
 
-さらに`codex_steer_compatibility`で、操作側と実行中wrapperのパッケージ名・バージョン・runtime protocolを照合します。不明・不一致なら`ready: false`です。`read`・`watch`・`send`は`STEER_VERSION_UNVERIFIED`または`STEER_VERSION_MISMATCH`で止まります。旧wrapperの利用後は作業を終えてDesktopを終了し、同じ版のCLIで`desktop start`してください。
+`codex_steer_compatibility`は操作側と実行中wrapperの製品名・バージョンの比較で、診断情報です。版の不明・不一致だけではコマンドを止めません。`runtime_compatibility`で通信仕様と操作ごとの対応状況を返し、必要な仕様が合う組み合わせはそのまま使えます。インストール済み同梱CLIと実行中CLIの版の差も`cli_version_status`に分けて表示します。
+
+例えば新規ターンの仕様だけが非互換なら、`send --new-turn`だけが`CAPABILITY_UNSUPPORTED`で止まり、`read`・`watch`・通常の`send`は使えます。新規ターン用のソケットがない場合も同様です。共通の通信仕様が非互換なら、接続を必要とする操作は`RUNTIME_PROTOCOL_UNSUPPORTED`で止まります。`help`・`supervise prompt`・ローカル履歴一覧・`--dry-run`は接続不要です。
+
+旧wrapperにも対応します。既知のv1仕様は対応表で判断し、仕様不明の環境でも読み取りだけで観測を検証できます。送信仕様が確認できない環境の送信は`CAPABILITY_UNVERIFIED`または`RUNTIME_PROTOCOL_UNVERIFIED`で止め、互換性の確認目的では送信・タスク再開をしません。対応表、各機能の仕様とエラーは[配布ドキュメント](docs/distribution.md#互換性契約)を参照してください。
 
 `doctor --thread`は指定タスクの読み取り経路を検証し、成功すれば`compatibility.status: verified`を返します。呼び出していないAPIは`unverified`、メソッド未対応は`unsupported`、応答異常等は`failed`です。通信が途切れて検証を完了できなければ`unverified`のまま理由を返します。本文は診断出力に含めず、タスクの再開・送信・承認回答は行いません。`--thread`は`app-server`専用です。
 
-`ready`は接続条件と今回指定した検証の結果です。`verified`の範囲は対象タスクの初回観測で、履歴全体、送信、画面表示、承認往復は保証しません。未検証の機能は`unverified_features`に明示します。例えば、従来の履歴形式を読み取った場合の結果は次の形です（主要項目のみ）。
+`ready`は接続条件と今回指定した検証の結果です。新規ターンだけが使えなくても、観測に成功すれば`ready: true`になります。操作別の仕様対応は`runtime_compatibility.operations`、新規ターン用ソケットの状態は`desktop_subscription`を確認してください。`supported`は仕様上の対応、`verified`は実際に行った観測の検証で、履歴全体、送信、画面表示、承認往復は保証しません。未検証の機能は`unverified_features`に明示します。例えば、従来の履歴形式を読み取った場合の結果は次の形です（主要項目のみ）。
 
 ```json
 {"ready":true,"connection":{"status":"connected"},"compatibility":{"status":"verified","scope":"target-observation","thread_id":"aaaaaaaa-aaaa-4aaa-8aaa-000000000001","api_checks":{"initialize":"verified","thread/loaded/list":"verified","thread/read":"verified","thread/turns/list":"unverified","thread/items/list":"unverified"},"unverified_features":["steering","desktop_ui","approval_roundtrip"]},"failure":null}

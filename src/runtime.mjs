@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, rename, rm, writeFile, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { assertCompatibleVersion } from "./version.mjs";
 
 const runtimeFailure = (message, code) => Object.assign(new Error(message), { code });
 
@@ -59,7 +58,16 @@ export async function readRuntime(paths) {
   return state;
 }
 
-export async function discoverRuntime(home, { requireCompatible = true } = {}) {
+export async function verifyControlEndpoint(paths) {
+  try { await checkOwned(paths.control, "socket"); }
+  catch (error) {
+    if (error.code === "ENOENT") throw runtimeFailure("Desktop subscription is unavailable. Only --new-turn requires this endpoint.", "DESKTOP_SUBSCRIPTION_UNAVAILABLE");
+    if (["EACCES", "EPERM"].includes(error.code)) throw runtimeFailure("Cannot inspect the Desktop subscription endpoint. Check access permissions.", "PERMISSION_DENIED");
+    throw error;
+  }
+}
+
+export async function discoverRuntime(home) {
   const paths = await runtimePaths(home);
   try {
     const state = await readRuntime(paths);
@@ -67,8 +75,6 @@ export async function discoverRuntime(home, { requireCompatible = true } = {}) {
       throw runtimeFailure("Shared App Server is not ready. Finish current tasks, quit Desktop, then run: codex-steer desktop start", "RUNTIME_NOT_READY");
     }
     await checkOwned(paths.socket, "socket");
-    await checkOwned(paths.control, "socket");
-    if (requireCompatible) assertCompatibleVersion(state);
     return { paths, state };
   } catch (error) {
     if (error.code === "ENOENT") throw runtimeFailure("Shared App Server is unavailable. Finish current tasks, quit Desktop, then run: codex-steer desktop start", "RUNTIME_UNAVAILABLE");

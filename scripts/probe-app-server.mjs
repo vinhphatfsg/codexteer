@@ -19,6 +19,7 @@ import { BUNDLED_CLI, BUNDLED_NODE } from "../src/wrapper.mjs";
 import { appServerDoctor } from "../src/launcher.mjs";
 import { streamThread } from "../src/monitor.mjs";
 import { prepareDeployment } from "../src/distribution.mjs";
+import { RUNTIME_CAPABILITIES, RUNTIME_PROTOCOL } from "../src/compatibility.mjs";
 
 class SimulatedDesktop {
   constructor(child) {
@@ -98,6 +99,19 @@ async function boot() {
   assert.equal(runtime.state.node_path, BUNDLED_NODE, "Desktop wrapper must use the signed bundled Node runtime");
   assert.ok(Number(runtime.state.node_version.split(".")[0]) >= 20);
   assert.equal(runtime.state.distribution_sha256, deployment.sha256);
+  assert.equal(runtime.state.codex_steer_protocol, RUNTIME_PROTOCOL);
+  assert.deepEqual(runtime.state.codex_steer_capabilities, RUNTIME_CAPABILITIES);
+}
+
+// Model metadata from wrappers that predate capability advertisement, while
+// exercising the same v1 wire requests against the real bundled App Server.
+async function legacyRuntime(profile) {
+  const runtime = await discoverRuntime(root), state = { ...runtime.state };
+  delete state.codex_steer_capabilities;
+  if (profile === "pre-version") {
+    for (const key of ["codex_steer_package", "codex_steer_version", "codex_steer_protocol", "distribution_sha256"]) delete state[key];
+  } else state.codex_steer_version = "0.13.0";
+  return { ...runtime, state };
 }
 
 async function checkHelperPassThrough() {
@@ -214,9 +228,9 @@ try {
   }, "started turn visible to the observer");
   assert.equal(read.thread.status.type, "active");
   assert.equal(read.thread.turns.at(-1).id, turn.id);
-  const observation = await observeThread(thread.id, {}, { discover: () => discoverRuntime(root) });
+  const observation = await observeThread(thread.id, {}, { discover: () => legacyRuntime("pre-version") });
   assert.equal(observation.active_turn_id, turn.id);
-  const result = await sendAppServerMessage(thread.id, "日本語\nprobe steer", { discover: () => discoverRuntime(root) });
+  const result = await sendAppServerMessage(thread.id, "日本語\nprobe steer", { discover: () => legacyRuntime("pre-version") });
   assert.equal(result.turn_id, turn.id);
   await assert.rejects(cli.request("turn/steer", { threadId: thread.id, expectedTurnId: "stale", input: [{ type: "text", text: "must reject" }] }), { code: "RPC_REJECTED" });
   // Reach a model boundary so queued steering is consumed. Check the real
@@ -278,6 +292,12 @@ try {
   const doctor = await appServerDoctor({ threadId: thread.id, discover: () => discoverRuntime(root) });
   assert.equal(doctor.ready, true, doctor.remediation);
   assert.equal(doctor.compatibility.status, "verified");
+  for (const profile of ["pre-version", "v0.13"]) {
+    const legacyDoctor = await appServerDoctor({ threadId: thread.id, discover: () => legacyRuntime(profile) });
+    assert.equal(legacyDoctor.ready, true, legacyDoctor.remediation);
+    assert.equal(legacyDoctor.compatibility.status, "verified");
+    assert.equal(legacyDoctor.runtime_compatibility.operations.send_new_turn.status, "supported");
+  }
   assert.equal(providerRequests, beforeDoctorRequests, "Doctor never invokes the model");
   const reconnectStates = [], stopWatch = new AbortController(); let watchClient;
   const watchDeadline = setTimeout(() => stopWatch.abort(), 5000);
@@ -312,7 +332,7 @@ try {
   await idle(thread.id);
   console.log(JSON.stringify({ checkpoint: "CP1-CP3-protocol", result: "PASS", thread_id: thread.id, turn_id: turn.id, stale_turn_rejected: true, desktop_steer_client_id: true, cli_url_shorthand_client_id: true }));
 
-  const next = await sendAppServerMessage(thread.id, "probe warm new turn", { newTurn: true, discover: () => discoverRuntime(root) });
+  const next = await sendAppServerMessage(thread.id, "probe warm new turn", { newTurn: true, discover: () => legacyRuntime("v0.13") });
   await checkUserMessageIdentity(thread.id, next, "probe warm new turn");
   await approval(thread.id, next.turn_id, "probe warm new turn");
   console.log(JSON.stringify({ checkpoint: "CP4-protocol-warm", result: "PASS", desktop_approval_after_sender_exit: true }));
@@ -325,7 +345,7 @@ try {
   const coldObservation = await observeThread(thread.id, {}, { discover: () => discoverRuntime(root) });
   assert.equal(coldObservation.status, "notLoaded", "Observation never resumes a cold task");
   assert.equal(stored.turns.flatMap(t => t.items).filter(item => item.type === "userMessage" && item.clientId === next.client_message_id).length, 1, "User message identity survives server restart");
-  const cold = await sendAppServerMessage(thread.id, "probe cold new turn", { newTurn: true, discover: () => discoverRuntime(root) });
+  const cold = await sendAppServerMessage(thread.id, "probe cold new turn", { newTurn: true, discover: () => legacyRuntime("pre-version") });
   await approval(thread.id, cold.turn_id, "probe cold new turn");
   assert.ok(desktop.notifications.some(m => m.method === "turn/started" && m.params.threadId === thread.id));
   console.log(JSON.stringify({ checkpoint: "CP4-protocol-cold", result: "PASS", unloaded_resume: true, desktop_approval_after_sender_exit: true }));
