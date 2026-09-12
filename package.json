@@ -1,0 +1,22 @@
+{
+  "name": "codex-steer",
+  "version": "0.10.0",
+  "private": true,
+  "description": "Send steering messages to running Codex Desktop threads from a terminal.",
+  "type": "module",
+  "bin": {
+    "codex-steer": "./bin/codex-steer.mjs"
+  },
+  "scripts": {
+    "check": "node scripts/check-syntax.mjs",
+    "test": "node --test",
+    "test:protocol": "node scripts/probe-app-server.mjs",
+    "benchmark:read": "node scripts/benchmark-read.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "ws": "8.21.3"
+  }
+}
