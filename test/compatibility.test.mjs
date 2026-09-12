@@ -62,6 +62,15 @@ test("explicit malformed or unsupported common protocol does not permit a read p
   }
 });
 
+test("probe evidence never overrides explicit declarations or known legacy contracts", () => {
+  for (const state of [modern, { codex_steer_protocol: 1 }, { ...modern, codex_steer_protocol: null },
+    { ...modern, codex_steer_capabilities: null }, { ...modern, codex_steer_capabilities: {} }]) {
+    assert.deepEqual(runtimeCompatibility(state, {
+      verifiedMethods: ["initialize", "thread/read", "thread/turns/list"], unsupportedMethods: ["thread/items/list"],
+    }), runtimeCompatibility(state));
+  }
+});
+
 test("pagination incompatibility does not block full-history read or short watch on an unpaged task", async () => {
   const state = { ...modern, codex_steer_capabilities: { ...RUNTIME_CAPABILITIES, history_pagination: [2] } };
   let paginated = false, reads = 0;

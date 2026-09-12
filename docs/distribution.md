@@ -127,7 +127,7 @@ runtimeには製品名・版、共通の通信仕様 `codex_steer_protocol`、�
 
 - `codex_steer_protocol: 1`だけを宣言するv0.13形式は、既存5機能のv1仕様として扱います（`source: legacy-v1`）。製品の版文字列は判定に使いません。
 - 版・protocol・capabilities宣言がすべてない旧形式は、runtime schema 1、同梱CLI `0.153.4`、旧wrapperが記録した署名済みNodeのパスが一致する組み合わせだけを既知のv1仕様とします（`source: legacy-0.153.4`）。対応表の根拠はコミット`83af51d`のwrapperと隔離プロトコルテストです。
-- それ以外の宣言なし環境は、初期化と読み取りによって観測を検証します（`source: probe`、doctorで成功すれば`probe-verified`）。読み取り成功から送信・再開対応を推測しません。
+- それ以外の宣言なし環境は、初期化と読み取りによって観測を検証します（`source: probe`、doctorで成功すれば`probe-verified`）。必要なAPIが`method-not-found`（`-32601`）を返した場合は、該当する通信仕様または機能も`unsupported`（`source: probe-unsupported`）にします。履歴ページ取得は`thread/turns/list`・`thread/items/list`のどちらかが非対応なら、その機能を非対応とします。未実行のAPIや通信エラー等から非対応を推測せず、読み取り成功から送信・再開対応も推測しません。
 - 壊れた宣言や明示的な非互換を、旧形式へのフォールバックで回避しません。既存の所有者・権限・プロセス・ソケット検査は旧形式にも適用します。
 
 旧v0.13の操作CLI自体には完全一致チェックが残っています。ここで説明する互換性判定を使うには操作側をv0.14以降へ更新してください。対応する旧wrapperはDesktopの再起動なしで使用できます。

@@ -83,7 +83,11 @@ export async function appServerDoctor({ threadId: threadInput, versions = instal
     }
     if (unavailable) connectionStatus = "unavailable";
   } finally { client?.close(); }
-  const contracts = runtimeCompatibility(runtimeState, { verifiedMethods: Object.entries(compatibility.api_checks).filter(([, status]) => status === "verified").map(([name]) => name) });
+  const apiChecks = Object.entries(compatibility.api_checks);
+  const contracts = runtimeCompatibility(runtimeState, {
+    verifiedMethods: apiChecks.filter(([, status]) => status === "verified").map(([name]) => name),
+    unsupportedMethods: apiChecks.filter(([, status]) => status === "unsupported").map(([name]) => name),
+  });
   let desktopSubscription = { status: "unverified" };
   if (runtimePaths && contracts.operations.send_new_turn.status === "supported") {
     try { await inspectControl(runtimePaths); desktopSubscription = { status: "available" }; }

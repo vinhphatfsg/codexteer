@@ -31,15 +31,19 @@ function legacySource(state) {
   return null;
 }
 
-export function runtimeCompatibility(state, { verifiedMethods = [] } = {}) {
+export function runtimeCompatibility(state, { verifiedMethods = [], unsupportedMethods = [] } = {}) {
   const legacy = legacySource(state), declared = state?.codex_steer_protocol;
   const protocol = {
     status: wireVersion(declared) ? declared === RUNTIME_PROTOCOL ? "supported" : "unsupported" : legacy ? "supported" : "unverified",
     client: RUNTIME_PROTOCOL, runtime: wireVersion(declared) ? declared : legacy ? 1 : null,
     source: declared !== undefined ? wireVersion(declared) ? "declared" : "invalid" : legacy ?? "probe",
   };
-  if (protocol.source === "probe" && verifiedMethods.includes("initialize")) {
-    protocol.status = "supported"; protocol.runtime = 1; protocol.source = "probe-verified";
+  if (protocol.source === "probe") {
+    if (unsupportedMethods.includes("initialize")) {
+      protocol.status = "unsupported"; protocol.source = "probe-unsupported";
+    } else if (verifiedMethods.includes("initialize")) {
+      protocol.status = "supported"; protocol.runtime = 1; protocol.source = "probe-verified";
+    }
   }
   const declaredFeatures = state?.codex_steer_capabilities;
   const features = Object.fromEntries(Object.entries(RUNTIME_CAPABILITIES).map(([name, supported]) => {
@@ -59,8 +63,13 @@ export function runtimeCompatibility(state, { verifiedMethods = [] } = {}) {
       }
     }
     const probes = name === "thread_read" ? ["thread/read"] : name === "history_pagination" ? ["thread/turns/list", "thread/items/list"] : [];
-    if (source === "probe" && probes.length && probes.every(method => verifiedMethods.includes(method))) {
-      status = "supported"; versions = [1]; source = "probe-verified";
+    if (source === "probe" && probes.length) {
+      // One missing required API disproves support even if another probe succeeded.
+      if (probes.some(method => unsupportedMethods.includes(method))) {
+        status = "unsupported"; source = "probe-unsupported";
+      } else if (probes.every(method => verifiedMethods.includes(method))) {
+        status = "supported"; versions = [1]; source = "probe-verified";
+      }
     }
     return [name, { status, client: [...supported], runtime: versions, source }];
   }));

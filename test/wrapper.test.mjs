@@ -100,6 +100,7 @@ test("doctor reports the running bundled Node version and only reads server stat
 });
 
 const TARGET = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
+const unknownLegacyState = { schema: 1, node_path: BUNDLED_NODE, cli_version: "0.150.0", codex_steer_protocol: undefined, codex_steer_version: undefined, codex_steer_package: undefined };
 test("doctor verifies the requested observation path without returning task contents or mutating it", async () => {
   const { options } = doctorFixture({ node_path: BUNDLED_NODE, node_version: "24.20.0" }), calls = [];
   options.threadId = `codex://threads/${TARGET.toUpperCase()}`;
@@ -231,7 +232,7 @@ test("doctor reports unsupported individual features without blocking other oper
 });
 
 test("doctor verifies observation for unknown legacy runtimes without probing mutations", async () => {
-  const { options } = doctorFixture({ schema: 1, node_path: BUNDLED_NODE, cli_version: "0.150.0", codex_steer_protocol: undefined, codex_steer_version: undefined, codex_steer_package: undefined });
+  const { options } = doctorFixture(unknownLegacyState);
   options.threadId = TARGET;
   options.connect = async () => ({ close() {}, async request(method) {
     if (method === "thread/loaded/list") return { data: [] };
@@ -245,6 +246,71 @@ test("doctor verifies observation for unknown legacy runtimes without probing mu
   assert.equal(result.runtime_compatibility.operations.read.status, "supported");
   assert.equal(result.runtime_compatibility.features.thread_read.source, "probe-verified");
   assert.equal(result.runtime_compatibility.operations.send.status, "unverified");
+});
+
+test("doctor propagates method-not-found from legacy read probes into the affected capability", async () => {
+  const methods = ["thread/read", "thread/turns/list", "thread/items/list"];
+  for (const missing of methods) {
+    const { options, calls } = doctorFixture(unknownLegacyState);
+    options.threadId = TARGET;
+    options.connect = async () => ({ close() { calls.push("close"); }, async request(method) {
+      calls.push(method);
+      if (method === missing) throw new RpcFailure("method not found", { code: "RPC_REJECTED", rpcCode: -32601 });
+      if (method === "thread/read") return { thread: { id: TARGET, status: { type: "idle" }, turns: [], historyMode: "paginated" } };
+      assert.ok(["thread/loaded/list", "thread/turns/list"].includes(method));
+      return { data: [] };
+    } });
+    const result = await appServerDoctor(options), contracts = result.runtime_compatibility;
+    assert.equal(result.ready, false);
+    assert.equal(result.compatibility.status, "unsupported");
+    assert.equal(result.compatibility.api_checks[missing], "unsupported");
+    assert.deepEqual(result.failure, { code: "RPC_REJECTED", rpc_code: -32601, method: missing });
+    const feature = missing === "thread/read" ? "thread_read" : "history_pagination";
+    assert.equal(contracts.features[feature].status, "unsupported", missing);
+    assert.equal(contracts.features[feature].source, "probe-unsupported");
+    assert.equal(contracts.features[feature].runtime, null, "A missing API does not advertise a runtime version");
+    assert.equal(contracts.protocol.status, "supported");
+    assert.equal(contracts.features.turn_steer.status, "unverified");
+    assert.equal(contracts.operations.read.status, missing === "thread/read" ? "unsupported" : "supported");
+    if (missing !== "thread/read") assert.equal(contracts.features.thread_read.source, "probe-verified");
+    assert.deepEqual(calls, ["thread/loaded/list", ...methods.slice(0, methods.indexOf(missing) + 1), "close"]);
+  }
+});
+
+test("doctor does not infer unsupported legacy pagination from uncertain or failed probes", async () => {
+  for (const [code, rpcCode, status] of [
+    ["TIMEOUT", undefined, "unverified"],
+    ["CAPABILITY_UNVERIFIED", undefined, "unverified"],
+    ["RPC_REJECTED", -32602, "failed"],
+    ["PROTOCOL_ERROR", undefined, "failed"],
+  ]) {
+    const { options } = doctorFixture(unknownLegacyState);
+    options.threadId = TARGET;
+    options.connect = async () => ({ close() {}, async request(method) {
+      if (method === "thread/loaded/list") return { data: [] };
+      if (method === "thread/read") return { thread: { id: TARGET, status: { type: "idle" }, turns: [], historyMode: "paginated" } };
+      assert.equal(method, "thread/turns/list");
+      throw new RpcFailure("probe failed", { code, rpcCode });
+    } });
+    const result = await appServerDoctor(options);
+    assert.equal(result.ready, false);
+    assert.equal(result.compatibility.api_checks["thread/turns/list"], status);
+    assert.equal(result.runtime_compatibility.features.history_pagination.status, "unverified");
+    assert.equal(result.runtime_compatibility.features.history_pagination.source, "probe");
+  }
+});
+
+test("doctor reports an unsupported initialization probe in the common protocol", async () => {
+  const { options } = doctorFixture(unknownLegacyState);
+  options.connect = async () => { throw new RpcFailure("method not found", { code: "RPC_REJECTED", rpcCode: -32601 }); };
+  const result = await appServerDoctor(options);
+  assert.equal(result.ready, false);
+  assert.equal(result.compatibility.api_checks.initialize, "unsupported");
+  assert.equal(result.runtime_compatibility.protocol.status, "unsupported");
+  assert.equal(result.runtime_compatibility.protocol.source, "probe-unsupported");
+  assert.equal(result.runtime_compatibility.protocol.runtime, null);
+  assert.ok(Object.values(result.runtime_compatibility.operations).every(operation => operation.status === "unsupported"));
+  assert.ok(Object.values(result.runtime_compatibility.features).every(feature => feature.status === "unverified"));
 });
 
 test("startup uses the prepared path and rejects another runtime's distribution", { skip: process.platform !== "darwin" }, async () => {
