@@ -1,11 +1,10 @@
 {
   "name": "@vinhphatfsg/codex-steer",
-  "version": "0.14.0",
-  "private": true,
+  "version": "0.14.1",
   "description": "Send steering messages to running Codex Desktop threads from a terminal.",
   "type": "module",
   "bin": {
-    "codex-steer": "./bin/codex-steer.mjs"
+    "codex-steer": "bin/codex-steer.mjs"
   },
   "scripts": {
     "check": "node scripts/check-syntax.mjs",

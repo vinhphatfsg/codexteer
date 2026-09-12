@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,14 +45,14 @@ function prompt(options) {
 
 test("supervise preserves forwarded argv and prompt boundaries, inherits cwd and all standard streams", t => {
   const options = fixture(t);
-  const forwarded = ["--model", "model with spaces", "--effort", "high", "", "line 1\nline 2", "$(touch INJECTED)", "`touch INJECTED_TOO`", "*", 'quote"and\'slash\\', "--help", "--version", "--json", "--agent", "not-a-steer-agent", "--", "literal tail"];
+  const forwarded = ["--model", "model with spaces", "--effort", "high", "", "line 1\nline 2", "$(touch INJECTED)", "`touch INJECTED_TOO`", "*", 'quote"and\'slash\\', "--help", "--version", "--json", "--require-node-version", "v0.0.0", "--agent", "not-a-steer-agent", "--", "literal tail"];
   const result = spawnSync(process.execPath, [BIN, "supervise", ID, "--agent", "claude", "--", ...forwarded], { ...options, input: "interactive input\n" });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, "agent stderr\n", "The CLI must not mix status output into agent streams");
   assert.deepEqual(JSON.parse(result.stdout), { args: [...forwarded, "--", prompt(options)], cwd: options.cwd, input: "interactive input\n" });
   assert.equal(existsSync(path.join(options.cwd, "INJECTED")), false);
   assert.equal(existsSync(path.join(options.cwd, "INJECTED_TOO")), false);
-  assert.equal(existsSync(options.env.CODEX_HOME), false, "The launcher does not discover or mutate Desktop state");
+  assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["runtimes"], "The launcher places only its distribution and does not connect to Desktop");
 });
 
 test("supervise uses the normalized target and propagates the agent's normal exit code", t => {
@@ -77,6 +77,21 @@ test("invalid IDs, missing or unsupported agent options, and misplaced flags nev
   assert.equal(json.status, 1);
   assert.match(JSON.parse(json.stdout).error.message, /does not support --json/);
   assert.equal(existsSync(path.join(options.cwd, "started")), false);
+  assert.equal(existsSync(options.env.CODEX_HOME), false, "Invalid arguments must fail before placement");
+});
+
+test("a modified deployment prevents agent launch without overwriting the saved files", t => {
+  const options = fixture(t);
+  const prepared = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID, "--json"], options);
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const saved = path.join(JSON.parse(prepared.stdout).data.deployment.directory, "src/prompt.mjs");
+  writeFileSync(saved, "modified saved prompt");
+  const result = spawnSync(process.execPath, [BIN, "supervise", ID, "--agent", "claude"], options);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /Deployed files differ from the installed distribution/);
+  assert.equal(existsSync(path.join(options.cwd, "started")), false);
+  assert.equal(readFileSync(saved, "utf8"), "modified saved prompt");
 });
 
 test("missing or non-executable Claude fails without launching or exposing forwarded arguments", t => {

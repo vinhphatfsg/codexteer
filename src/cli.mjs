@@ -10,8 +10,7 @@ import { monitorCommand } from "./monitor.mjs";
 import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, verifyCheckpoint, runCheckpoint, attachArtifacts } from "./checkpoint.mjs";
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 import { playSendSound } from "./sound.mjs";
-import { supervisorPrompt } from "./prompt.mjs";
-import { superviseAgent } from "./supervise.mjs";
+import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
 
 const DEFAULT_SEND_BACKEND = "app-server";
 
@@ -82,6 +81,11 @@ export async function main(argv) {
   let json = takeFlag(args, "--json");
 
   try {
+    const requiredNode = takeOption(args, "--require-node-version", undefined);
+    if (requiredNode !== undefined) {
+      if (!/^v\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/.test(requiredNode)) throw new Error("--require-node-version requires a Node version such as v25.1.0.");
+      if (requiredNode !== process.version) throw Object.assign(new Error(`This supervision command requires Node ${requiredNode}, but is running ${process.version}. Regenerate the supervisor prompt with the intended Node runtime.`), { code: "NODE_VERSION_MISMATCH" });
+    }
     if (takeFlag(args, "--version")) {
       if (json) success("version", { version: VERSION }, true);
       else console.log(VERSION);
@@ -102,7 +106,7 @@ export async function main(argv) {
     if (command === "supervise" && args[0] === "prompt") {
       args.shift();
       if (args.length !== 1) throw new Error("Expected: supervise prompt <THREAD>. See codex-steer help supervise prompt.");
-      const data = supervisorPrompt(args[0]);
+      const data = await prepareSupervisorPrompt(args[0]);
       success("supervise.prompt", data, json);
       if (!json) console.log(data.prompt);
       return;

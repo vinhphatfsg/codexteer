@@ -4,7 +4,41 @@
 
 ## 導入
 
-macOS、Node.js 20以降、Git、makeと、`/Applications/ChatGPT.app`にインストールされたCodex Desktopが必要です。
+macOS、Node.js 20以降とnpm、`/Applications/ChatGPT.app`にインストールされたCodex Desktopが必要です。Claudeを監督役にする場合は、PATH上の`claude`でClaude Codeを起動できる状態にします。
+
+### npxで使う
+
+リポジトリのcloneやグローバルインストールなしで実行できます。npmパッケージ名は`@vinhphatfsg/codex-steer`です。無指定の`codex-steer`は別パッケージなので、スコープまで指定してください。
+
+監督開始時のCLI一式を保存する機能は`0.14.1`以降に対応します。この版のnpm公開前は、次の「ソースから導入する」を使ってください。
+
+```bash
+npx -y @vinhphatfsg/codex-steer --version
+```
+
+Codex Desktopでの作業を終えてアプリを終了し、ターミナルから起動します。
+
+```bash
+npx -y @vinhphatfsg/codex-steer desktop start
+npx -y @vinhphatfsg/codex-steer doctor --json
+```
+
+`-y`はnpmの取得確認を省略します。通常はバージョン指定なしで使えます。監督開始後は、その時点で保存したCLIを使い続けます。起動側と操作側の製品バージョンは、必要な通信仕様が対応していれば異なっていても使えます。
+
+<details>
+<summary>特定のバージョンで実行する場合（任意）</summary>
+
+不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。次は`0.14.1`を選ぶ例です。
+
+```bash
+npx -y @vinhphatfsg/codex-steer@0.14.1 supervise <thread-id> --agent claude
+```
+
+</details>
+
+### ソースから導入する
+
+こちらの方法ではGitとmakeも必要です。
 
 ```bash
 git clone https://github.com/vinhphatfsg/codex-steer.git
@@ -18,34 +52,49 @@ make install-local
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Codex Desktopでの作業を終えてアプリを終了し、ターミナルから起動します。
+Codex Desktopでの作業を終えてアプリを終了し、導入したCLIから起動します。
 
 ```bash
 codex-steer desktop start
 codex-steer doctor --json
 ```
 
-`desktop start`はDesktopを起動するたびに実行します。すでに起動している場合は、一度終了してから実行してください。通常の起動に戻すには、Desktopを終了し、Dockなどから開き直します。
-
 インストールしたCLIはこのリポジトリへのシンボリックリンクです。リポジトリを移動した場合は`make install-local`を再実行してください。削除する場合は`make uninstall-local`を実行します。
+
+### Desktopの起動について
+
+どちらの導入方法でも、`desktop start`はDesktopを起動するたびに実行します。すでに起動している場合は、一度終了してから実行してください。通常の起動に戻すには、Desktopを終了し、Dockなどから開き直します。
 
 `desktop start`は実行ファイルと依存を`CODEX_HOME/codex-steer/runtimes/<version>-<sha256>`へ検証して配置し、そのwrapperからDesktopを起動します。元のリポジトリやnpxキャッシュに依存せず、起動後のhelperも同じ保存先を使います。配置済みの版は自動削除・上書きしません。
 
-npm配布用の名前は`@vinhphatfsg/codex-steer`です。無指定の`codex-steer`は別パッケージが登録済みです。現在は公開前のため`private: true`を維持しています。MITライセンス、固定版での実行例、保存先の検証・復旧と公開前テストは[配布ドキュメント](docs/distribution.md)を参照してください。
+監督AIが使うCLIの参照先については、次の監督手順を参照してください。MITライセンス、保存先の検証・復旧と公開手順は[配布ドキュメント](docs/distribution.md)にまとめています。
 
 ## 使い方
 
 以下の`<thread-id>`は対象のタスクIDに置き換えてください。`codex://threads/...`形式のタスクURLも使えます。
+コマンド一覧では`codex-steer`と略記します。npxで手動実行する場合は、その部分を`npx -y @vinhphatfsg/codex-steer`に置き換えてください。
 
 ### Claude CodeにCodexの監視とステアリングを任せる
 
-上の導入を済ませ、PATH上の`claude`でClaude Codeを起動できる状態にします。監視したいCodexタスクのIDまたはURLをコピーし、別のターミナルの対象プロジェクトのディレクトリから次を実行してください。
+上の導入を済ませ、監視したいCodexタスクのIDまたはURLをコピーします。別のターミナルの対象プロジェクトのディレクトリから、導入方法に合う方を実行してください。
 
 ```bash
+# npxで起動する場合
+npx -y @vinhphatfsg/codex-steer supervise <thread-id> --agent claude
+
+# ソースから導入した場合
 codex-steer supervise <thread-id> --agent claude
 ```
 
 対象IDを埋め込んだ監督プロンプトでClaudeを[対話起動](https://code.claude.com/docs/en/cli-reference#cli-commands)します。端末の標準入出力をそのまま使い、起動後もClaudeへ追加の指示を入力できます。
+
+両方とも、起動したCLI本体と依存を`CODEX_HOME/codex-steer/runtimes/<version>-<sha256>`へ検証して保存し、そのコピーへの実行コマンドを監督プロンプトに埋め込みます。監督役に渡す切り替えオプションは不要です。npxのキャッシュが新版に更新された場合や、ソース導入先を`git pull`・削除した場合も、開始済みの監督は保存した内容を使い続けます。
+
+同じPC・同じ`CODEX_HOME`で使い、監督中は保存したコピーを保持してください。新しいCLIに切り替えるときは、その版から監督を起動し直すか、プロンプトを生成し直します。同じ版・同じ内容のコピーは検証して再利用し、内容が変われば別の保存先を作ります。既存のコピーは自動削除・上書きしません。
+
+Node本体はコピーせず、開始時の実体への絶対パスとNodeバージョンの検査を各コマンドに含めます。元のNodeは保持してください。バージョンが変われば`NODE_VERSION_MISMATCH`で操作を止めます。同じバージョンのNodeの改変や共有ライブラリまで固定するものではありません。保存先やNodeが使えなくなった場合は介入を止め、理由を報告するよう指示します。
+
+起動時にバージョンを指定するかどうかに関係なく、監督用CLIの保存処理は同じです。キャッシュの動作と保存処理の詳細は[配布ドキュメント](docs/distribution.md#監督役が使うcli)を参照してください。
 
 モデルなどClaude側の起動引数は、`--`の後ろへ渡します。
 
@@ -53,13 +102,17 @@ codex-steer supervise <thread-id> --agent claude
 codex-steer supervise <thread-id> --agent claude -- --model <model> --effort <level>
 ```
 
-既にClaudeを起動している場合は、監督役（オーケストレーター）向けのプロンプトを出力し、そのセッションに貼り付けても使えます。
+同じPC・同じ`CODEX_HOME`で既にClaudeを起動している場合は、監督役（オーケストレーター）向けのプロンプトを出力し、そのセッションに貼り付けても使えます。
 
 ```bash
+# npxで本文を生成する場合
+npx -y @vinhphatfsg/codex-steer supervise prompt <thread-id>
+
+# ソースから導入した場合
 codex-steer supervise prompt <thread-id>
 ```
 
-監督手順は`codex-steer help monitor`と生成プロンプトで共通です。
+直接起動と本文だけの出力は、同じ保存・検証・生成処理を使います。`supervise prompt`もCLI一式を保存してから本文を出力します。監督手順は`codex-steer help monitor`と共通で、生成プロンプト中の`doctor`・`read`・`watch`・`send`等の例には同じ実行コマンドを使います。監督役には、ヘルプ中の`codex-steer`表記も指定された実行コマンドに置き換えるよう指示します。
 
 1. 接続を診断し、対象タスクの最新の依頼・制約・進捗、有効な指示と対応待ちの履歴を確認する。
 2. 差分を読み切ったcursorから観測を続ける。[Monitorツール](https://code.claude.com/docs/en/tools-reference#monitor-tool)が使えれば`watch --stream`、使えなければ短い`watch`を繰り返す。接続状態の通知を読み、復帰待ちの間は介入を控える。
@@ -174,12 +227,29 @@ codex-steer supervise prompt <thread-id> --json
 codex-steer help supervise prompt
 ```
 
-`supervise prompt`は、Claudeなどの監督役（オーケストレーター）へ渡す初期プロンプトを生成します。対象IDの書式を確認して正規化し、本文へ埋め込みます。Desktopの起動・接続、履歴取得、送信、ファイル保存、Claudeの起動は行いません。タスクの存在と接続は監督開始時に確認します。本文には観測・根拠付き介入・結果確認・停止までの手順を含みます。
+`supervise prompt`は、Claudeなどの監督役（オーケストレーター）へ渡す初期プロンプトを生成します。対象IDと引数を検証し、CLI一式を内容ハッシュ別の保存先へ配置・検証してから、正規化したIDと保存先を本文へ埋め込みます。保存・検証に失敗した場合は本文を出力せず、直接起動の場合もClaudeを起動しません。Desktopの起動・接続、履歴取得、送信、Claudeの起動は行いません。タスクの存在と接続は監督開始時に確認します。本文には観測・根拠付き介入・結果確認・停止までの手順を含みます。
+
+各コマンドは開始時のNodeと保存したCLIの絶対パスを使うため、本文を貼り付ける先のPATHに`codex-steer`がなくても実行できます。空白や引用符を含むパスはシェル引数として引用します。本文に埋め込むパスに改行等の制御文字があれば、本文を出力する前に`SUPERVISION_PATH_UNSAFE`で拒否します。引用と`--require-node-version`を含め、実行コマンドをそのまま使ってください。別のPCや`CODEX_HOME`で使う場合は、そこで本文を生成し直してください。
 
 通常出力は末尾改行付きの本文のみです。`--json`では既存CLIと同じ形式で返します。
 
 ```json
-{"ok":true,"command":"supervise.prompt","data":{"thread_id":"aaaaaaaa-aaaa-4aaa-8aaa-000000000001","prompt":"対象IDを含む監督プロンプト本文…"}}
+{
+  "ok": true,
+  "command": "supervise.prompt",
+  "data": {
+    "thread_id": "aaaaaaaa-aaaa-4aaa-8aaa-000000000001",
+    "prompt": "対象IDと保存したCLIの実行コマンドを含む監督プロンプト本文…",
+    "deployment": {
+      "directory": "/Users/me/.codex/codex-steer/runtimes/0.14.1-<sha256>",
+      "wrapper_path": "/Users/me/.codex/codex-steer/runtimes/0.14.1-<sha256>/bin/codex-steer-wrapper.mjs",
+      "version": "0.14.1",
+      "sha256": "<sha256>",
+      "reused": false
+    },
+    "node": { "path": "/absolute/path/to/node", "version": "v25.1.0" }
+  }
+}
 ```
 
 IDが不正な場合や引数が不足・過剰な場合は終了コード1です。通常は標準エラーへ理由を出し、本文は出力しません。`--json`では標準出力に`{"ok":false,"error":{"message":"理由"}}`を返します。起動に使う本文の生成には`--json`を付けないでください。
