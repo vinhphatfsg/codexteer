@@ -10,7 +10,7 @@ macOS、Node.js 20以降とnpm、`/Applications/ChatGPT.app`にインストー�
 
 リポジトリのcloneやグローバルインストールなしで実行できます。npmパッケージ名とCLI名は`codexteer`です。
 
-このブランチは修正版`0.15.1`を準備します。npm公開済みの`0.15.0`には監督方針の上書き、停止・再開、指摘管理、Codex CLI起動、Desktopへの観測専用接続が含まれます。長いタスクへの送信前確認を修正した`0.15.1`を公開前に使う場合は、このブランチを「ソースから導入する」の手順で導入してください。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
+このブランチはマイナー更新`0.16.0`を準備します。`watch --stream`の通知集約と監督プロンプトの改善に加え、長いタスクへの送信前確認の修正を含みます。公開前に使う場合は「ソースから導入する」の手順で導入してください。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
 
 ```bash
 npx -y codexteer --version
@@ -28,10 +28,10 @@ npx -y codexteer doctor --json
 <details>
 <summary>特定のバージョンで実行する場合（任意）</summary>
 
-不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。`0.15.1`の公開後にその版を選ぶ場合は、次のように指定します。
+不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。`0.16.0`の公開後にその版を選ぶ場合は、次のように指定します。
 
 ```bash
-npx -y codexteer@0.15.1 supervise <thread-id>
+npx -y codexteer@0.16.0 supervise <thread-id>
 ```
 
 </details>
@@ -347,9 +347,9 @@ codexteer help supervise prompt
     "prompt": "対象IDと保存したCLIの実行コマンドを含む監督プロンプト本文…",
     "deployment": {
       "codex_home": "/Users/me/.codex",
-      "directory": "/Users/me/.codex/codex-steer/runtimes/0.15.1-<sha256>",
-      "wrapper_path": "/Users/me/.codex/codex-steer/runtimes/0.15.1-<sha256>/bin/codexteer-wrapper.mjs",
-      "version": "0.15.1",
+      "directory": "/Users/me/.codex/codex-steer/runtimes/0.16.0-<sha256>",
+      "wrapper_path": "/Users/me/.codex/codex-steer/runtimes/0.16.0-<sha256>/bin/codexteer-wrapper.mjs",
+      "version": "0.16.0",
       "sha256": "<sha256>",
       "reused": false
     },
@@ -488,8 +488,15 @@ codexteer watch <thread-id> --stream --since <cursor> --include-output --json
 | `--timeout-ms <n>` | 通常の`watch`の待機上限。0〜60000ms、既定30000ms。 |
 | `--poll-ms <n>` | `watch`の確認間隔。250〜10000ms、既定1000ms。 |
 | `--stream` | `watch`で停止まで監視を継続。`--until`・`--timeout-ms`とは併用不可。 |
+| `--notify digest\|all` | `watch --stream`の通知方法。既定は`digest`。`all`は変化ごとに即時出力。 |
+| `--settle-ms <n>` | digestで最後の通常イベントから待つ時間。1000〜120000ms、既定20000ms。 |
+| `--max-hold-ms <n>` | digestの最も古い保留イベントの待ち時間。10000〜1800000ms、既定600000ms。 |
 
 `has_more: true`なら`changed: false`でも返されたcursorで続きを読み、読み終えてから判断・送信してください。`--stream`は初回に現在を基準とし、監視開始を1回通知します。その後は作業差分と接続状態の変化を出力します。開始時の状況も読む場合は先に`read`し、そのcursorを渡します。停止はCtrl-C、Monitorで起動した場合はClaudeに停止を依頼します。
+
+0.16.0の`watch --stream`は、通常の進捗を最後の通常イベントから20秒後、読み取り専用コマンドなどを最長10分まで保留してまとめます。ユーザー入力、ターン、質問、注意状態、読み取り専用以外の失敗は即時通知します。連続した通常イベントもmax-holdで排出し、実行中コマンドの出力だけの更新ではsettleを延長しません。ポーリングと読み取り処理による遅れはあり得ます。従来の即時出力には`--notify all`を指定してください。単発watchと保存済みCLIの動作は変わりません。
+
+`digest`には出力理由、保留時間、分類別件数、保留開始前の`from_cursor`が入ります。`compacted: true`のイベントは詳細出力を省略しています。必要なら`read --since <from_cursor> --include-output`で読み直してください。通常は全ページを読み切ってから通知し、ページ途中の切断・終了時だけ`has_more: true`を保持して取得済み分を出力します。200件／64KBはページ読了後の排出目安です。接続行のcursorは読了の証明にはなりません。
 
 `--stream`のJSONは、`data.type`で次の2種類を区別します。
 
