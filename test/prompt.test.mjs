@@ -19,9 +19,12 @@ test("the eight-section prompt leads with policy, uses digest and keeps exceptio
   ]);
   assert.equal(DEFAULT_SUPERVISION_POLICY.split("\n\n").length, 5);
   assert.ok(prompt.indexOf(DEFAULT_SUPERVISION_POLICY) < prompt.indexOf("2. 必ず守ること"));
-  assert.match(prompt, /コードの責務.*作業の焦点/s);
-  assert.match(prompt, /今回の変更が触れた範囲.*ファイルと箇所/s);
-  assert.match(prompt, /以前からある問題は介入せず/);
+  assert.match(prompt, /\(1\) 設計上の責務.*担当と定めているかを先に確認.*\(2\) 過剰な設計.*\(3\) 作業の焦点/s);
+  assert.match(prompt, /別の層でも実装していないか（検算、再計算、空のデータからの推測、派生値の複製保存、念のための二重チェック）/);
+  assert.match(prompt, /複数のリポジトリにまたがる場合は、その全体を基準/);
+  assert.match(prompt, /示されていない場合は、推測で判定せず、ユーザーに確認/);
+  assert.match(prompt, /どこが越えたかをファイルと箇所で示せる場合だけ送ります/);
+  assert.match(prompt, /以前からある二重化は、今回の変更がそれを広げるか、それに依存する場合に介入の対象/);
   assert.match(prompt, /説明を書かずに「変化なし」の一言/);
   assert.doesNotMatch(prompt, /saved-command help monitor/);
   assert.match(prompt, /watch .* --stream --notify digest --since/);
