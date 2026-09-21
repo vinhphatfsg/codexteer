@@ -1,11 +1,11 @@
 # 配布と永続実行
 
 パッケージ名は `codexteer`、CLI名は `codexteer`、ライセンスはMITです。
-旧npmパッケージは`@vinhphatfsg/codex-steer`です。`codexteer@0.15.0`は公開済みで、このブランチは修正版`0.15.1`を準備します。GitHubのPR作成・マージはnpm公開を行う操作ではありません。公開時は`npm whoami`でnpm側のユーザーを確認してください。
+旧npmパッケージは`@vinhphatfsg/codex-steer`です。`codexteer@0.15.0`は公開済みで、このブランチはマイナー更新`0.16.0`を準備します。GitHubのPR作成・マージはnpm公開を行う操作ではありません。公開時は`npm whoami`でnpm側のユーザーを確認してください。
 `package.json` は `private` を持たず、`publishConfig` でnpm公式レジストリへのpublic公開を指定しています。公開可能な設定であることと、実際に公開済みであることは別です。
 
 公開後の基本的な実行形式は次のとおりです。通常はバージョン指定なしで使えます。監督開始後は保存したCLIを使い続けるため、監督中の一貫性を保つために版を明示する必要はありません。起動側と操作側の製品バージョンも、必要な通信仕様が対応していれば異なっていても使えます。
-以下の監督機能は公開済みの0.15.0から利用できます。長いタスクへの送信前確認の修正は0.15.1に含みます。修正版の公開前はこのブランチをソースから導入してください。`-y` はnpmの取得確認を省略します。
+以下の監督機能は公開済みの0.15.0から利用できます。0.16.0では通知集約と監督プロンプトを改善し、0.15.1で準備した長いタスクへの送信前確認の修正も含みます。公開前はこのブランチをソースから導入してください。`-y` はnpmの取得確認を省略します。
 
 ```text
 npx -y codexteer desktop start
@@ -175,7 +175,7 @@ npxから模擬Claudeと模擬Codexを起動して保存したCLIへの参照を
 
 レビュー・検証を終えた版を、npm側の公開権限を持つアカウントで公開します。手動公開には2FAを有効にしたアカウントを使ってください。
 
-公開済みのパッケージ名とバージョンの組み合わせは再公開できません。既存の`codexteer@0.15.0`は変更せず、今回の配布物は`codexteer@0.15.1`として準備します。公開は別途実行します。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
+公開済みのパッケージ名とバージョンの組み合わせは再公開できません。既存の`codexteer@0.15.0`は変更せず、今回の配布物は`codexteer@0.16.0`として準備します。公開は別途実行します。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
 
 ```bash
 npm login
@@ -184,11 +184,11 @@ npm run test:package
 npm publish --access public
 ```
 
-公開後は、公開した版と起動コマンドの登録を確認します。次は0.15.1を公開した場合の例です。
+公開後は、公開した版と起動コマンドの登録を確認します。次は0.16.0を公開した場合の例です。
 
 ```bash
-npm view codexteer@0.15.1 version bin --json
-npx -y codexteer@0.15.1 --version
+npm view codexteer@0.16.0 version bin --json
+npx -y codexteer@0.16.0 --version
 ```
 
 `EPRIVATE`はリポジトリの`package.json`に公開禁止設定が残っていることを示します。`--access public`はその禁止を解除しません。
@@ -198,7 +198,7 @@ npx -y codexteer@0.15.1 --version
 
 ## 監督状態・指摘と接続方式
 
-ここからの監督制御、指摘管理、Codex CLI起動、接続方式の選択は0.15.0で追加しました。保存済みCLIの機能自体は0.14.1から利用できます。0.15.1は送信前確認の修正を含むpatch更新です。runtime protocolと既存capabilityのv1契約は維持し、0.15.0で起動したDesktopとの通信に再起動は不要です。
+ここからの監督制御、指摘管理、Codex CLI起動、接続方式の選択は0.15.0で追加しました。保存済みCLIの機能自体は0.14.1から利用できます。0.16.0は通知集約と監督プロンプトの改善を含むminor更新です。`watch --stream`の既定はdigestで、`--notify all`を明示すると従来の即時出力になります。単発watchと保存済みCLIの動作は変わりません。runtime protocolと既存capabilityのv1契約は維持し、0.15.0で起動したDesktopとの通信に再起動は不要です。
 
 保存したCLIへのコマンドは、canonical CODEX_HOME、Node guard、`--supervisor <session-id>`、`--connection shared|desktop`を一緒に保持します。各プロンプト生成は新しいIDを発行しますが、生成だけでは登録しません。直接起動はエージェント起動前に登録し、終了時に停止します。コピーした本文は最初のregisterで開始します。
 
