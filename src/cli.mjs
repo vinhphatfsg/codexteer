@@ -7,6 +7,7 @@ import { appServerDoctor, startDesktop } from "./launcher.mjs";
 import { VERSION, helpData, renderHelp } from "./help.mjs";
 import { observeThread, printObservation } from "./observe.mjs";
 import { monitorCommand } from "./monitor.mjs";
+import { notificationOptions } from "./notify.mjs";
 import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, verifyCheckpoint, runCheckpoint, attachArtifacts } from "./checkpoint.mjs";
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 import { playSendSound } from "./sound.mjs";
@@ -303,6 +304,10 @@ export async function main(argv) {
       if (command === "watch") {
         const until = takeOption(args, "--until", undefined), timeout = takeOption(args, "--timeout-ms", undefined);
         if (stream && (until !== undefined || timeout !== undefined)) throw new Error("--stream runs until cancelled; do not combine it with --until or --timeout-ms. See codexteer help monitor.");
+        const notify = takeOption(args, "--notify", stream ? "digest" : "all"), settle = takeOption(args, "--settle-ms", undefined), maxHold = takeOption(args, "--max-hold-ms", undefined);
+        if (!stream && (notify === "digest" || settle !== undefined || maxHold !== undefined)) throw new Error("--notify digest, --settle-ms and --max-hold-ms require --stream.");
+        if (notify !== "digest" && (settle !== undefined || maxHold !== undefined)) throw new Error("--settle-ms and --max-hold-ms require --notify digest.");
+        Object.assign(options, notificationOptions({ notify, ...(settle === undefined ? {} : { settleMs: Number(settle) }), ...(maxHold === undefined ? {} : { maxHoldMs: Number(maxHold) }) }));
         Object.assign(options, { watch: true, until: until ?? "change", timeoutMs: Number(timeout ?? "30000"), pollMs: Number(takeOption(args, "--poll-ms", "1000")) });
       }
       if (args.length !== 1) throw new Error(`Expected: ${command} <THREAD>. See codexteer help ${command}.`);

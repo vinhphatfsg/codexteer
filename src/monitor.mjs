@@ -2,9 +2,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { normalizeThreadId } from "./thread-id.mjs";
 import { codexHome, discoverRuntime } from "./runtime.mjs";
 import { RpcClient } from "./rpc.mjs";
-import { decodeCursor, readOnClient } from "./observe.mjs";
+import { decodeCursor, digest, readOnClient } from "./observe.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 import { assertSupervisor, recordSupervisorObservation, recordSupervisorFailure } from "./supervision.mjs";
+import { NotificationBuffer, notificationOptions } from "./notify.mjs";
 
 const retryable = new Set(["CONNECTION_FAILED", "TIMEOUT", "RUNTIME_UNAVAILABLE", "RUNTIME_NOT_READY"]);
 const needsReview = new Set(["STALE_CURSOR", "CURSOR_UPGRADE_REQUIRED", "OBSERVATION_CHANGED"]);
@@ -15,11 +16,15 @@ export async function streamThread(threadInput, options, onChange, { discover = 
   const threadId = normalizeThreadId(threadInput), { signal, pollMs = 1000, reconnectTimeoutMs = 60000 } = options;
   if (!Number.isInteger(pollMs) || pollMs < 250 || pollMs > 10000) throw new Error("--poll-ms must be between 250 and 10000.");
   if (!Number.isInteger(reconnectTimeoutMs) || reconnectTimeoutMs < 1 || reconnectTimeoutMs > 60000) throw new Error("Invalid reconnect timeout.");
+  const notification = notificationOptions(options);
+  const buffer = notification.notify === "digest" ? new NotificationBuffer(notification) : null;
   if (signal?.aborted) return;
   let home = codexHome(), cursor = options.since, client, attempt;
+  let notifiedCursor = options.since;
+  let initialStateHash;
   let established = false, lastObservedAt = null, outageStarted = null, attempts = 0, backoff = 1000, lastFailure;
   const connection = (state, extra = {}) => ({
-    type: "connection", thread_id: threadId, state, resume_cursor: cursor ?? null,
+    type: "connection", thread_id: threadId, state, resume_cursor: (buffer ? notifiedCursor : cursor) ?? null,
     last_observed_at: lastObservedAt, observed_at: new Date().toISOString(), reconnect_attempts: attempts, ...extra,
   });
   const expired = () => Object.assign(new Error("Watch could not restore observation within the reconnect deadline. Check doctor before restarting from a reviewed cursor."), {
@@ -27,6 +32,14 @@ export async function streamThread(threadInput, options, onChange, { discover = 
   });
   const cancel = () => { attempt?.abort(new Error("Watch cancelled.")); client?.close(); };
   signal?.addEventListener("abort", cancel, { once: true });
+
+  async function flush(reason) {
+    const data = buffer?.observation(reason, now());
+    if (!data) return;
+    await onChange(data);
+    notifiedCursor = data.cursor;
+    buffer.clear();
+  }
 
   async function read() {
     if (options.supervisor) await assertSupervisor(threadId, options.supervisor, { connection: options.connection });
@@ -53,7 +66,7 @@ export async function streamThread(threadInput, options, onChange, { discover = 
   }
 
   try {
-    if (cursor) decodeCursor(cursor, threadId);
+    if (cursor) initialStateHash = decodeCursor(cursor, threadId).state;
     while (!signal?.aborted) {
       let data;
       try { data = await read(); }
@@ -65,6 +78,7 @@ export async function streamThread(threadInput, options, onChange, { discover = 
         lastFailure = error;
         if (outageStarted === null) {
           outageStarted = now(); attempts = 0; backoff = 1000;
+          await flush("reconnecting");
           await onChange(connection("reconnecting", { cause_code: error.code, retry_timeout_ms: reconnectTimeoutMs }));
         }
         await sleep(Math.max(0, Math.min(backoff, reconnectTimeoutMs - (now() - outageStarted))), undefined, { signal });
@@ -76,7 +90,18 @@ export async function streamThread(threadInput, options, onChange, { discover = 
       lastObservedAt = data.observed_at;
       if (options.supervisor) await recordSupervisorObservation(threadId, options.supervisor, data);
       // Only network reads are retried. Consumer/output errors always stop here.
-      if (cursor && data.changed) await onChange({ ...data, type: "observation", reason: "change" });
+      if (buffer) {
+        if (!cursor) {
+          buffer.baseline(data);
+          notifiedCursor = data.cursor;
+        } else {
+          const { thread_id, status, active_turn_id, attention, cwd, title } = data;
+          const initialStateChanged = !buffer.previous && initialStateHash !== digest({ thread_id, status, active_turn_id, attention, cwd, title });
+          buffer.add(data, cursor, now(), initialStateChanged);
+          const reason = buffer.reason(now());
+          if (reason) await flush(reason);
+        }
+      } else if (cursor && data.changed) await onChange({ ...data, type: "observation", reason: "change" });
       if (signal?.aborted) break;
       cursor = data.cursor;
       if (!established || outageStarted !== null) {
@@ -86,6 +111,9 @@ export async function streamThread(threadInput, options, onChange, { discover = 
       if (!data.has_more && !signal?.aborted) await sleep(pollMs, undefined, { signal });
     }
   } catch (error) {
+    // Flush the last successfully read page even when the next one failed.
+    // Keep has_more=true on a partial read; claiming completion would be false.
+    try { await flush(signal?.aborted ? "stopped" : "failed"); } catch { /* Preserve the original read/output error. */ }
     if (!signal?.aborted) {
       const failure = error instanceof Error ? error : new Error("Watch consumer failed.");
       failure.code ??= "WATCH_FAILED";
@@ -97,6 +125,10 @@ export async function streamThread(threadInput, options, onChange, { discover = 
   } finally {
     signal?.removeEventListener("abort", cancel);
     client?.close();
+    // A cancelled read or sleep can exit the loop without entering catch.
+    if (signal?.aborted) {
+      try { await flush("stopped"); } catch { /* The consumer resumes from its own reviewed cursor. */ }
+    }
     if (options.supervisor && signal?.aborted) {
       try { await recordSupervisorObservation(threadId, options.supervisor, { type: "connection", state: "stopped", cause_code: "WATCH_CANCELLED" }); }
       catch { /* A stopped/replaced supervisor must not be revived by cleanup. */ }

@@ -36,6 +36,24 @@ function server(thread, beforeRequest = () => {}) {
   return { client, calls, read: options => readOnClient(client, ID, options) };
 }
 
+test("digest drains v2 pages and its cursor replays compacted details without skipping events", async () => {
+  const thread = task([user("u")]), fake = server(thread), baseline = await fake.read(), stop = new AbortController(), lines = [];
+  thread.turns[0].items.push(...Array.from({ length: 8 }, (_, i) => ({ ...cmd(`read${i}`, "completed", `details ${i}`), command: "rg foo src", exitCode: 0 })), { ...msg("final"), phase: "final_answer" });
+  await streamThread(ID, { since: baseline.cursor, limit: 2, includeOutput: true, signal: stop.signal }, data => lines.push(data), {
+    discover: async () => ({ paths: { socket: "fake" } }), connect: async () => fake.client, sleep: async () => stop.abort(),
+  });
+  const notifications = lines.filter(line => line.type === "observation");
+  assert.equal(notifications.length, 1);
+  const data = notifications[0];
+  assert.equal(data.has_more, false); assert.equal(decodeCursor(data.cursor, ID).pending, false);
+  assert.deepEqual(data.events.map(event => event.id), [...Array.from({ length: 8 }, (_, i) => `read${i}`), "final"]);
+  assert.ok(data.events.slice(0, 8).every(event => event.compacted && !("output" in event)));
+  assert.equal(data.digest.from_cursor, baseline.cursor);
+  const details = await fake.read({ since: data.digest.from_cursor, includeOutput: true });
+  assert.equal(details.events[0].output, "details 0");
+  assert.equal((await fake.read({ since: data.cursor })).changed, false);
+});
+
 test("paged initial tail matches full display while excluding large past payloads", async () => {
   const t = task([msg("old", "x".repeat(1000000))], "notLoaded");
   t.turns.push({ id: "latest", status: "completed", items: Array.from({ length: 250 }, (_, i) => i % 3 ? msg(`a${i}`) : { id: `r${i}`, type: "reasoning", text: "hidden" }) });
@@ -242,7 +260,7 @@ test("v1 is explicit full-history mode and fast mode never silently hydrates it"
 
 test("Monitor uses paged reads and stays quiet after delivering changes", async () => {
   const t = task([msg("a")]), s = server(t), stop = new AbortController(), events = []; let n = 0;
-  await streamThread(ID, { signal: stop.signal }, async r => { if (r.type === "observation") events.push(...r.events); }, { discover: async () => ({ paths: { socket: "fake" } }), connect: async () => s.client, sleep: async () => {
+  await streamThread(ID, { notify: "all", signal: stop.signal }, async r => { if (r.type === "observation") events.push(...r.events); }, { discover: async () => ({ paths: { socket: "fake" } }), connect: async () => s.client, sleep: async () => {
     if (++n === 1) t.turns[0].items.push(msg("b")); if (n === 3) stop.abort();
   } });
   assert.deepEqual(events.map(e => e.id), ["b"]);
@@ -257,7 +275,7 @@ test("Monitor retries a partial paged read from the last flushed v2 cursor", asy
   });
   const initial = await s.read(), output = [];
   t.turns[0].items.push(msg("a"), msg("b"));
-  await streamThread(ID, { since: initial.cursor, limit: 1, signal: stop.signal }, async data => {
+  await streamThread(ID, { notify: "all", since: initial.cursor, limit: 1, signal: stop.signal }, async data => {
     output.push(data);
     if (data.type !== "observation") return;
     if (data.events.some(e => e.id === "a")) cut = true;
