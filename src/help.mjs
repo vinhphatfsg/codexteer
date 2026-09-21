@@ -1,4 +1,6 @@
-import { supervisionSteps } from "./prompt.mjs";
+import { supervisionSteps, DIGEST_GUIDANCE } from "./prompt.mjs";
+
+const notificationHelp = "watch --streamの既定はdigestです。--notify allを明示すると従来どおり変化ごとに通知します。単発watchは従来どおりで、digestの対象外です。digestはユーザー入力・ターン・質問・注意状態・読み取り専用以外の失敗は即時通知し、通常の進捗は最後の通常イベントから--settle-ms（既定20000、1000〜120000）後、読み取り専用コマンドなどは--max-hold-ms（既定600000、10000〜1800000）まで保留します。settle/max-holdはdigest専用です。連続する通常イベントもmax-holdで排出します。ポーリングとページ読み取りは継続するため、処理時間とポーリング間隔ぶんの遅れはあり得ます。接続状態・失敗は選別しません。";
 
 export { VERSION } from "./version.mjs";
 import { VERSION } from "./version.mjs";
@@ -48,7 +50,7 @@ export const topics = {
   connection: {
     title: "共有wrapperまたは通常起動Desktopの観測接続を選ぶ",
     when: "通常起動したDesktopを再起動せずに観測したいとき。",
-    usage: ["--connection shared|desktop doctor --thread <THREAD>", "--connection desktop read <THREAD>", "--connection desktop watch <THREAD> --stream [--since CURSOR]", "supervise <THREAD> [MESSAGE] --connection desktop [--agent claude|codex]", "supervise prompt <THREAD> [MESSAGE] --connection desktop [--agent claude|codex]"],
+    usage: ["--connection shared|desktop doctor --thread <THREAD>", "--connection desktop read <THREAD>", "--connection desktop watch <THREAD> --stream [--notify all|digest] [--settle-ms N] [--max-hold-ms N] [--since CURSOR]", "supervise <THREAD> [MESSAGE] --connection desktop [--agent claude|codex]", "supervise prompt <THREAD> [MESSAGE] --connection desktop [--agent claude|codex]"],
     returns: "desktopでは既存ソケットを検証して読み取りだけを行います。doctorのconnection.observation_onlyはtrue、送信操作はunsupportedです。",
     examples: ["codexteer --connection desktop doctor --thread <THREAD> --json", "codexteer --connection desktop read <THREAD> --include-output --json", "codexteer supervise <THREAD> --agent codex --connection desktop"],
     notes: ["既定sharedは従来のdesktop startで用意するwrapperです。desktopはCODEX_HOME/app-server-control/app-server-control.sockを使います。Desktopが共有ローカルdaemonを使っている環境だけで利用でき、通常起動なら必ず存在するわけではありません。ソケットがなければDESKTOP_CONNECTION_UNAVAILABLEです。",
@@ -68,10 +70,10 @@ export const topics = {
   monitor: {
     title: "Codexタスクを観測・介入・結果確認の順で監督する",
     when: "Claudeなどが指定された監督方針に従って対象タスクを観測し、送信が許されている場合は介入と結果確認を行う運用。",
-    usage: ["supervise prompt <THREAD> [MESSAGE]", "watch <THREAD> --stream [--since CURSOR] [--poll-ms N] [--limit N] [--max-chars N] [--include-output]", "read <THREAD> [--since CURSOR]", "help supervise", "help send", "help checkpoint", "help history"],
+    usage: ["supervise prompt <THREAD> [MESSAGE]", "watch <THREAD> --stream [--notify all|digest] [--settle-ms N] [--max-hold-ms N] [--since CURSOR] [--poll-ms N] [--limit N] [--max-chars N] [--include-output]", "read <THREAD> [--since CURSOR]", "help supervise", "help send", "help checkpoint", "help history"],
     returns: "--streamは作業差分（data.type=observation）と接続状態（data.type=connection）をJSON Linesで返します。差分のevents、attention、cursorを読み、必要なときだけ次の操作を選びます。",
-    examples: ["codexteer watch <THREAD> --stream --since <CURSOR> --include-output --json", "codexteer read <THREAD> --since <LAST-CURSOR> --include-output --json", "codexteer send <THREAD> '失敗箇所を先に確認してください' --source claude-code --kind review --finding <FINDING-ID> --based-on <CURSOR> --json", "codexteer history check <THREAD> <MESSAGE-ID> --json"],
-    notes: [...supervisionSteps(), "--streamは常にJSON Linesです。初回にwatchingを通知し、平常時は差分だけを出力します。観測成功後の一時切断は1→2→4→8→最大10秒間隔で、接続・初期化・読み取りを含め60秒まで復帰を試みます。初回失敗はすぐ終了します。SIGINT/SIGTERMまたはMonitorのキャンセルで停止し、--until/--timeout-msとは併用しません。", "無効cursorはneeds_review、復帰上限・権限・プロトコル等の異常はfailedを含むok:falseのJSONを返し、終了コード1です。観測の再接続は送信の再試行を行いません。", "既存のログ監視を続け、その通知後にread --sinceを呼ぶ運用も可能です。複数AIの共有リソース利用調整はhelp resourceを参照してください。"],
+    examples: ["codexteer watch <THREAD> --stream --notify digest --since <CURSOR> --include-output --json", "codexteer read <THREAD> --since <LAST-CURSOR> --include-output --json", "codexteer send <THREAD> '失敗箇所を先に確認してください' --source claude-code --kind review --finding <FINDING-ID> --based-on <CURSOR> --json", "codexteer history check <THREAD> <MESSAGE-ID> --json"],
+    notes: [...supervisionSteps(), notificationHelp, "--streamは常にJSON Linesです。初回にwatchingを通知し、平常時は差分だけを出力します。観測成功後の一時切断は1→2→4→8→最大10秒間隔で、接続・初期化・読み取りを含め60秒まで復帰を試みます。初回失敗はすぐ終了します。SIGINT/SIGTERMまたはMonitorのキャンセルで停止し、--until/--timeout-msとは併用しません。", "無効cursorはneeds_review、復帰上限・権限・プロトコル等の異常はfailedを含むok:falseのJSONを返し、終了コード1です。観測の再接続は送信の再試行を行いません。", "既存のログ監視を続け、その通知後にread --sinceを呼ぶ運用も可能です。複数AIの共有リソース利用調整はhelp resourceを参照してください。"],
   },
   resource: {
     title: "画面・Unity・Gitなどの利用予定をAI間で共有する",
@@ -152,10 +154,10 @@ export const topics = {
   watch: {
     title: "変化・完了・ユーザー対応待ちまで待つ",
     when: "同じログを繰り返し読まず、次のレビューが必要なタイミングを待ちたいとき。",
-    usage: ["watch <THREAD> [--since CURSOR] [--until change|idle|attention] [--timeout-ms N] [--poll-ms N] [--limit N] [--max-chars N] [--include-output] [--full-history]", "watch <THREAD> --stream [--since CURSOR] [--poll-ms N] [--limit N] [--max-chars N] [--include-output] [--full-history]"],
+    usage: ["watch <THREAD> [--since CURSOR] [--until change|idle|attention] [--timeout-ms N] [--poll-ms N] [--limit N] [--max-chars N] [--include-output] [--full-history]", "watch <THREAD> --stream [--notify all|digest] [--settle-ms N] [--max-hold-ms N] [--since CURSOR] [--poll-ms N] [--limit N] [--max-chars N] [--include-output] [--full-history]"],
     returns: "通常は条件成立または時間切れで1回返します（reason、timed_out、events、cursor）。--streamはdata.type=observationの差分とdata.type=connectionの接続状態をJSON Linesで返します。",
-    examples: ["codexteer watch <THREAD> --since <CURSOR> --json", "codexteer watch <THREAD> --until idle --timeout-ms 60000 --json"],
-    notes: ["既定はchange、30秒待ち、1秒間隔。timeoutは0〜60000ms、pollは250〜10000ms。", "readと同じ差分取得を使います。--full-history は毎回の全取得になるため、通常の監視は既定の方式を使ってください。旧cursorの移行と確認範囲は help read へ。", "--sinceなしのchangeは現在を基準に次の変化を待ちます。idle/attentionは既に成立していればすぐ返します。", "--streamの接続状態はwatching/reconnecting/recovered/needs_review/failedです。観測成功後の一時切断だけ、最大10秒間隔・合計60秒まで同じタスクへ再接続します。通常のwatchと初回接続失敗は再試行しません。", "接続行のresume_cursorはCLIの出力完了位置または初回の基準です。AIの読了確認ではありません。再起動時は監督側が読了済みcursorを指定してください。復帰後もhas_moreなら差分を読み切ります。", "--streamは--until/--timeout-msと併用不可。平常時の定期通知はなく、SIGINT/SIGTERMで接続中・復帰待ちでも停止します。詳細はhelp monitorへ。", "読み取り専用のポーリングです。自動送信・タスク再開・承認回答・常駐登録は行いません。"],
+    examples: ["codexteer watch <THREAD> --stream --notify digest --since <CURSOR> --include-output --json", "codexteer watch <THREAD> --since <CURSOR> --json", "codexteer watch <THREAD> --until idle --timeout-ms 60000 --json"],
+    notes: [notificationHelp, DIGEST_GUIDANCE, "既定はchange、30秒待ち、1秒間隔。timeoutは0〜60000ms、pollは250〜10000ms。", "readと同じ差分取得を使います。--full-history は毎回の全取得になるため、通常の監視は既定の方式を使ってください。旧cursorの移行と確認範囲は help read へ。", "--sinceなしのchangeは現在を基準に次の変化を待ちます。idle/attentionは既に成立していればすぐ返します。", "--streamの接続状態はwatching/reconnecting/recovered/needs_review/failedです。観測成功後の一時切断だけ、最大10秒間隔・合計60秒まで同じタスクへ再接続します。通常のwatchと初回接続失敗は再試行しません。", "接続行のresume_cursorはCLIの出力完了位置または初回の基準です。AIの読了確認ではありません。再起動時は監督側が読了済みcursorを指定してください。復帰後もhas_moreなら差分を読み切ります。", "--streamは--until/--timeout-msと併用不可。平常時の定期通知はなく、SIGINT/SIGTERMで接続中・復帰待ちでも停止します。詳細はhelp monitorへ。", "読み取り専用のポーリングです。自動送信・タスク再開・承認回答・常駐登録は行いません。"],
   },
   send: {
     title: "実行中タスクに方針やレビューを伝える",

@@ -126,6 +126,30 @@ test("Monitor stream rejects one-shot flags before connecting and always uses JS
   assert.equal(JSON.parse(result.stdout).data.state, "failed");
 });
 
+test("watch validates digest flags before connecting and leaves single-shot watch unchanged", t => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "ct-digest-cli-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  for (const args of [
+    ["--notify", "digest"], ["--notify", "digest", "--until", "change"], ["--settle-ms", "1000"],
+    ["--stream", "--notify", "typo"], ["--stream", "--notify"], ["--stream", "--settle-ms", "999"],
+    ["--stream", "--settle-ms", "120001"], ["--stream", "--settle-ms", "NaN"], ["--stream", "--settle-ms", "1000.5"],
+    ["--stream", "--max-hold-ms", "9999"], ["--stream", "--max-hold-ms", "1800001"],
+    ["--stream", "--notify", "all", "--settle-ms", "1000"], ["--stream", "--notify", "all", "--max-hold-ms", "10000"],
+  ]) {
+    const result = cli(["watch", ID, ...args], undefined, { CODEX_HOME: home });
+    assert.equal(result.status, 1, args.join(" "));
+    assert.match(result.result.error.message, /--notify|--settle-ms|--max-hold-ms/);
+    assert.doesNotMatch(result.result.error.message, /Shared App Server/);
+  }
+  for (const args of [[], ["--until", "change", "--timeout-ms", "0"], ["--notify", "all"], ["--stream"], ["--stream", "--notify", "all"], ["--stream", "--settle-ms", "1000", "--max-hold-ms", "10000"]]) {
+    const result = cli(["watch", ID, ...args], undefined, { CODEX_HOME: home });
+    assert.equal(result.status, 1); assert.match(result.result.error.message, /Shared App Server is unavailable/, args.join(" "));
+  }
+  const help = cli(["help", "watch"], undefined, { CODEX_HOME: home });
+  assert.ok(help.result.data.usage.some(line => line.includes("--notify all|digest")));
+  assert.ok(help.result.data.notes.some(line => line.includes("watch --streamの既定はdigest")));
+});
+
 test("metadata dry-run validates kind and evidence without exposing message text", () => {
   const { result } = cli(["send", ID, "private body", "--dry-run", "--kind", "hypothesis", "--source", "claude-code"]);
   assert.equal(result.data.metadata.kind, "hypothesis"); assert.equal(result.data.freshness_checked, false);
