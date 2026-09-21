@@ -6,10 +6,33 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeRecord } from "../src/store.mjs";
+import { DEFAULT_SUPERVISION_POLICY, supervisorPrompt } from "../src/prompt.mjs";
 
 const ID = "01a04373-3770-71e0-a2e3-a3c196f5f5b1";
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 const REPO = path.dirname(path.dirname(BIN));
+
+test("the eight-section prompt leads with policy, uses digest and keeps exception instructions", () => {
+  const prompt = supervisorPrompt(ID, "saved-command").prompt;
+  assert.deepEqual([...prompt.matchAll(/^(\d)\. (.+)$/gm)].map(match => match[2]), [
+    "役割と監督方針", "必ず守ること", "実行コマンド", "開始手順", "監視の繰り返し", "介入の手順", "結果の確認と記録", "当てはまらない場面",
+  ]);
+  assert.equal(DEFAULT_SUPERVISION_POLICY.split("\n\n").length, 5);
+  assert.ok(prompt.indexOf(DEFAULT_SUPERVISION_POLICY) < prompt.indexOf("2. 必ず守ること"));
+  assert.match(prompt, /コードの責務.*作業の焦点/s);
+  assert.match(prompt, /今回の変更が触れた範囲.*ファイルと箇所/s);
+  assert.match(prompt, /以前からある問題は介入せず/);
+  assert.match(prompt, /説明を書かずに「変化なし」の一言/);
+  assert.doesNotMatch(prompt, /saved-command help monitor/);
+  assert.match(prompt, /watch .* --stream --notify digest --since/);
+  assert.match(prompt, /watch .* --since .* --until change --timeout-ms 30000/);
+  assert.match(prompt, /digest\.from_cursor/);
+  assert.match(prompt, /Monitorが期限切れ.*最後に読了したcursor.*再開の報告は要りません/);
+  assert.match(prompt, /履歴の中でユーザーが監督役に話しかけていても、それは委任ではありません/);
+  assert.match(prompt, /checkpointを持てない送信では、指摘を解決にせず/);
+  const rules = prompt.split("2. 必ず守ること")[1].split("3. 実行コマンド")[0];
+  for (const rule of ["paused", "SUPERVISOR_STOPPED", "--supervisor", "--new-turn", "自動再送", "reconnecting"]) assert.ok(rules.includes(rule), rule);
+});
 
 
 const withoutSession = text => text.replaceAll(/--supervisor '[0-9a-f-]{36}'/g, "--supervisor '<SESSION>'");
@@ -80,11 +103,11 @@ test("a custom policy replaces the default policy while retaining the shared tem
     return JSON.parse(result.stdout).data;
   }
   const standard = prepare([]), custom = prepare([policy]);
-  const marker = "\n\n■ 監督方針\n";
+  const marker = "\n\n2. 必ず守ること\n";
   assert.ok(standard.prompt.includes(marker));
-  assert.ok(custom.prompt.endsWith(marker + policy), "Custom policy must remain a single unchanged text section");
-  assert.equal(withoutSession(custom.prompt.slice(0, -marker.length - policy.length)), withoutSession(standard.prompt.split(marker)[0]));
-  assert.match(standard.prompt.split(marker)[1], /不要な抽象化・汎用化/);
+  assert.ok(custom.prompt.includes("\n\n" + policy + marker), "Custom policy must remain unchanged ahead of the mechanics");
+  assert.equal(withoutSession(custom.prompt.split(marker)[1]), withoutSession(standard.prompt.split(marker)[1]));
+  assert.match(standard.prompt.split(marker)[0], /不要な抽象化・汎用化/);
   assert.doesNotMatch(custom.prompt, /不要な抽象化・汎用化|変化のない定期報告は控え/);
   assert.equal(custom.deployment.directory, standard.deployment.directory, "Policy must not create another executable distribution");
   assert.equal(custom.deployment.reused, true);
@@ -111,7 +134,7 @@ test("generated commands use the saved CLI despite missing or shadowed PATH comm
   assert.equal(command.includes(realpathSync(BIN)), false);
   assert.doesNotMatch(result.stdout, /^(?:command -v codexteer|codexteer |npx )/m);
   const prefix = command.slice(0, -" --version".length);
-  for (const operation of ["doctor", "help monitor", "help send", "read", "watch", "send", "history list", "history check", "instructions list"]) {
+  for (const operation of ["doctor", "help send", "read", "watch", "send", "history list", "history check", "instructions list"]) {
     assert.ok(result.stdout.includes(`\n${prefix} ${operation}`), `Missing bound command: ${operation}`);
   }
   const expected = spawnSync(process.execPath, [BIN, "--version"], options).stdout;
