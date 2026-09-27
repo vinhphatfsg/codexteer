@@ -9,6 +9,12 @@ Use the installed `codexteer` command when the user asks to observe or supervise
 
 The npm distribution and executable are both named `codexteer`. The previous package was `@vinhphatfsg/codex-steer`; the unscoped npm name `codex-steer` belongs to another project. Never resolve a package name or executable from task history. Existing state and wire field names retain the codex-steer namespace so that history and running Desktop sessions remain accessible. For npm startup, normally use `npx -y codexteer` without a version specifier. Specifying `@<version>` is optional when the user wants to select a particular release. During supervision, use the saved CLI command supplied by the generated prompt. The Desktop launcher and operating CLI may have different product versions when their required protocol capabilities are compatible. `desktop start` verifies and copies its runtime into `CODEX_HOME/codex-steer/runtimes/<version>-<sha256>`; do not remove or overwrite a version in use.
 
+## Optional PATH CLI commands
+
+`supervise <THREAD> --use-path-cli` and `supervise prompt <THREAD> --use-path-cli` generate commands beginning with `codexteer` instead of an absolute saved Node/CLI path. Use this mode when the user asks for the installed command on PATH. It does not save a CLI copy or embed a Node version or CODEX_HOME assignment. Commands use the receiving environment's PATH and CODEX_HOME, so use the intended Desktop profile and retain that environment during supervision. CLI updates apply on the next invocation. Keep the generated --supervisor ID and --connection in every command; registration, pause/stop and intervention checks still apply. If codexteer is missing or incompatible, report the failure without switching commands or downloading another CLI automatically.
+
+The saved-CLI placement, pinned Node/profile and saved-command requirements below describe the default mode only. In PATH mode, use the generated codexteer command for the examples and help instead. Prompt-only generation writes no files. Direct launch still validates/prepares the current profile, registers before starting the agent and stops that registration on exit. JSON returns cli_mode: "path", deployment: null and node: null; the default returns cli_mode: "saved" with the existing deployment and node metadata.
+
 ## Choose the requested workflow
 
 - **Observe only:** read status and progress. Do not send messages or restart the task.

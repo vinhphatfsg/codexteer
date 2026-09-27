@@ -91,10 +91,70 @@ test("JSON prompt output preserves the text as one field with the standard CLI e
     assert.equal(ok, true); assert.equal(command, "supervise.prompt");
     assert.equal(data.thread_id, ID); assert.equal(withoutSession(data.prompt), withoutSession(plain.stdout.slice(0, -1)));
     assert.equal(data.deployment.reused, true);
+    assert.equal(data.cli_mode, "saved");
     assert.match(data.deployment.sha256, /^[a-f0-9]{64}$/);
     assert.ok(data.deployment.directory.endsWith(`${data.deployment.version}-${data.deployment.sha256}`));
     assert.deepEqual(data.node, { path: realpathSync(process.execPath), version: process.version });
   }
+});
+
+test("PATH CLI prompts omit executable paths and deployment, preserving policy and session controls", t => {
+  const options = fixture(t), policy = "この方針だけで監督してください。";
+  options.env.PATH = "/no-cli-installed";
+  for (const connection of ["shared", "desktop"]) {
+    for (const agent of ["claude", "codex"]) {
+      const result = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID, policy, "--use-path-cli", "--agent", agent, "--connection", connection, "--json"], options);
+      assert.equal(result.status, 0, result.stderr);
+      const { data } = JSON.parse(result.stdout);
+      assert.equal(data.cli_mode, "path");
+      assert.equal(data.deployment, null); assert.equal(data.node, null);
+      assert.equal(data.supervisor.owner, agent); assert.equal(data.supervisor.connection, connection);
+      assert.ok(data.prompt.includes(policy));
+      const prefix = `codexteer --supervisor '${data.supervisor.session_id}' --connection ${connection}`;
+      for (const operation of ["--version", "doctor", "supervise register", "read", "watch", "history list", "findings list"]) {
+        assert.ok(data.prompt.includes(`\n${prefix} ${operation}`), operation);
+      }
+      assert.match(data.prompt, /^command -v codexteer$/m);
+      assert.doesNotMatch(data.prompt, /CODEX_HOME=|--require-node-version|codex-steer\/runtimes/);
+      assert.equal(data.prompt.includes(options.cwd), false);
+      assert.equal(data.prompt.includes(realpathSync(process.execPath)), false);
+      assert.match(data.prompt, /実行環境のCODEX_HOME/);
+      if (connection === "desktop") {
+        assert.match(data.prompt, /この接続は観測専用/);
+        assert.doesNotMatch(data.prompt, /\n.* send /);
+      } else assert.ok(data.prompt.includes(`\n${prefix} send `));
+    }
+  }
+  assert.equal(existsSync(options.env.CODEX_HOME), false, "PATH prompt generation must not write a deployment or register a session");
+});
+
+test("PATH prompt commands use the receiving PATH and profile, and preserve registration and stop checks", async t => {
+  const options = fixture(t);
+  const generated = spawnSync(process.execPath, [BIN, "supervise", "prompt", "--use-path-cli", ID, "--json"], options);
+  assert.equal(generated.status, 0, generated.stderr);
+  const { prompt } = JSON.parse(generated.stdout).data;
+  const bin = path.join(options.cwd, "bin"); mkdirSync(bin);
+  const cli = path.join(bin, "codexteer"); symlinkSync(BIN, cli);
+  symlinkSync(process.execPath, path.join(bin, "node"));
+  const home = path.join(options.cwd, "receiving-home"); mkdirSync(home, { mode: 0o700 });
+  const receiving = { ...options, env: { ...options.env, PATH: bin, CODEX_HOME: home } };
+  const command = suffix => prompt.split("\n").find(line => line.includes(suffix));
+  const bootstrap = command(` supervise register ${ID} `);
+  const registered = spawnSync("/bin/sh", ["-c", bootstrap], receiving);
+  assert.equal(registered.status, 0, registered.stderr);
+  await writeRecord("messages", "receiver", { id: "receiver", thread_id: ID, created_at: "2026-01-01T00:00:00Z" }, { home });
+  const historyCommand = command(` history list ${ID} --pending --json`);
+  const history = spawnSync("/bin/sh", ["-c", historyCommand], receiving);
+  assert.equal(history.status, 0, history.stderr);
+  assert.deepEqual(JSON.parse(history.stdout).data.map(entry => entry.id), ["receiver"]);
+  const stopped = spawnSync(process.execPath, [BIN, "supervise", "stop", ID, "--json"], receiving);
+  assert.equal(stopped.status, 0, stopped.stderr);
+  const rejected = spawnSync("/bin/sh", ["-c", bootstrap], receiving);
+  assert.equal(rejected.status, 1); assert.match(rejected.stderr, /supervisor session has stopped/);
+  assert.equal(existsSync(options.env.CODEX_HOME), false, "Generated commands must not bind to the producer's profile in PATH mode");
+  unlinkSync(cli); writeFileSync(cli, '#!/bin/sh\nprintf "path-cli-updated\\n"\n', { mode: 0o755 });
+  const updated = spawnSync("/bin/sh", ["-c", versionCommand(prompt)], receiving);
+  assert.equal(updated.status, 0); assert.equal(updated.stdout, "path-cli-updated\n");
 });
 
 test("a custom policy replaces the default policy while retaining the shared template and saved invocation", t => {
@@ -295,7 +355,7 @@ test("help remains read-only and does not place a supervision distribution", t =
 
 test("invalid prompt arguments fail without producing a partial prompt or touching state", t => {
   const options = fixture(t);
-  for (const args of [[], ["invalid-id"], [ID, "policy", "extra"], [ID, ""], [ID, " \t\n"], [ID, "--unexpected"], [`codex://other/${ID}`], [`${ID}; echo injected`]]) {
+  for (const args of [[], ["invalid-id"], [ID, "policy", "extra"], [ID, ""], [ID, " \t\n"], [ID, "--unexpected"], [ID, "--use-path-cli", "--use-path-cli"], [ID, "--use-path-cli=false"], [ID, "--use-path-cli", "--agent", "unknown"], ["invalid-id", "--use-path-cli"], [`codex://other/${ID}`], [`${ID}; echo injected`]]) {
     const plain = spawnSync(process.execPath, [BIN, "supervise", "prompt", ...args], options);
     assert.equal(plain.status, 1);
     assert.equal(plain.stdout, "");
