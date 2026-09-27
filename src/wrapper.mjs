@@ -1,6 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
 import { accessSync, constants as fsConstants, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { lstat } from "node:fs/promises";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import path from "node:path";
@@ -165,12 +164,20 @@ export async function runWrapper(args, { executable = BUNDLED_CLI, env = process
     });
     let spawnError;
     child.on("error", error => { spawnError = error; });
+    let endpoint;
+    let socketError;
     for (let i = 0; i < 100; i++) {
       if (interrupted || spawnError || child.exitCode != null || child.signalCode != null) throw new Error("App Server exited during startup.");
-      if (await lstat(lease.paths.socket).catch(() => null)) break;
+      try {
+        endpoint = await inspectAppServerSocket(lease.paths.socket);
+        break;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        socketError = error;
+      }
       await delay(100);
     }
-    const endpoint = await inspectAppServerSocket(lease.paths.socket);
+    if (!endpoint) throw socketError ?? new Error("App Server socket did not become ready during startup.");
     await lease.update({ server_pid: child.pid });
     socket = await connectSocket(endpoint.socket);
     subscriptions = new DesktopSubscriptions(socket);
