@@ -38,7 +38,7 @@ async function checkAncestors(directory) {
   }
 }
 
-async function resolveHome(home) {
+export async function prepareCodexHome(home) {
   let existing = path.resolve(home), canonical;
   const missing = [];
   while (true) {
@@ -53,6 +53,8 @@ async function resolveHome(home) {
     canonical = path.join(canonical, part);
     await ownedDirectory(canonical, true);
   }
+  const homeInfo = await lstat(canonical);
+  if (!homeInfo.isDirectory() || homeInfo.uid !== process.getuid() || (homeInfo.mode & 0o7022)) throw failure("CODEX_HOME must be an owner-controlled directory.");
   return canonical;
 }
 
@@ -150,9 +152,7 @@ export async function prepareDeployment(home, { sourceRoot = PACKAGE_ROOT } = {}
   const distribution = await describeDistribution(sourceRoot);
   // CODEX_HOME may itself be a user-configured symlink; only its canonical
   // owner-writable directory is accepted. Never follow links below that root.
-  const canonicalHome = await resolveHome(home);
-  const homeInfo = await lstat(canonicalHome);
-  if (!homeInfo.isDirectory() || homeInfo.uid !== process.getuid() || (homeInfo.mode & 0o7022)) throw failure("CODEX_HOME must be an owner-controlled directory.");
+  const canonicalHome = await prepareCodexHome(home);
   const stateRoot = path.join(canonicalHome, "codex-steer"), root = path.join(stateRoot, "runtimes");
   await ownedDirectory(stateRoot, true); await ownedDirectory(root, true);
   const target = path.join(root, distribution.id), lock = path.join(root, `.install-${distribution.id}`);

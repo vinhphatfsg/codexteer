@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, rename, rm, writeFile, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { inspectAppServerSocket } from "./socket-endpoint.mjs";
 
 const runtimeFailure = (message, code) => Object.assign(new Error(message), { code });
 
@@ -75,9 +76,10 @@ export async function discoverRuntime(home) {
     if (!isAlive(state.pid) || !isAlive(state.server_pid) || !state.desktop_connected) {
       throw runtimeFailure("Shared App Server is not ready. Finish current tasks, quit Desktop, then run: codexteer desktop start", "RUNTIME_NOT_READY");
     }
-    await checkOwned(paths.socket, "socket");
-    return { paths, state };
+    const endpoint = await inspectAppServerSocket(paths.socket);
+    return { paths: { ...paths, socket: endpoint.socket }, state };
   } catch (error) {
+    if (error.code === "SOCKET_UNSAFE") throw runtimeFailure(error.message, "RUNTIME_UNSAFE");
     if (error.code === "ENOENT") throw runtimeFailure("Shared App Server is unavailable. Finish current tasks, quit Desktop, then run: codexteer desktop start", "RUNTIME_UNAVAILABLE");
     if (["EACCES", "EPERM"].includes(error.code)) throw runtimeFailure("Cannot inspect the shared App Server runtime. Check access permissions.", "PERMISSION_DENIED");
     throw error;

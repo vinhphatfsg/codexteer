@@ -25,6 +25,10 @@ CLIはDesktopを自動終了しません。
 
 ## 監督役が使うCLI
 
+既定は以下の保存済みCLI方式です。`supervise <THREAD> --use-path-cli`または`supervise prompt <THREAD> --use-path-cli`を指定すると、本文はPATH上の`codexteer`を使います。このモードではCLIを保存せず、本文は現在実行中のCLIから生成します。Nodeのパス・版・CODEX_HOMEを埋め込まず、各コマンドは実行環境のPATHとCODEX_HOMEに従います。更新されたCLIは次の実行から使われます。対象Desktopと同じプロファイルで実行してください。--supervisor・--connectionと監督の登録・停止・送信制御は維持します。本文だけの生成はファイルを書き込まず、直接起動では現在のプロファイルを検証・準備して監督を登録します。JSONの`cli_mode`は`path`、`deployment`と`node`は`null`です。既定方式では`cli_mode`は`saved`です。
+
+以下は`--use-path-cli`を指定しない場合の動作です。
+
 `0.14.1`以降の`supervise`と`supervise prompt`は、開始時のCLI本体と依存を内容ハッシュ別の永続配置へコピーし、その保存先を使う実行コマンドを本文に埋め込みます。npxで取得したパッケージもソースのチェックアウトも、同じ保存・検証・生成処理を使います。起動経路を推測する環境変数や切り替えオプションは不要です。本文の生成処理自体も保存したCLI一式から読み込みます。
 
 両形式で対象IDの後ろに任意の`MESSAGE`を一つの引数として渡せます。省略時は保存したCLIの標準方針を使い、指定時は標準方針全体をその文に置き換えます。必須の共通テンプレートは保存したCLIから常に生成し、対象・実行コマンド・操作時の確認を保ちます。指定文は生成・起動ごとの入力で、永続配置のファイルやマニフェストへ書き込まず、内容ハッシュにも含めません。同じCLIなら異なる方針でも保存先を検証して再利用します。空文字・空白だけの文は保存処理前に`INVALID_SUPERVISION_POLICY`で拒否します。本文の文字列はテンプレートやシェルとして評価しません。
@@ -64,7 +68,7 @@ README、CHANGELOG、MIT LICENSE、package.jsonに加え、依存する `ws` と
 
 ## 永続配置
 
-`desktop start` は呼び出したパッケージの実行用ファイルを、次の場所へコピーしてからDesktopを起動します。`supervise`と`supervise prompt`も同じ配置処理を使い、監督役が使うコピーを準備します。
+`desktop start` は呼び出したパッケージの実行用ファイルを、次の場所へコピーしてからDesktopを起動します。`supervise`と`supervise prompt`も、`--use-path-cli`を指定しない場合は同じ配置処理を使い、監督役が使うコピーを準備します。
 
 ```text
 <canonical CODEX_HOME>/codex-steer/runtimes/<version>-<sha256>/

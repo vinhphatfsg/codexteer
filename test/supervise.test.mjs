@@ -53,7 +53,7 @@ function prompt(options, policy, agent = "claude") {
 
 test("supervise preserves forwarded argv and prompt boundaries, inherits cwd and all standard streams", t => {
   const options = fixture(t);
-  const forwarded = ["--model", "model with spaces", "--effort", "high", "", "line 1\nline 2", "$(touch INJECTED)", "`touch INJECTED_TOO`", "*", 'quote"and\'slash\\', "--help", "--version", "--json", "--require-node-version", "v0.0.0", "--agent", "not-a-steer-agent", "--", "literal tail"];
+  const forwarded = ["--model", "model with spaces", "--effort", "high", "", "line 1\nline 2", "$(touch INJECTED)", "`touch INJECTED_TOO`", "*", 'quote"and\'slash\\', "--help", "--version", "--json", "--require-node-version", "v0.0.0", "--use-path-cli", "--agent", "not-a-steer-agent", "--", "literal tail"];
   const result = spawnSync(process.execPath, [BIN, "supervise", ID, "--agent", "claude", "--", ...forwarded], { ...options, input: "interactive input\n" });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, "agent stderr\n", "The CLI must not mix status output into agent streams");
@@ -61,6 +61,33 @@ test("supervise preserves forwarded argv and prompt boundaries, inherits cwd and
   assert.equal(existsSync(path.join(options.cwd, "INJECTED")), false);
   assert.equal(existsSync(path.join(options.cwd, "INJECTED_TOO")), false);
   assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["locks", "runtimes", "supervisors"], "The launcher saves its session without connecting to Desktop");
+});
+
+test("direct PATH CLI supervision passes the same prompt and cleans up its session without a deployment", t => {
+  for (const agent of ["claude", "codex"]) {
+    const options = fixture(t), policy = "観測結果を報告してください。";
+    const generated = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID, policy, "--agent", agent, "--use-path-cli"], options);
+    assert.equal(generated.status, 0, generated.stderr);
+    const forwarded = ["--use-path-cli", "--model", "agent-model"];
+    const result = spawnSync(process.execPath, [BIN, "supervise", ID, policy, "--agent", agent, "--use-path-cli", "--", ...forwarded], { ...options, input: "interactive input\n" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(capturedAgent(result.stdout), { args: [...forwarded, "--", withoutSession(generated.stdout.slice(0, -1))], cwd: options.cwd, input: "interactive input\n" });
+    assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["locks", "supervisors"]);
+    const status = spawnSync(process.execPath, [BIN, "supervise", "status", ID, "--json"], options);
+    assert.equal(status.status, 0, status.stderr);
+    assert.equal(JSON.parse(status.stdout).data.state, "stopped");
+    assert.equal(JSON.parse(status.stdout).data.owner, agent);
+  }
+});
+
+test("PATH CLI launch still validates the profile before registration or agent launch", t => {
+  const options = fixture(t);
+  mkdirSync(options.env.CODEX_HOME); chmodSync(options.env.CODEX_HOME, 0o777);
+  const result = spawnSync(process.execPath, [BIN, "supervise", ID, "--use-path-cli"], options);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /ancestor can be replaced|owner-controlled/);
+  assert.equal(existsSync(path.join(options.cwd, "started")), false);
+  assert.deepEqual(readdirSync(options.env.CODEX_HOME), []);
 });
 
 test("supervise uses the normalized target and propagates the agent's normal exit code", t => {

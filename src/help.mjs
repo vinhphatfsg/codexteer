@@ -6,22 +6,23 @@ export { VERSION } from "./version.mjs";
 import { VERSION } from "./version.mjs";
 
 const supervisionExecutionNotes = [
+  "--use-path-cliを付けると、本文はPATH上のcodexteerを案内します。CLIの保存・Nodeの固定・CODEX_HOMEの埋め込みを行わず、実行環境のPATHとCODEX_HOMEを使います。CLIの更新は次の実行から反映されます。--supervisor・--connectionと監督の制御は維持します。直接起動ではエージェント引数の区切り -- より前に指定してください。",
   "各生成に新しい--supervisor IDと--connectionを埋め込みます。直接起動はagent起動前にregisterし、終了時にstopします。本文だけの生成は未登録で、貼り付け先が本文のregisterを実行して開始します。同じ本文の再登録は一時停止を解除せず、停止済みIDは復活しません。",
   "--connectionの既定はshared（既存wrapper）。desktopは既存の共有制御ソケットを使う観測専用です。送信の実行例を含めず、方針に送信指示があっても送信を許可しません。詳細はhelp connectionを参照してください。",
   "本文は必須の共通テンプレートと監督方針で構成します。MESSAGEを省略すると標準方針（目的・制約の範囲で必要最小限の介入と結果確認、簡潔な報告）を使い、指定すると標準方針全体をその文に置き換えます。対象ID、実行コマンド、help/read/watch、送信時の確認、停止手順はどちらにも含めます。",
   "MESSAGEは引用して一つの引数として渡してください。空文字・空白だけはINVALID_SUPERVISION_POLICYで拒否します。改行等はそのまま本文に含め、プレースホルダー展開やシェル実行はしません。指定は今回の生成・起動だけに適用し、既定設定や保存したCLIは変更しません。",
-  "CLI本体と依存をCODEX_HOME/codex-steer/runtimes/<version>-<sha256>へ検証して保存し、そのコピーへの実行コマンドを本文に埋め込みます。supervise promptもこの保存処理を行います。同じ内容は検証して再利用し、既存のコピーは上書き・自動削除しません。保存・検証に失敗した場合は本文を出力せず、監督エージェントも起動しません。",
-  "同じPCで使い、監督中は保存したコピーを保持してください。全コマンドの先頭に生成時に検証したCODEX_HOMEの実体パスを指定するため、監督役のCODEX_HOMEが未設定・別設定でも生成元の接続先と履歴を使います。元のnpxキャッシュやチェックアウトを更新・削除しても、監督は保存した内容を使います。ヘルプ中のcodexteer表記も、先頭のCODEX_HOME指定・引用・オプションを含む指定の実行コマンドに置き換えてください。",
-  "Node本体はコピーせず、開始時の実体への絶対パスと--require-node-versionを各コマンドに埋め込みます。Nodeの版が変われば操作前にNODE_VERSION_MISMATCHで停止します。同じ版のNodeの改変や共有ライブラリまで固定するものではないため、元のNodeは保持してください。保存先やNodeが使えなければ介入を止めて報告し、意図した環境から生成し直すよう指示します。",
+  "既定ではCLI本体と依存をCODEX_HOME/codex-steer/runtimes/<version>-<sha256>へ検証して保存し、そのコピーへの実行コマンドを本文に埋め込みます。supervise promptもこの保存処理を行います。同じ内容は検証して再利用し、既存のコピーは上書き・自動削除しません。保存・検証に失敗した場合は本文を出力せず、監督エージェントも起動しません。",
+  "保存済みCLIを使う既定モードでは、同じPCで使い、監督中は保存したコピーを保持してください。全コマンドの先頭に生成時に検証したCODEX_HOMEの実体パスを指定するため、監督役のCODEX_HOMEが未設定・別設定でも生成元の接続先と履歴を使います。元のnpxキャッシュやチェックアウトを更新・削除しても、監督は保存した内容を使います。ヘルプ中のcodexteer表記も、先頭のCODEX_HOME指定・引用・オプションを含む指定の実行コマンドに置き換えてください。",
+  "既定ではNode本体はコピーせず、開始時の実体への絶対パスと--require-node-versionを各コマンドに埋め込みます。Nodeの版が変われば操作前にNODE_VERSION_MISMATCHで停止します。同じ版のNodeの改変や共有ライブラリまで固定するものではないため、元のNodeは保持してください。保存先やNodeが使えなければ介入を止めて報告し、意図した環境から生成し直すよう指示します。",
 ];
 
 export const topics = {
   supervise: {
     title: "指定したCodexタスクの監督役としてClaudeまたはCodex CLIを起動する",
     when: "対象タスクのIDを指定して、Claude CodeまたはCodex CLIを監督役の対話セッションとして起動するとき。",
-    usage: ["supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [-- <AGENT-ARGS...>]", "supervise status <THREAD>", "supervise list", "supervise pause <THREAD>", "supervise resume <THREAD>", "supervise stop <THREAD>", "--supervisor <SESSION-ID> supervise register <THREAD> [--owner NAME]"],
+    usage: ["supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli] [-- <AGENT-ARGS...>]", "supervise status <THREAD>", "supervise list", "supervise pause <THREAD>", "supervise resume <THREAD>", "supervise stop <THREAD>", "--supervisor <SESSION-ID> supervise register <THREAD> [--owner NAME]"],
     returns: "監督エージェントの標準入力・標準出力・標準エラーと終了コードを引き継ぎます。codexteerの出力は混ぜません。",
-    examples: ["codexteer supervise <THREAD>", 'codexteer supervise <THREAD> "セキュリティの問題だけを私へ報告し、Codexへは送信しないでください。"', 'codexteer supervise <THREAD> "テスト失敗を優先して監督してください。" --agent claude -- --model <MODEL> --effort <LEVEL>'],
+    examples: ["codexteer supervise <THREAD>", "codexteer supervise <THREAD> --use-path-cli", 'codexteer supervise <THREAD> "セキュリティの問題だけを私へ報告し、Codexへは送信しないでください。"', 'codexteer supervise <THREAD> "テスト失敗を優先して監督してください。" --agent claude -- --model <MODEL> --effort <LEVEL>'],
     notes: [...supervisionExecutionNotes,
       "status/listは登録状態active/paused/stopped、owner、launcherの生存確認、最後のCLI観測とその経過時間、接続状態、最後の配送を返します。statusは未解決の指摘も要約します。activeは登録状態であり、AIの読了や継続監視の証明ではありません。コピーした本文のlauncher_aliveはnullです。",
       "pauseは登録済み監督の送信を拒否し、read/watchは続行できます。resumeで介入を再開、stopでその監督の以後の観測・送信を拒否します。Codexタスクやagentプロセス自体は終了しません。必要ならagentへ終了を指示してください。",
@@ -61,9 +62,9 @@ export const topics = {
   "supervise prompt": {
     title: "監督役（オーケストレーター）向けのプロンプトを出力する",
     when: "Claude Codeなどの監督役へ渡す、対象タスク入りの初期プロンプト本文を取得・確認するとき。",
-    usage: ["supervise prompt <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop]"],
-    returns: "通常はプロンプト本文だけを標準出力へ返します。--jsonではdata.thread_id、data.prompt、元のホーム（codex_home）・保存先・版・ハッシュ・再利用の有無を示すdata.deployment、Nodeのパスと版を示すdata.node、セッションID・owner・connectionを示すdata.supervisorを返します。",
-    examples: ["codexteer supervise prompt <THREAD>", 'codexteer supervise prompt <THREAD> "進捗を観測し、完了時だけ私へ報告してください。Codexへの送信は不要です。"', "codexteer supervise prompt codex://threads/<UUID> --json", "codexteer supervise <THREAD>"],
+    usage: ["supervise prompt <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli]"],
+    returns: "通常はプロンプト本文だけを標準出力へ返します。--jsonではdata.thread_id、data.prompt、元のホーム（codex_home）・保存先・版・ハッシュ・再利用の有無を示すdata.deployment、Nodeのパスと版を示すdata.node、セッションID・owner・connectionを示すdata.supervisor、実行方式を示すdata.cli_mode（savedまたはpath）を返します。--use-path-cliではdeploymentとnodeはnullです。",
+    examples: ["codexteer supervise prompt <THREAD>", "codexteer supervise prompt <THREAD> --use-path-cli", 'codexteer supervise prompt <THREAD> "進捗を観測し、完了時だけ私へ報告してください。Codexへの送信は不要です。"', "codexteer supervise prompt codex://threads/<UUID> --json", "codexteer supervise <THREAD>"],
     notes: [...supervisionExecutionNotes,
       "出力は監督役（オーケストレーター）へ渡す初期指示です。THREADはUUIDまたはcodex://threads/...。IDの書式を確認して正規化し、本文へ埋め込みます。Desktopへの接続・履歴取得・送信・Claudeの起動・設定変更は行いません。タスクの存在と接続は監督開始時に確認します。", "Claudeを起動する場合はsupervise <THREAD> [MESSAGE]を使います。追加の起動引数は -- の後ろへ渡してください。", "共通の操作手順はhelp monitorと同じです。観測の観点・介入の判断基準・報告方法は選択した監督方針に従います。Monitorが使えない場合は短いwatchで観測します。", "生成した本文を既存のエージェントへ貼り付けても使えます。本文のregisterで開始し、監督停止は端末のsupervise stopかそのセッションへの指示を使います。プロンプトはCLIやOSの権限設定を変更しません。"],
   },
@@ -108,9 +109,9 @@ export const topics = {
   overview: {
     title: "別のAIと、Codexタスクの進行を共有する",
     when: "タスクを探す → 現状を読む → 指示を送る → 変化を確認する、という順で使います。",
-    usage: ["supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [-- <AGENT-ARGS...>]", "supervise prompt <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop]", "supervise status|pause|resume|stop <THREAD>", "supervise list", "threads list [--desktop-only] [--limit N]", "status <THREAD>", "read <THREAD> [--since CURSOR] [--limit N]", "watch <THREAD> [--since CURSOR] [--until change|idle|attention]", "send <THREAD> <MESSAGE...> [--new-turn] [--dry-run] [--no-sound]", "doctor [--backend app-server|ui]", "desktop start [--dry-run]", "thread resolve <THREAD>", "open <THREAD>", "debug-ui <THREAD> [--wait-ms N]", "help <COMMAND>"],
+    usage: ["supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli] [-- <AGENT-ARGS...>]", "supervise prompt <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli]", "supervise status|pause|resume|stop <THREAD>", "supervise list", "threads list [--desktop-only] [--limit N]", "status <THREAD>", "read <THREAD> [--since CURSOR] [--limit N]", "watch <THREAD> [--since CURSOR] [--until change|idle|attention]", "send <THREAD> <MESSAGE...> [--new-turn] [--dry-run] [--no-sound]", "doctor [--backend app-server|ui]", "desktop start [--dry-run]", "thread resolve <THREAD>", "open <THREAD>", "debug-ui <THREAD> [--wait-ms N]", "help <COMMAND>"],
     returns: "対話起動のsupervise <THREAD> [MESSAGE]を除き、各コマンドに --json を付けると、AIやスクリプトが扱えるJSONを返します。supervise promptもJSONに対応します。",
-    examples: ["codexteer supervise <THREAD>", "codexteer threads list --desktop-only --json", "codexteer read <THREAD> --json", "codexteer help send"],
+    examples: ["codexteer supervise <THREAD>", "codexteer supervise <THREAD> --use-path-cli", "codexteer threads list --desktop-only --json", "codexteer read <THREAD> --json", "codexteer help send"],
     use_cases: [
       { need: "ClaudeまたはCodex CLIを監督役にする", command: "help supervise / help monitor" },
       { need: "監督役（オーケストレーター）向けのプロンプトを取得", command: "help supervise prompt" },
@@ -125,7 +126,7 @@ export const topics = {
       { need: "テストしたソースと成果物を照合", command: "help checkpoint" },
       { need: "画面・Unityなどの利用を調整", command: "help resource" },
     ],
-    notes: ["THREADにはUUIDまたはcodex://threads/...を指定します。", "監督役の対話起動: codexteer supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [-- <AGENT-ARGS...>]。superviseの標準入出力と終了コードは監督エージェントのものです。", "コマンド別のhelpには、使い所・出力・例・制約を載せています。help自体も --json に対応します。"],
+    notes: ["THREADにはUUIDまたはcodex://threads/...を指定します。", "監督役の対話起動: codexteer supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli] [-- <AGENT-ARGS...>]。superviseの標準入出力と終了コードは監督エージェントのものです。", "コマンド別のhelpには、使い所・出力・例・制約を載せています。help自体も --json に対応します。"],
   },
   read: {
     title: "直近の発言・コマンド・変更ファイルを読む",

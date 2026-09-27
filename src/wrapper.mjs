@@ -1,7 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
-import { chmod, stat } from "node:fs/promises";
+import { accessSync, constants as fsConstants, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
+import path from "node:path";
 import { claimRuntime } from "./runtime.mjs";
 import { connectSocket } from "./rpc.mjs";
 import { relay } from "./bridge.mjs";
@@ -9,8 +10,61 @@ import { DesktopSubscriptions, serveSubscriptions } from "./subscription.mjs";
 import { VERSION, PACKAGE_NAME } from "./version.mjs";
 import { RUNTIME_PROTOCOL, RUNTIME_CAPABILITIES } from "./compatibility.mjs";
 import { describeDistribution } from "./distribution.mjs";
+import { inspectAppServerSocket } from "./socket-endpoint.mjs";
 
-export const BUNDLED_CLI = "/Applications/ChatGPT.app/Contents/Resources/codex";
+const DESKTOP_RESOURCES = "/Applications/ChatGPT.app/Contents/Resources";
+const LEGACY_BUNDLED_CLI = path.join(DESKTOP_RESOURCES, "codex");
+
+function isWithinDirectory(directory, candidate) {
+  const relative = path.relative(directory, candidate);
+  return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+function resolveManifestCli(packageDirectory, resourcesDirectory) {
+  try {
+    const root = realpathSync(packageDirectory);
+    if (!isWithinDirectory(resourcesDirectory, root)) return null;
+    const manifest = JSON.parse(readFileSync(path.join(root, "codex-package.json"), "utf8"));
+    if ((manifest.variant != null && manifest.variant !== "codex")
+      || (manifest.layoutVersion != null && (!Number.isSafeInteger(manifest.layoutVersion) || manifest.layoutVersion < 1))
+      || typeof manifest.entrypoint !== "string" || manifest.entrypoint.length === 0
+      || manifest.entrypoint.includes("\0") || path.isAbsolute(manifest.entrypoint)
+      || manifest.entrypoint.split(/[\\/]/).some(part => part === "" || part === "." || part === "..")) return null;
+
+    const entrypoint = realpathSync(path.resolve(root, manifest.entrypoint));
+    if (!isWithinDirectory(root, entrypoint) || !statSync(entrypoint).isFile()) return null;
+    accessSync(entrypoint, fsConstants.X_OK);
+    return entrypoint;
+  } catch {
+    return null;
+  }
+}
+
+function resolveBundledCli() {
+  try {
+    const resourcesDirectory = realpathSync(DESKTOP_RESOURCES);
+    const packages = readdirSync(resourcesDirectory, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() || entry.isSymbolicLink())
+      .map(entry => path.join(resourcesDirectory, entry.name))
+      .sort();
+    const manifestCli = packages.map(directory => resolveManifestCli(directory, resourcesDirectory)).find(Boolean);
+    if (manifestCli) return manifestCli;
+  } catch {
+    // Fall through to the pre-manifest app layout.
+  }
+
+  try {
+    if (statSync(LEGACY_BUNDLED_CLI).isFile()) {
+      accessSync(LEGACY_BUNDLED_CLI, fsConstants.X_OK);
+      return LEGACY_BUNDLED_CLI;
+    }
+  } catch {
+    // Preserve the legacy path for a useful ENOENT diagnostic at startup.
+  }
+  return LEGACY_BUNDLED_CLI;
+}
+
+export const BUNDLED_CLI = resolveBundledCli();
 export const BUNDLED_NODE = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node";
 const DESKTOP_EXECUTABLE = "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT";
 
@@ -110,14 +164,22 @@ export async function runWrapper(args, { executable = BUNDLED_CLI, env = process
     });
     let spawnError;
     child.on("error", error => { spawnError = error; });
+    let endpoint;
+    let socketError;
     for (let i = 0; i < 100; i++) {
       if (interrupted || spawnError || child.exitCode != null || child.signalCode != null) throw new Error("App Server exited during startup.");
-      if (await stat(lease.paths.socket).catch(() => null)) break;
+      try {
+        endpoint = await inspectAppServerSocket(lease.paths.socket);
+        break;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        socketError = error;
+      }
       await delay(100);
     }
-    await chmod(lease.paths.socket, 0o600);
+    if (!endpoint) throw socketError ?? new Error("App Server socket did not become ready during startup.");
     await lease.update({ server_pid: child.pid });
-    socket = await connectSocket(lease.paths.socket);
+    socket = await connectSocket(endpoint.socket);
     subscriptions = new DesktopSubscriptions(socket);
     stopSubscriptions = await serveSubscriptions(lease.paths.control, subscriptions);
     let initId;
