@@ -114,6 +114,14 @@ async function legacyRuntime(profile) {
   return { ...runtime, state };
 }
 
+async function preVersionSendRuntime() {
+  const legacy = await legacyRuntime("pre-version");
+  // Only 0.153.4 has a verified pre-version mutation contract. New bundled
+  // CLIs exercise the current wrapper's declared contract, without spoofing
+  // a known CLI version or weakening the production compatibility guard.
+  return legacy.state.cli_version === "0.153.4" ? legacy : discoverRuntime(root);
+}
+
 async function checkHelperPassThrough() {
   const before = (await discoverRuntime(root)).state;
   const helper = spawn(deployment.wrapper_path, ["-c", "features.plugins=false", "app-server"], {
@@ -230,7 +238,10 @@ try {
   assert.equal(read.thread.turns.at(-1).id, turn.id);
   const observation = await observeThread(thread.id, {}, { discover: () => legacyRuntime("pre-version") });
   assert.equal(observation.active_turn_id, turn.id);
-  const result = await sendAppServerMessage(thread.id, "日本語\nprobe steer", { discover: () => legacyRuntime("pre-version") });
+  if ((await discoverRuntime(root)).state.cli_version !== "0.153.4") {
+    await assert.rejects(sendAppServerMessage(thread.id, "must reject unverified legacy send", { discover: () => legacyRuntime("pre-version") }), { code: "RUNTIME_PROTOCOL_UNVERIFIED" });
+  }
+  const result = await sendAppServerMessage(thread.id, "日本語\nprobe steer", { discover: preVersionSendRuntime });
   assert.equal(result.turn_id, turn.id);
   await assert.rejects(cli.request("turn/steer", { threadId: thread.id, expectedTurnId: "stale", input: [{ type: "text", text: "must reject" }] }), { code: "RPC_REJECTED" });
   // Reach a model boundary so queued steering is consumed. Check the real
@@ -296,7 +307,8 @@ try {
     const legacyDoctor = await appServerDoctor({ threadId: thread.id, discover: () => legacyRuntime(profile) });
     assert.equal(legacyDoctor.ready, true, legacyDoctor.remediation);
     assert.equal(legacyDoctor.compatibility.status, "verified");
-    assert.equal(legacyDoctor.runtime_compatibility.operations.send_new_turn.status, "supported");
+    const knownLegacy = profile === "v0.13" || legacyDoctor.running_cli_version === "0.153.4";
+    assert.equal(legacyDoctor.runtime_compatibility.operations.send_new_turn.status, knownLegacy ? "supported" : "unverified");
   }
   assert.equal(providerRequests, beforeDoctorRequests, "Doctor never invokes the model");
   const reconnectStates = [], stopWatch = new AbortController(); let watchClient;
@@ -316,7 +328,7 @@ try {
   // Exactly the command a Monitor consumer runs, including backlog pagination
   // and cancellation while the task's model call is still in progress.
   const monitorLines = []; let monitorErrors = "";
-  monitor = spawn(BUNDLED_NODE, [...cliArgs, "watch", thread.id, "--stream", "--since", observation.cursor, "--limit", "1", "--poll-ms", "250"], { ...cliOptions, timeout: undefined, stdio: ["ignore", "pipe", "pipe"] });
+  monitor = spawn(BUNDLED_NODE, [...cliArgs, "watch", thread.id, "--stream", "--notify", "all", "--since", observation.cursor, "--limit", "1", "--poll-ms", "250"], { ...cliOptions, timeout: undefined, stdio: ["ignore", "pipe", "pipe"] });
   const monitorExit = once(monitor, "exit");
   createInterface({ input: monitor.stdout }).on("line", line => monitorLines.push(line));
   monitor.stderr.on("data", data => { monitorErrors += data; });
@@ -345,7 +357,7 @@ try {
   const coldObservation = await observeThread(thread.id, {}, { discover: () => discoverRuntime(root) });
   assert.equal(coldObservation.status, "notLoaded", "Observation never resumes a cold task");
   assert.equal(stored.turns.flatMap(t => t.items).filter(item => item.type === "userMessage" && item.clientId === next.client_message_id).length, 1, "User message identity survives server restart");
-  const cold = await sendAppServerMessage(thread.id, "probe cold new turn", { newTurn: true, discover: () => legacyRuntime("pre-version") });
+  const cold = await sendAppServerMessage(thread.id, "probe cold new turn", { newTurn: true, discover: preVersionSendRuntime });
   await approval(thread.id, cold.turn_id, "probe cold new turn");
   assert.ok(desktop.notifications.some(m => m.method === "turn/started" && m.params.threadId === thread.id));
   console.log(JSON.stringify({ checkpoint: "CP4-protocol-cold", result: "PASS", unloaded_resume: true, desktop_approval_after_sender_exit: true }));
