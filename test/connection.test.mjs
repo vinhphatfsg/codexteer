@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, chmod, symlink, readdir } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, chmod, symlink, readdir, realpath } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { execFile } from "node:child_process";
@@ -15,7 +16,7 @@ import { streamThread } from "../src/monitor.mjs";
 const ID = "11111111-1111-4111-8111-111111111111", OTHER = "22222222-2222-4222-8222-222222222222";
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url)), exec = promisify(execFile);
 const thread = { id: ID, status: { type: "idle" }, turns: [] };
-async function fixture(t, answer = () => undefined) {
+async function fixture(t, answer = () => undefined, protectedSocket = false) {
   const home = await mkdtemp("/private/tmp/ct-native-"), directory = `${home}/app-server-control`, socket = `${directory}/app-server-control.sock`;
   await mkdir(directory, { mode: 0o700 });
   const http = createServer(), ws = new WebSocketServer({ server: http }), calls = [];
@@ -26,7 +27,14 @@ async function fixture(t, answer = () => undefined) {
     if (result === undefined) peer.send(JSON.stringify({ id: request.id, error: { code: -32601, message: "Unavailable" } }));
     else peer.send(JSON.stringify({ id: request.id, result }));
   }));
-  http.listen(socket); await once(http, "listening"); await chmod(socket, 0o600);
+  let physical = socket;
+  if (protectedSocket) {
+    const root = `${await realpath("/tmp")}/codex-daemon-${process.getuid()}`;
+    await mkdir(root, { mode: 0o700 }).catch(error => { if (error.code !== "EEXIST") throw error; });
+    physical = `${root}/${createHash("sha256").update(socket).digest("hex")}`;
+  }
+  http.listen(physical); await once(http, "listening"); await chmod(physical, 0o600);
+  if (protectedSocket) await symlink(physical, socket);
   t.after(async () => {
     for (const peer of ws.clients) peer.terminate();
     await new Promise(resolve => ws.close(resolve));
@@ -43,8 +51,25 @@ async function fixture(t, answer = () => undefined) {
     catch (error) { if (ok) throw error; result = error; }
     const data = JSON.parse(result.stdout); assert.equal(data.ok, ok); return data;
   }
-  return { home, directory, socket, calls, dependencies, cli };
+  return { home, directory, socket, physical, calls, dependencies, cli };
 }
+
+test("official Desktop aliases support read-only observation and detect physical socket replacement", async t => {
+  const f = await fixture(t, undefined, true);
+  const paths = (await discoverDesktopRuntime(f.home)).paths;
+  assert.equal(paths.socket, f.physical);
+  assert.equal((await observeThread(ID, {}, f.dependencies())).thread_id, ID);
+  const client = await connectDesktop(paths);
+  t.after(() => client.close());
+  await assert.rejects(client.request("turn/start", { threadId: ID }), { code: "DESKTOP_READ_ONLY" });
+  await rm(f.physical);
+  const replacement = createServer();
+  t.after(() => new Promise(resolve => replacement.close(resolve)));
+  replacement.listen(f.physical); await once(replacement, "listening"); await chmod(f.physical, 0o600);
+  const before = f.calls.length;
+  await assert.rejects(client.request("thread/loaded/list"), { code: "DESKTOP_CONNECTION_CHANGED" });
+  assert.equal(f.calls.length, before);
+});
 
 test("the existing private Unix endpoint supports read/watch/doctor without claiming mutation support", async t => {
   const f = await fixture(t);

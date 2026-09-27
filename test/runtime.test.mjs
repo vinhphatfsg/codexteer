@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, chmod, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, chmod, readFile, writeFile, realpath, symlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { once } from "node:events";
@@ -65,6 +66,29 @@ test("discovery distinguishes missing, not-ready and malformed runtime state", a
     await writeFile(paths.state, contents, { mode: 0o600 });
     await assert.rejects(discoverRuntime(home), { code: "RUNTIME_INVALID" });
   }
+});
+
+test("runtime discovery accepts only the official RPC alias and returns its verified target", async t => {
+  const { home, paths } = await setup(t);
+  const lease = await claimRuntime(home);
+  const directory = `${await realpath("/tmp")}/codex-daemon-${process.getuid()}`;
+  await mkdir(directory, { mode: 0o700 }).catch(error => { if (error.code !== "EEXIST") throw error; });
+  const target = `${directory}/${createHash("sha256").update(paths.socket).digest("hex")}`;
+  const server = createServer(peer => peer.destroy());
+  try {
+    server.listen(target); await once(server, "listening"); await chmod(target, 0o600);
+    await symlink(target, paths.socket);
+    await lease.update({ server_pid: process.pid, desktop_connected: true });
+    assert.equal((await discoverRuntime(home)).paths.socket, target);
+    await chmod(target, 0o666);
+    await assert.rejects(discoverRuntime(home), { code: "RUNTIME_UNSAFE" });
+    await chmod(target, 0o600);
+    // The subscription socket belongs to codexteer, so it still rejects all aliases.
+    await symlink(target, paths.control);
+    await assert.rejects(verifyControlEndpoint(paths), { code: "RUNTIME_UNSAFE" });
+    await rm(paths.socket); await symlink(paths.control, paths.socket);
+    await assert.rejects(discoverRuntime(home), { code: "RUNTIME_UNSAFE" });
+  } finally { if (server.listening) await new Promise(resolve => server.close(resolve)); }
 });
 
 test("concurrent recovery cannot replace a newly acquired lease", async t => {
