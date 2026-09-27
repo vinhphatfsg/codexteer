@@ -2,6 +2,7 @@ import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { codexHome } from "./runtime.mjs";
 import { RpcClient } from "./rpc.mjs";
+import { inspectAppServerSocket } from "./socket-endpoint.mjs";
 
 const failure = (message, code) => Object.assign(new Error(message), { code });
 const reads = new Set(["thread/loaded/list", "thread/read", "thread/turns/list", "thread/items/list"]);
@@ -16,16 +17,22 @@ export function desktopReadOnly() {
 async function identity(home) {
   const directory = path.join(home, "app-server-control"), socket = path.join(directory, "app-server-control.sock");
   const fingerprint = [];
-  for (const [file, type] of [[home, "home"], [directory, "directory"], [socket, "socket"]]) {
+  for (const [file, type] of [[home, "home"], [directory, "directory"]]) {
     const info = await lstat(file);
     if (info.uid !== process.getuid() || info.isSymbolicLink() || (info.mode & (type === "home" ? 0o022 : 0o077)) !== 0
-      || (type === "socket" ? !info.isSocket() : !info.isDirectory())) {
+      || !info.isDirectory()) {
       throw failure("Desktop control endpoint has unsafe ownership, permissions, or file type.", "DESKTOP_CONNECTION_UNSAFE");
     }
     // Home directory timestamps change for unrelated profile activity.
-    fingerprint.push([info.dev, info.ino, type === "socket" ? info.ctimeMs : null]);
+    fingerprint.push([info.dev, info.ino]);
   }
-  return { home, directory, socket, fingerprint: JSON.stringify(fingerprint) };
+  let endpoint;
+  try { endpoint = await inspectAppServerSocket(socket); }
+  catch (error) {
+    if (error.code === "SOCKET_UNSAFE") throw failure(error.message, "DESKTOP_CONNECTION_UNSAFE");
+    throw error;
+  }
+  return { home, directory, socket: endpoint.socket, fingerprint: JSON.stringify([...fingerprint, ...endpoint.fingerprint]) };
 }
 
 export async function discoverDesktopRuntime(home = codexHome()) {

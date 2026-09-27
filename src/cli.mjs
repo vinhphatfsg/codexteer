@@ -182,9 +182,10 @@ export async function main(argv) {
     if (command === "supervise" && args[0] === "prompt") {
       args.shift();
       const agent = takeOption(args, "--agent", "claude");
+      const usePathCli = takeFlag(args, "--use-path-cli");
       if (args.length < 1 || args.length > 2 || args.some(arg => arg.startsWith("--"))) throw new Error("Expected: supervise prompt <THREAD> [MESSAGE]. See codexteer help supervise prompt.");
       if (supervisor) throw new Error("A supervisor cannot generate a replacement session.");
-      const data = await prepareSupervisorPrompt(args[0], args[1], { agent, connection });
+      const data = await prepareSupervisorPrompt(args[0], args[1], { agent, connection, usePathCli });
       success("supervise.prompt", data, json);
       if (!json) console.log(data.prompt);
       return;
@@ -196,8 +197,9 @@ export async function main(argv) {
       const ownArgs = separator < 0 ? args : args.slice(0, separator);
       const agentArgs = separator < 0 ? [] : args.slice(separator + 1);
       const agent = takeOption(ownArgs, "--agent", "claude");
-      if (ownArgs.length < 1 || ownArgs.length > 2 || ownArgs.some(arg => arg.startsWith("--"))) throw new Error("Expected: supervise <THREAD> [MESSAGE] [--agent claude|codex] [-- <AGENT-ARGS...>].");
-      process.exitCode = await superviseAgent(ownArgs[0], { agent, agentArgs, policy: ownArgs[1], connection });
+      const usePathCli = takeFlag(ownArgs, "--use-path-cli");
+      if (ownArgs.length < 1 || ownArgs.length > 2 || ownArgs.some(arg => arg.startsWith("--"))) throw new Error("Expected: supervise <THREAD> [MESSAGE] [--agent claude|codex] [--use-path-cli] [-- <AGENT-ARGS...>].");
+      process.exitCode = await superviseAgent(ownArgs[0], { agent, agentArgs, policy: ownArgs[1], connection, usePathCli });
       return;
     }
     if (command === "resource") {

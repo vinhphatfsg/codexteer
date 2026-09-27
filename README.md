@@ -73,6 +73,8 @@ codexteer doctor --json
 
 `desktop start`は実行ファイルと依存を`CODEX_HOME/codex-steer/runtimes/<version>-<sha256>`へ検証して配置し、そのwrapperからDesktopを起動します。元のリポジトリやnpxキャッシュに依存せず、起動後のhelperも同じ保存先を使います。配置済みの版は自動削除・上書きしません。
 
+Codex同梱CLI 0.155系列の保護ソケット形式にも対応します。従来の実ソケットに加え、公式の固定ディレクトリとパスハッシュに一致するリンクだけを、所有者・権限・リンク先の種別を検証して利用します。旧CLIで`RUNTIME_UNSAFE`が出た場合、ソース導入先を更新すれば、すでに稼働しているwrapperへの接続も修復できます。保存済みCLIを使う監督には、監督の再起動またはプロンプトの再生成で更新を反映してください。
+
 監督AIが使うCLIの参照先については、次の監督手順を参照してください。MITライセンス、保存先の検証・復旧と公開手順は[配布ドキュメント](docs/distribution.md)にまとめています。
 
 ## 使い方
@@ -113,13 +115,22 @@ codexteer supervise <thread-id> "セキュリティの問題だけを私へ報�
 
 上書きは今回の生成・起動だけに適用し、次回の既定設定や保存したCLIには書き込みません。改行・空白・プレースホルダーに見える文字も指定文のまま本文に含めます。空文字・空白だけのメッセージはエラーです。呼び出し元のシェルで一つの引数として引用してください。`$`やバッククォートを文字として含めるときは、シェルが展開しない引用方法を使ってください。
 
-両方とも、起動したCLI本体と依存を`CODEX_HOME/codex-steer/runtimes/<version>-<sha256>`へ検証して保存し、そのコピーへの実行コマンドを監督プロンプトに埋め込みます。監督役に渡す切り替えオプションは不要です。npxのキャッシュが新版に更新された場合や、ソース導入先を`git pull`・削除した場合も、開始済みの監督は保存した内容を使い続けます。
+既定では両方とも、起動したCLI本体と依存を`CODEX_HOME/codex-steer/runtimes/<version>-<sha256>`へ検証して保存し、そのコピーへの実行コマンドを監督プロンプトに埋め込みます。監督役に渡す切り替えオプションは不要です。npxのキャッシュが新版に更新された場合や、ソース導入先を`git pull`・削除した場合も、開始済みの監督は保存した内容を使い続けます。
 
 実行コマンドには、生成時に検証した`CODEX_HOME`の実体パス、監督ごとの`--supervisor` ID、選択した`--connection`も埋め込みます。先頭の指定とオプションを全て保持してください。貼り付け先の環境変数が未設定・別設定でも、生成元の接続先と履歴を使います。同じPCで使い、監督中は保存したコピーを保持してください。新しいCLIや別のプロファイルに切り替えるときは、その環境から監督を起動し直すか、プロンプトを生成し直します。同じ版・同じ内容のコピーは検証して再利用し、内容が変われば別の保存先を作ります。既存のコピーは自動削除・上書きしません。
 
 Node本体はコピーせず、開始時の実体への絶対パスとNodeバージョンの検査を各コマンドに含めます。元のNodeは保持してください。バージョンが変われば`NODE_VERSION_MISMATCH`で操作を止めます。同じバージョンのNodeの改変や共有ライブラリまで固定するものではありません。保存先やNodeが使えなくなった場合は介入を止め、理由を報告するよう指示します。
 
 起動時にバージョンを指定するかどうかに関係なく、監督用CLIの保存処理は同じです。キャッシュの動作と保存処理の詳細は[配布ドキュメント](docs/distribution.md#監督役が使うcli)を参照してください。
+
+絶対パスを埋め込まず、PATH上の`codexteer`をプロンプトで案内するには、`--use-path-cli`を指定します。
+
+```bash
+codexteer supervise <thread-id> --use-path-cli
+codexteer supervise prompt <thread-id> --use-path-cli
+```
+
+この場合の実行例は`codexteer --supervisor '<SESSION-ID>' --connection shared read <thread-id> --json`の形式です。CLIのコピー・Nodeの固定・`CODEX_HOME`の埋め込みを行わず、実行環境のPATHと`CODEX_HOME`を使います。CLIの更新は次の実行から反映されます。監督ID・接続方式・一時停止等の制御は維持するため、対象Desktopと同じプロファイルで実行してください。直接起動時も同じプロンプトを渡し、登録と終了時の停止を行います。`--agent`・監督方針・`--connection desktop`と併用でき、エージェント用の`--`区切りより前に指定します。`supervise prompt --json`の`data.cli_mode`は`path`、`data.deployment`と`data.node`は`null`です。指定しなければ`cli_mode`は`saved`で、従来の保存済みCLIを使います。
 
 モデルなどClaude側の起動引数は、`--`の後ろへ渡します。
 
@@ -224,7 +235,7 @@ codexteer supervise <thread-id> --agent codex --connection desktop
 
 直接接続で使えるのは観測です。送信・新規ターン・撤回送信・UI送信は`DESKTOP_READ_ONLY`で拒否します。送信は既存のshared方式を明示して使ってください。生成する監督プロンプトも接続方式を保持し、desktopでは観測専用の手順を使います。`doctor`は読み取り成功から送信・画面表示・承認継続の対応を推測しません。
 
-詳細は`help connection`を参照してください。今回の開発環境にはこのソケットがなく、実Desktopへの直接接続は未検証です。読み取り・エンドポイント検査・送信拒否は隔離したUnixソケットの模擬サーバーで検証しています。同梱Codex CLI 0.153.4を一時プロファイルとローカルの偽モデルで動かし、実際のUnix接続から合成履歴を読む検証も通過しました（`npm run test:connection`）。実Desktopの画面表示・承認継続の確認とは区別しています。
+詳細は`help connection`を参照してください。今回の開発環境にはこのソケットがなく、実Desktopへの直接接続は未検証です。読み取り・エンドポイント検査・送信拒否は隔離したUnixソケットの模擬サーバーで検証しています。同梱Codex CLI 0.155.0-alpha.16.3を一時プロファイルとローカルの偽モデルで動かし、保護ソケットへのリンクを使って合成履歴を読む検証も通過しました（`npm run test:connection`）。実Desktopの画面表示・承認継続の確認とは区別しています。
 
 ### タスクを探して送信する
 
@@ -325,6 +336,9 @@ codexteer supervise prompt codex://threads/<thread-id>
 # 標準の監督方針を置き換えて本文を生成
 codexteer supervise prompt <thread-id> "監督方針を指定するメッセージ"
 
+# PATH上のcodexteerを案内する本文を生成
+codexteer supervise prompt <thread-id> --use-path-cli
+
 # JSONで対象IDと本文を取得
 codexteer supervise prompt <thread-id> --json
 
@@ -332,9 +346,11 @@ codexteer supervise prompt <thread-id> --json
 codexteer help supervise prompt
 ```
 
-`supervise prompt`は、ClaudeやCodexなどの監督役（オーケストレーター）へ渡す初期プロンプトを生成します。対象IDと引数を検証し、CLI一式を内容ハッシュ別の保存先へ配置・検証してから、正規化したIDと保存先を本文へ埋め込みます。保存・検証に失敗した場合は本文を出力せず、直接起動の場合も監督エージェントを起動しません。Desktopの起動・接続、履歴取得、送信、監督エージェントの起動は行いません。タスクの存在と接続は監督開始時に確認します。本文には観測・根拠付き介入・結果確認・停止までの手順を含みます。
+`supervise prompt`は、ClaudeやCodexなどの監督役（オーケストレーター）へ渡す初期プロンプトを生成します。対象IDと引数を検証し、既定ではCLI一式を内容ハッシュ別の保存先へ配置・検証してから、正規化したIDと保存先を本文へ埋め込みます。保存・検証に失敗した場合は本文を出力せず、直接起動の場合も監督エージェントを起動しません。Desktopの起動・接続、履歴取得、送信、監督エージェントの起動は行いません。タスクの存在と接続は監督開始時に確認します。本文には観測・根拠付き介入・結果確認・停止までの手順を含みます。
 
-各コマンドは開始時のNodeと保存したCLIの絶対パスを使うため、本文を貼り付ける先のPATHに`codexteer`がなくても実行できます。先頭の`CODEX_HOME='…'`で生成元のプロファイルを指定します。相対パスやシンボリックリンクで指定していたホームも、検証した実体への絶対パスを使います。空白や引用符を含むパスはシェル引数として引用します。本文に埋め込むパスに改行等の制御文字があれば、本文を出力する前に`SUPERVISION_PATH_UNSAFE`で拒否します。`CODEX_HOME`指定・引用・`--require-node-version`を含め、実行コマンドをそのまま使ってください。別のPCや別のプロファイルを監督する場合は、そこで本文を生成し直してください。
+既定の各コマンドは開始時のNodeと保存したCLIの絶対パスを使うため、本文を貼り付ける先のPATHに`codexteer`がなくても実行できます。先頭の`CODEX_HOME='…'`で生成元のプロファイルを指定します。相対パスやシンボリックリンクで指定していたホームも、検証した実体への絶対パスを使います。空白や引用符を含むパスはシェル引数として引用します。本文に埋め込むパスに改行等の制御文字があれば、本文を出力する前に`SUPERVISION_PATH_UNSAFE`で拒否します。`CODEX_HOME`指定・引用・`--require-node-version`を含め、実行コマンドをそのまま使ってください。別のPCや別のプロファイルを監督する場合は、そこで本文を生成し直してください。
+
+`--use-path-cli`を指定すると、本文はPATH上の`codexteer`を使い、CLIの保存や絶対パスの埋め込みを省略します。接続先と履歴は実行環境の`CODEX_HOME`に従います。
 
 通常出力は末尾改行付きの本文のみです。`--json`では既存CLIと同じ形式で返します。
 
@@ -345,6 +361,7 @@ codexteer help supervise prompt
   "data": {
     "thread_id": "01a04373-3770-71e0-a2e3-a3c196f5f5b1",
     "prompt": "対象IDと保存したCLIの実行コマンドを含む監督プロンプト本文…",
+    "cli_mode": "saved",
     "deployment": {
       "codex_home": "/Users/me/.codex",
       "directory": "/Users/me/.codex/codex-steer/runtimes/0.16.0-<sha256>",
