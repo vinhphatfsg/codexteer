@@ -15,6 +15,8 @@ import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
 import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
 import { connectionMode, observationConnection, desktopReadOnly } from "./connection.mjs";
+import { listProjects } from "./projects.mjs";
+import { createProjectThread } from "./thread-create.mjs";
 
 const DEFAULT_SEND_BACKEND = "app-server";
 
@@ -32,6 +34,9 @@ function fail(error, json) {
     message_id: error.message_id, client_message_id: error.client_message_id, journal_update_required: error.journal_update_required,
     existing_message_id: error.existing_message_id,
     supervision_update_required: error.supervision_update_required,
+    receipt_path: error.receipt_path,
+    creation_status: error.creation_status, attempt_id: error.attempt_id, receipt_update_required: error.receipt_update_required,
+    native_call_id: error.native_call_id,
   } }));
   else console.error(`codexteer: ${message}`);
   process.exitCode = 1;
@@ -370,6 +375,15 @@ export async function main(argv) {
       return;
     }
 
+    if (command === "projects") {
+      if (connection === "desktop") throw desktopReadOnly();
+      if (args.shift() !== "list" || args.length) throw new Error("Expected: codexteer projects list");
+      const projects = await listProjects();
+      success("projects.list", { projects, count: projects.length }, json);
+      if (!json) for (const project of projects) console.log(`${project.project_id}  ${project.name}\n${project.roots.map(root => `  ${root}`).join("\n")}`);
+      return;
+    }
+
     if (command === "threads") {
       if (args.shift() !== "list") throw new Error("Expected: codexteer threads list");
       const limit = Number.parseInt(takeOption(args, "--limit", "20"), 10);
@@ -385,7 +399,27 @@ export async function main(argv) {
     }
 
     if (command === "thread") {
-      if (args.shift() !== "resolve") throw new Error("Expected: codexteer thread resolve <THREAD>");
+      const action = args.shift();
+      if (action === "create") {
+        if (connection === "desktop") throw desktopReadOnly();
+        if (supervisor) throw Object.assign(new Error("Managed supervision is bound to its existing task. Run thread create without --supervisor under the user's delegated creation scope."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        const selector = takeOption(args, "--project", undefined);
+        const options = { title: takeOption(args, "--title", undefined), cwd: takeOption(args, "--cwd", undefined), model: takeOption(args, "--model", undefined),
+          permissions: takeOption(args, "--permissions", undefined), sandbox: takeOption(args, "--sandbox", undefined),
+          approvalPolicy: takeOption(args, "--approval-policy", undefined), approvalsReviewer: takeOption(args, "--approvals-reviewer", undefined), dryRun: takeFlag(args, "--dry-run"),
+          contextThread: takeOption(args, "--context-thread", undefined), thinking: takeOption(args, "--thinking", undefined), timeoutMs: takeOption(args, "--timeout-ms", undefined) };
+        if (options.timeoutMs !== undefined) {
+          options.timeoutMs = Number(options.timeoutMs);
+        }
+        const literal = args.indexOf("--");
+        if (args.slice(0, literal < 0 ? args.length : literal).some(arg => arg.startsWith("--"))) throw new Error("Unknown thread create option. Use -- before an instruction starting with --.");
+        const message = readMessage(args);
+        const data = await createProjectThread(selector, message, options);
+        success("thread.create", data, json);
+        if (!json) console.log(options.dryRun ? `Dry run: ${data.project_name} (${data.cwd}), ${data.message_characters} characters.` : `Created ${data.deep_link} in ${data.project_name}; initial instruction accepted${data.turn_id ? ` (turn ${data.turn_id})` : ""}.`);
+        return;
+      }
+      if (action !== "resolve") throw new Error("Expected: codexteer thread create|resolve. See help thread.");
       if (args.length !== 1) throw new Error("thread resolve requires exactly one thread ID or URL.");
       const threadId = normalizeThreadId(args[0]);
       const data = { thread_id: threadId, deep_link: threadDeepLink(threadId) };

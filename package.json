@@ -1,6 +1,6 @@
 {
   "name": "codexteer",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Send steering messages to running Codex Desktop threads from a terminal.",
   "type": "module",
   "bin": {
@@ -31,7 +31,9 @@
     "scripts/*.applescript",
     "assets/send-pururu.wav",
     "CHANGELOG.md",
-    "docs/distribution.md"
+    "docs/distribution.md",
+    "docs/thread-create.md",
+    "docs/thread-create-native-investigation.md"
   ],
   "bundleDependencies": [
     "ws"

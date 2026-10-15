@@ -1,5 +1,13 @@
 # codexteer
 
+登録済みプロジェクトへの初回指示付きチャット作成は、`projects list`と`thread create --project`で行えます。プロジェクト名と指示だけで使え、既存チャットや中継AIは不要です。Desktopのnative RPCで所属を登録し、複数フォルダや重複フォルダを持つ「競馬」も、所属・全フォルダ・初回指示を照合します。[使い方と実機検証](docs/thread-create.md)
+
+```bash
+codexteer projects list --json
+codexteer thread create --project '競馬' \
+  --title '関連リポジトリの調査' '関連リポジトリを読み、結果を報告してください' --json
+```
+
 普段のCodex Desktopを使いながら、別のAIが進捗を観測し、根拠を伴って実行途中に軌道修正を伝えるためのmacOS用CLIです。ターミナルからの単発送信にも使えます。
 
 ## 導入
@@ -10,7 +18,7 @@ macOS、Node.js 20以降とnpm、`/Applications/ChatGPT.app`にインストー�
 
 リポジトリのcloneやグローバルインストールなしで実行できます。npmパッケージ名とCLI名は`codexteer`です。
 
-このブランチはマイナー更新`0.16.0`を準備します。`watch --stream`の通知集約と監督プロンプトの改善に加え、長いタスクへの送信前確認の修正を含みます。公開前に使う場合は「ソースから導入する」の手順で導入してください。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
+npm公開済みの最新版は`0.16.0`です。このブランチは、プロジェクト名と初回指示だけでチャットを作成できるマイナー更新`0.17.0`を準備します。公開前に使う場合は「ソースから導入する」の手順で導入してください。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
 
 ```bash
 npx -y codexteer --version
@@ -28,10 +36,10 @@ npx -y codexteer doctor --json
 <details>
 <summary>特定のバージョンで実行する場合（任意）</summary>
 
-不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。`0.16.0`の公開後にその版を選ぶ場合は、次のように指定します。
+不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。`0.17.0`の公開後にその版を選ぶ場合は、次のように指定します。
 
 ```bash
-npx -y codexteer@0.16.0 supervise <thread-id>
+npx -y codexteer@0.17.0 supervise <thread-id>
 ```
 
 </details>
@@ -364,9 +372,9 @@ codexteer help supervise prompt
     "cli_mode": "saved",
     "deployment": {
       "codex_home": "/Users/me/.codex",
-      "directory": "/Users/me/.codex/codex-steer/runtimes/0.16.0-<sha256>",
-      "wrapper_path": "/Users/me/.codex/codex-steer/runtimes/0.16.0-<sha256>/bin/codexteer-wrapper.mjs",
-      "version": "0.16.0",
+      "directory": "/Users/me/.codex/codex-steer/runtimes/0.17.0-<sha256>",
+      "wrapper_path": "/Users/me/.codex/codex-steer/runtimes/0.17.0-<sha256>/bin/codexteer-wrapper.mjs",
+      "version": "0.17.0",
       "sha256": "<sha256>",
       "reused": false
     },
