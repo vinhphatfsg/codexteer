@@ -1,5 +1,13 @@
 # codexteer
 
+登録済みプロジェクトへの初回指示付きチャット作成は、`projects list`と`thread create --project`で行えます。プロジェクト名と指示だけで使え、既存チャットや中継AIは不要です。Desktopのnative RPCで所属を登録し、複数フォルダや重複フォルダを持つ「競馬」も、所属・全フォルダ・初回指示を照合します。[使い方と実機検証](docs/thread-create.md)
+
+```bash
+codexteer projects list --json
+codexteer thread create --project '競馬' \
+  --title '関連リポジトリの調査' '関連リポジトリを読み、結果を報告してください' --json
+```
+
 普段のCodex Desktopを使いながら、別のAIが進捗を観測し、根拠を伴って実行途中に軌道修正を伝えるためのmacOS用CLIです。ターミナルからの単発送信にも使えます。
 
 ## 導入

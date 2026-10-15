@@ -31,7 +31,9 @@
     "scripts/*.applescript",
     "assets/send-pururu.wav",
     "CHANGELOG.md",
-    "docs/distribution.md"
+    "docs/distribution.md",
+    "docs/thread-create.md",
+    "docs/thread-create-native-investigation.md"
   ],
   "bundleDependencies": [
     "ws"
