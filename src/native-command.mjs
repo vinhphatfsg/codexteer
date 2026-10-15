@@ -10,6 +10,13 @@ import { nativeRequest } from "./native-rpc.mjs";
 const LIMIT = 8 * 1024 * 1024;
 const failure = (message, code = "NATIVE_COMMAND_FAILED", uncertain = false) => Object.assign(new Error(message), { code, uncertain });
 
+// An internal JSON-RPC error can arrive after a mutation has run. RpcFailure's
+// default uncertain:false only describes the response, not rollback of effects.
+// Only method/argument rejection proves that dispatch could not execute it.
+export function mutationOutcomeUnknown(error) {
+  return Number.isSafeInteger(error.rpcCode) ? ![-32601, -32602].includes(error.rpcCode) : error.uncertain !== false;
+}
+
 export function validateNativeCommandSchema(params, response) {
   for (const key of ["command", "cwd", "timeoutMs", "outputBytesCap", "sandboxPolicy"]) if (!params?.properties?.[key]) throw failure("Missing native helper command schema.", "NATIVE_COMMAND_UNVERIFIED");
   const readOnly = params.definitions?.SandboxPolicy?.oneOf?.find(policy => policy.properties?.type?.enum?.includes("readOnly"));
@@ -72,7 +79,7 @@ export async function nativeOnAppServer(client, endpoint, action, args, context,
     throw failure("Native helper did not confirm success.", "NATIVE_PROTOCOL_ERROR", mutation);
   } catch (caught) {
     error = caught;
-    if (error.uncertain === undefined) error.uncertain = dispatched && mutation && ![-32601, -32602].includes(error.rpcCode);
+    if (error.uncertain === undefined || Number.isSafeInteger(error.rpcCode)) error.uncertain = dispatched && mutation && mutationOutcomeUnknown(error);
     throw error;
   } finally {
     try { await rm(directory, { recursive: true, force: true }); }

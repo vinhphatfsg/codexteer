@@ -9,7 +9,7 @@ import { projectsOnClient, projectAliases, resolveProject, projectWorkspace, val
 import { fetchThread } from "./observe.mjs";
 import { ensureDesktopSubscription } from "./subscription.mjs";
 import { discoverNativeEndpoint, inspectNativeEndpoint, nativeToolJson } from "./native-rpc.mjs";
-import { nativeOnAppServer, inspectNativeCommandProtocol } from "./native-command.mjs";
+import { nativeOnAppServer, inspectNativeCommandProtocol, mutationOutcomeUnknown } from "./native-command.mjs";
 import { desktopMembership, initialInstructionMatches } from "./creation-verification.mjs";
 import { writeRecord, storePath } from "./store.mjs";
 
@@ -123,8 +123,8 @@ export async function createStandaloneProjectThread(selector, prompt, settings, 
     try { await write("creations", attemptId, receipt, storage); } catch { receipt.receipt_update_required = true; }
     return receipt;
   } catch (error) {
-    const created = !!receipt?.thread_id, unknownCreation = creating && !created && error.uncertain !== false;
-    const unknownDelivery = sending && !accepted && error.uncertain !== false;
+    const created = !!receipt?.thread_id, unknownCreation = creating && !created && mutationOutcomeUnknown(error);
+    const unknownDelivery = sending && !accepted && mutationOutcomeUnknown(error);
     Object.assign(error, { attempt_id: attemptId, native_call_id: attemptId, thread_id: receipt?.thread_id, receipt_path: receipt?.receipt_path,
       creation_status: created ? "created" : unknownCreation ? "unknown" : "not_created", sent: accepted ? true : unknownDelivery ? null : false,
       delivery_status: accepted ? "accepted" : unknownDelivery ? "unknown" : "not_sent" });

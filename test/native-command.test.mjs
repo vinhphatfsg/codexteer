@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile, lstat, access } from "node:fs/promises";
 import { nativeOnAppServer, validateNativeCommandSchema, validateStandaloneCreationSchemas, inspectNativeCommandProtocol } from "../src/native-command.mjs";
 import { BUNDLED_NODE } from "../src/wrapper.mjs";
+import { RpcFailure } from "../src/rpc.mjs";
 
 const CONTEXT = { threadId: "aaaaaaaa-aaaa-4aaa-8aaa-000000000001", turnId: "stored-turn" };
 const args = { prompt: "サンプル😀\n$(literal) `no shell`", target: { type: "project", projectId: "local-project", environment: { type: "local" } } };
@@ -52,4 +53,15 @@ test("lost self-assignment acknowledgement is a mutation with unknown outcome an
     throw new Error("lost");
   } }, endpoint, "move_thread_to_project", { threadId: CONTEXT.threadId, projectId: "local" }, CONTEXT), error => error.uncertain === true);
   assert.equal(calls, 1);
+});
+
+test("internal command RPC errors keep native mutation outcomes unknown", async () => {
+  for (const rpcCode of [-32603, -32602, -32601]) {
+    let calls = 0;
+    await assert.rejects(nativeOnAppServer({ async request() {
+      calls++;
+      throw new RpcFailure("command failed after dispatch", { code: "RPC_REJECTED", rpcCode });
+    } }, endpoint, "create_thread", args, CONTEXT), error => error.uncertain === (rpcCode === -32603));
+    assert.equal(calls, 1);
+  }
 });
