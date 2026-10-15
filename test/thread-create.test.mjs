@@ -264,14 +264,18 @@ test("internal RPC errors after creation or delivery stay unknown, while invalid
   }
 });
 
-test("explicit native creation preserves unknown internal RPC results without recreating", async t => {
-  const f = await fixture(t), native = f.deps.native;
-  f.deps.native = async (...args) => {
-    if (args[1] !== "create_thread") return native(...args);
-    f.calls.push({ action: "create_thread" });
-    throw new RpcFailure("native command failed after dispatch", { code: "RPC_REJECTED", rpcCode: -32603 });
-  };
-  await assert.rejects(createProjectThread("サンプル", "日本語\nfirst instruction", f.options, f.deps), error => error.creation_status === "unknown" && error.delivery_status === "unknown" && error.sent === null);
-  assert.equal(f.calls.filter(call => call?.action === "create_thread").length, 1);
-  assert.equal(f.writes.at(-1)[2].creation_status, "unknown");
+test("explicit native creation distinguishes definitive rejections from unknown results without recreating", async t => {
+  for (const rpcCode of [-32601, -32602, -32603]) {
+    const f = await fixture(t), native = f.deps.native, unknown = rpcCode === -32603;
+    f.deps.native = async (...args) => {
+      if (args[1] !== "create_thread") return native(...args);
+      f.calls.push({ action: "create_thread" });
+      throw new RpcFailure("native command failed after dispatch", { code: "RPC_REJECTED", rpcCode });
+    };
+    const creation = unknown ? "unknown" : "not_created", delivery = unknown ? "unknown" : "not_sent";
+    await assert.rejects(createProjectThread("サンプル", "日本語\nfirst instruction", f.options, f.deps), error => error.creation_status === creation && error.delivery_status === delivery && error.sent === (unknown ? null : false));
+    assert.equal(f.calls.filter(call => call?.action === "create_thread").length, 1);
+    assert.equal(f.writes.at(-1)[2].creation_status, creation);
+    assert.equal(f.writes.at(-1)[2].delivery_status, delivery);
+  }
 });
