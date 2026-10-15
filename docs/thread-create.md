@@ -107,3 +107,9 @@ native直接作成の時点では`npm run check`成功、`node --test --test-con
 - 承認試験は同じ最終チャットの後続ターン`01a13e23-e670-7e60-8107-5317fbbca458`のみをuser/on-request/read-onlyにして実施。作成時のDesktop購読を再利用し、新たな購読は行っていません。短命senderは`2026-10-15T05:58:22.584Z`に終了し、その後もDesktopでwaitingOnApprovalが継続しました。ユーザーの「今回だけ承認」後、`printf CODEXTEER_STANDALONE_HUMAN_APPROVAL_OK`がexit 0、最終応答`CODEXTEER_STANDALONE_HUMAN_ROUNDTRIP_OK`、ターンcompletedを確認しました。所属・7フォルダ・初回指示も再照合し、同じattemptのreceiptをhuman_approval_roundtrip:verifiedへ更新しました。
 - 全体の逐次テストは327件中325成功・2skip・失敗0、`npm run check`と`git diff --check`も成功しました。sandbox内のNode 25によるUnix socket試験は実行環境のassertで終了したため、ローカルsocketを許可した環境で実行・確認しました。
 - 更新後の配布テストもPASS。77ファイルのpack、publish dry-run、offline install、npm exec/npx、保存CLIと混在バージョンの回帰を確認しました。公開は行っていません。
+
+## PRレビューでの修正 (0.17.0公開候補)
+
+内部RPCエラーを実際の`RpcFailure`型で模擬すると、処理が実行された可能性があっても`not_created` / `not_sent`になる問題が再現しました。内部エラー（`-32603`など）は`unknown`を保持し、メソッド・引数エラー（`-32601` / `-32602`）だけを実行前の拒否として扱うよう修正しています。standaloneの作成・初回配送、native helperと明示的context作成の回帰テストを追加しました。未確認の操作を自動再実行する処理は追加していません。
+
+公開前の全回帰で、既存のcheckpoint試験がmacOSの監視通知の到着順に依存して失敗することを変更前のmainでも確認しました。edit-and-restore試験は監視イベントまたはスナップショットのメタデータ差分で対象ファイルの変更が検出されたことを確認し、無効化されるという契約を維持しています。checkpointの実装は変更していません。

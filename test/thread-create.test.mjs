@@ -8,6 +8,7 @@ import { projectsOnClient, projectWorkspace, resolveProject } from "../src/proje
 import { initialInstructionMatches } from "../src/creation-verification.mjs";
 import { validateStandaloneCreationCatalog } from "../src/standalone-create.mjs";
 import { RUNTIME_CAPABILITIES } from "../src/compatibility.mjs";
+import { RpcFailure } from "../src/rpc.mjs";
 
 const CHILD = "01a04373-3770-71e0-a2e3-a3c196f5f5b1", CONTEXT = "01a04373-3770-71e0-a2e3-a3c196f5f5b2";
 export const catalog = { tools: [
@@ -238,4 +239,39 @@ test("standalone CLI ignores even an invalid inherited CODEX_THREAD_ID", () => {
   const run = spawnSync(process.execPath, ["bin/codexteer.mjs", "thread", "create", "--project", "競馬", "first", "--dry-run", "--json"],
     { encoding: "utf8", env: { ...process.env, CODEX_HOME: "/private/tmp/no-standalone-create-runtime", CODEX_THREAD_ID: "invalid-old-context" } });
   assert.equal(run.status, 1); assert.equal(JSON.parse(run.stdout).error.code, "RUNTIME_UNAVAILABLE");
+});
+
+test("internal RPC errors after creation or delivery stay unknown, while invalid requests remain unsent", async t => {
+  for (const phase of ["thread/start", "turn/start"]) for (const rpcCode of [-32603, -32602, -32601]) {
+    const f = await standaloneFixture(t), request = f.client.request;
+    f.client.request = async (method, ...args) => {
+      if (method !== phase) return request(method, ...args);
+      if (rpcCode === -32603) await request(method, ...args);
+      else f.calls.push(method);
+      throw new RpcFailure("mutation failed after dispatch", { code: "RPC_REJECTED", rpcCode });
+    };
+    const unknown = rpcCode === -32603, creating = phase === "thread/start";
+    const creation = creating ? unknown ? "unknown" : "not_created" : "created";
+    const delivery = !creating && unknown ? "unknown" : "not_sent";
+    await assert.rejects(createProjectThread("競馬", "日本語\nfirst instruction", f.options, f.deps), error => {
+      assert.equal(error.creation_status, creation); assert.equal(error.delivery_status, delivery);
+      assert.equal(error.sent, !creating && unknown ? null : false);
+      return true;
+    });
+    assert.equal(f.writes.at(-1)[2].creation_status, creation);
+    assert.equal(f.writes.at(-1)[2].delivery_status, delivery);
+    assert.equal(f.calls.filter(call => call === phase).length, 1);
+  }
+});
+
+test("explicit native creation preserves unknown internal RPC results without recreating", async t => {
+  const f = await fixture(t), native = f.deps.native;
+  f.deps.native = async (...args) => {
+    if (args[1] !== "create_thread") return native(...args);
+    f.calls.push({ action: "create_thread" });
+    throw new RpcFailure("native command failed after dispatch", { code: "RPC_REJECTED", rpcCode: -32603 });
+  };
+  await assert.rejects(createProjectThread("競馬", "日本語\nfirst instruction", f.options, f.deps), error => error.creation_status === "unknown" && error.delivery_status === "unknown" && error.sent === null);
+  assert.equal(f.calls.filter(call => call?.action === "create_thread").length, 1);
+  assert.equal(f.writes.at(-1)[2].creation_status, "unknown");
 });

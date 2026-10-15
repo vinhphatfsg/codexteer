@@ -34,7 +34,11 @@ test("editing inputs during a successful test invalidates the run, including edi
   const f = await fixture(t);
   const script = "const fs=require('fs'); fs.writeFileSync('src/input.txt','edited'); setTimeout(()=>{fs.writeFileSync('src/input.txt','original')},100);";
   const result = await runCheckpoint(ID, f.id, [process.execPath, "-e", script], f);
-  assert.equal(result.exit_code, 0); assert.equal(result.valid, false); assert.ok(result.touched_paths.length);
+  assert.equal(result.exit_code, 0); assert.equal(result.valid, false);
+  // macOS may deliver fs.watch events after this short command has exited.
+  // A snapshot metadata change also proves that edit-and-restore was detected.
+  const input = `${f.cwd}/src/input.txt`;
+  assert.ok(result.touched_paths.includes(input) || result.differences.changed.includes(input));
   assert.equal((await verifyCheckpoint(ID, f.id, f)).valid, false);
 });
 
@@ -61,5 +65,5 @@ test("explicit exclusions do not invalidate inputs when output files change", as
   const f = await fixture(t); await mkdir(`${f.cwd}/src/generated`);
   const cp = await createCheckpoint(ID, "excluded", { ...f, excludes: ["src/generated"] });
   const result = await runCheckpoint(ID, cp.id, [process.execPath, "-e", "require('fs').writeFileSync('src/generated/out','output')"], f);
-  assert.equal(result.valid, true);
+  assert.equal(result.valid, true, JSON.stringify(result));
 });
