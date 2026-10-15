@@ -1,11 +1,11 @@
 # 配布と永続実行
 
 パッケージ名は `codexteer`、CLI名は `codexteer`、ライセンスはMITです。
-旧npmパッケージは`@vinhphatfsg/codex-steer`です。`codexteer@0.15.0`は公開済みで、このブランチはマイナー更新`0.16.0`を準備します。GitHubのPR作成・マージはnpm公開を行う操作ではありません。公開時は`npm whoami`でnpm側のユーザーを確認してください。
+旧npmパッケージは`@vinhphatfsg/codex-steer`です。`codexteer@0.16.0`は公開済みで、このブランチはプロジェクトチャット作成を追加するマイナー更新`0.17.0`を準備します。GitHubのPR作成・マージはnpm公開を行う操作ではありません。公開時は`npm whoami`でnpm側のユーザーを確認してください。
 `package.json` は `private` を持たず、`publishConfig` でnpm公式レジストリへのpublic公開を指定しています。公開可能な設定であることと、実際に公開済みであることは別です。
 
 公開後の基本的な実行形式は次のとおりです。通常はバージョン指定なしで使えます。監督開始後は保存したCLIを使い続けるため、監督中の一貫性を保つために版を明示する必要はありません。起動側と操作側の製品バージョンも、必要な通信仕様が対応していれば異なっていても使えます。
-以下の監督機能は公開済みの0.15.0から利用できます。0.16.0では通知集約と監督プロンプトを改善し、0.15.1で準備した長いタスクへの送信前確認の修正も含みます。公開前はこのブランチをソースから導入してください。`-y` はnpmの取得確認を省略します。
+以下の監督機能は公開済みの0.15.0から利用できます。0.16.0では通知集約と監督プロンプトを改善しました。0.17.0のチャット作成機能は公開準備中のため、公開前はこのブランチをソースから導入してください。`-y` はnpmの取得確認を省略します。
 
 ```text
 npx -y codexteer desktop start
@@ -179,7 +179,7 @@ npxから模擬Claudeと模擬Codexを起動して保存したCLIへの参照を
 
 レビュー・検証を終えた版を、npm側の公開権限を持つアカウントで公開します。手動公開には2FAを有効にしたアカウントを使ってください。
 
-公開済みのパッケージ名とバージョンの組み合わせは再公開できません。既存の`codexteer@0.15.0`は変更せず、今回の配布物は`codexteer@0.16.0`として準備します。公開は別途実行します。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
+公開済みのパッケージ名とバージョンの組み合わせは再公開できません。既存の`codexteer@0.16.0`は変更せず、今回の配布物は`codexteer@0.17.0`として準備します。公開は別途実行します。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
 
 ```bash
 npm login
@@ -188,11 +188,11 @@ npm run test:package
 npm publish --access public
 ```
 
-公開後は、公開した版と起動コマンドの登録を確認します。次は0.16.0を公開した場合の例です。
+公開後は、公開した版と起動コマンドの登録を確認します。次は0.17.0を公開した場合の例です。
 
 ```bash
-npm view codexteer@0.16.0 version bin --json
-npx -y codexteer@0.16.0 --version
+npm view codexteer@0.17.0 version bin --json
+npx -y codexteer@0.17.0 --version
 ```
 
 `EPRIVATE`はリポジトリの`package.json`に公開禁止設定が残っていることを示します。`--access public`はその禁止を解除しません。
@@ -217,3 +217,19 @@ npx -y codexteer@0.16.0 --version
 `--connection desktop`は既存の`CODEX_HOME/app-server-control/app-server-control.sock`へ読み取り専用で接続します。ホームは所有者一致かつgroup/other書込不可、制御ディレクトリとソケットは所有者専用に限定します。接続前後・各API要求でendpointを検査し、ロード済み対象だけを読み取ります。明示的な選択であり、自動検出による接続切り替え・daemon起動・Desktop再起動はしません。送信機能の診断は`unsupported`、`source: observation-only`です。実機での送信・UI表示・承認継続は未検証のまま残します。
 
 開発用の`npm run test:connection`は、Desktop同梱CLIを一時プロファイルのUnixソケットで起動し、ローカル偽モデルで作った合成履歴の読み取りを確認します。実Desktopへの接続・設定変更や外部モデル利用は行いません。`npm run test:protocol`は既存wrapper・偽Desktopとの送信と承認経路、`npm run test:package`は実tarball・オフラインnpx・偽Claude/Codexの起動と、別CODEX_HOME・キャッシュ削除後の観測/送信・pause/resume・重複拒否を確認します。これらの隔離検証から実Desktopの表示や直接接続での承認往復まで保証するものではありません。
+
+## 0.17.0の公開候補
+
+`package.json`と`package-lock.json`の版を0.17.0に揃えています。0.16.0はnpm registryで公開済みであることを確認し、同じ版への上書き公開は行いません。`projects list`と`thread create --project`、Desktopの所属登録、全フォルダと初回指示の照合を追加します。既存のruntime protocolとcapability契約はv1を維持します。
+
+公開前に構文・全回帰・tarballとoffline install・npm/npx・publish dry-runを確認します。公開するファイルを固定する場合は、検証済みtarballのSHA-256を照合してから同じtarballを公開してください。PRのReady化やバージョン更新だけではnpmへ公開されません。
+
+2026-10-15 JSTの公開候補で、次を確認しました。
+
+- `npm ci --offline --ignore-scripts --no-audit --no-fund`、`npm run check`、`git diff --check`が成功。
+- `node --test --test-concurrency=1`は293件成功、失敗・skipなし。内部RPCエラーによる結果不明の回帰試験を含みます。
+- `npm run test:package`が成功。73ファイルのtarball、offline install、npm exec/npx、保存CLI、混在バージョン、publish dry-runを確認。
+- `npm run test:protocol`と`npm run test:connection`が成功。実同梱CLIと偽Desktop・ローカル偽モデルの隔離試験で、実ユーザーのタスクには送信していません。
+- 0.17.0候補CLIから`CODEX_THREAD_ID`なしで「競馬」へのdry-runが成功。7フォルダ、standalone経路、同梱schemaとnative catalogを確認し、チャット・指示・receiptは作成していません。
+
+実Desktopでの作成・所属とCLI終了後の手動承認は[チャット作成の実測記録](thread-create.md)を参照してください。PR確定前の開発作業ツリーで記録した過去の件数と、今回のPRだけを含む293件・73ファイルは検証範囲が異なります。npm公開・Gitタグ作成はこの準備に含みません。
