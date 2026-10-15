@@ -149,6 +149,7 @@ export async function runWrapper(args, { executable = BUNDLED_CLI, env = process
     codex_steer_package: PACKAGE_NAME, codex_steer_version: VERSION, codex_steer_protocol: RUNTIME_PROTOCOL,
     codex_steer_capabilities: RUNTIME_CAPABILITIES,
     distribution_sha256: distribution.sha256,
+    native_tools_pipe: env.CODEX_APP_TOOLS_PIPE_PATH ?? null,
   });
   let child;
   let socket;
