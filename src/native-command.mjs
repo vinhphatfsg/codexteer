@@ -75,7 +75,11 @@ export async function nativeOnAppServer(client, endpoint, action, args, context,
     let response;
     try { response = JSON.parse(output.stdout); } catch { throw failure("Native helper returned no valid acknowledgement. Inspect the receipt before retrying.", "NATIVE_PROTOCOL_ERROR", mutation); }
     if (response.ok === true && output.exitCode === 0 && Object.hasOwn(response, "result")) { result = response.result; return result; }
-    if (response.ok === false && response.error) throw failure(response.error.message, response.error.code, !!response.error.uncertain);
+    if (response.ok === false && response.error) {
+      const error = failure(response.error.message, response.error.code, !!response.error.uncertain);
+      if (Number.isSafeInteger(response.error.rpcCode)) error.rpcCode = response.error.rpcCode;
+      throw error;
+    }
     throw failure("Native helper did not confirm success.", "NATIVE_PROTOCOL_ERROR", mutation);
   } catch (caught) {
     error = caught;

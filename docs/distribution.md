@@ -227,9 +227,9 @@ npx -y codexteer@0.17.0 --version
 2026-10-15 JSTの公開候補で、次を確認しました。
 
 - `npm ci --offline --ignore-scripts --no-audit --no-fund`、`npm run check`、`git diff --check`が成功。
-- `node --test --test-concurrency=1`は293件成功、失敗・skipなし。内部RPCエラーによる結果不明の回帰試験を含みます。
+- `node --test --test-concurrency=1`は294件成功、失敗・skipなし。内部RPCエラーによる結果不明の回帰試験を含みます。
 - `npm run test:package`が成功。73ファイルのtarball、offline install、npm exec/npx、保存CLI、混在バージョン、publish dry-runを確認。
 - `npm run test:protocol`と`npm run test:connection`が成功。実同梱CLIと偽Desktop・ローカル偽モデルの隔離試験で、実ユーザーのタスクには送信していません。
 - 0.17.0候補CLIから`CODEX_THREAD_ID`なしで「競馬」へのdry-runが成功。7フォルダ、standalone経路、同梱schemaとnative catalogを確認し、チャット・指示・receiptは作成していません。
 
-実Desktopでの作成・所属とCLI終了後の手動承認は[チャット作成の実測記録](thread-create.md)を参照してください。PR確定前の開発作業ツリーで記録した過去の件数と、今回のPRだけを含む293件・73ファイルは検証範囲が異なります。npm公開・Gitタグ作成はこの準備に含みません。
+実Desktopでの作成・所属とCLI終了後の手動承認は[チャット作成の実測記録](thread-create.md)を参照してください。PR確定前の開発作業ツリーで記録した過去の件数と、今回のPRだけを含む294件・73ファイルは検証範囲が異なります。npm公開・Gitタグ作成はこの準備に含みません。

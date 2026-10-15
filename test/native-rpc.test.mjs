@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
 import os from "node:os";
+import { execFile } from "node:child_process";
 import { mkdtemp, rm, chmod, symlink } from "node:fs/promises";
 import { inspectNativeEndpoint, discoverNativeEndpoint, nativeRequest, nativeRpc, nativeToolJson } from "../src/native-rpc.mjs";
 import { BUNDLED_NODE } from "../src/wrapper.mjs";
+import { nativeOnAppServer, mutationOutcomeUnknown } from "../src/native-command.mjs";
 
 const CONTEXT = { threadId: "01a04373-3770-71e0-a2e3-a3c196f5f5b1", turnId: "stored-turn" };
 const args = { prompt: "日本語 `$(never-execute)`", target: { type: "project", projectId: "project", environment: { type: "local" } } };
@@ -61,4 +63,38 @@ test("native self-assignment requires an actual task context matching the moved 
   assert.throws(() => nativeRequest("move_thread_to_project", { threadId: "01a04373-3770-71e0-a2e3-a3c196f5f5b2", projectId: "local" }, CONTEXT));
   assert.throws(() => nativeRequest("move_thread_to_project", { threadId: CONTEXT.threadId, projectId: null }, CONTEXT));
   assert.throws(() => nativeRequest("move_thread_to_project", { threadId: CONTEXT.threadId, projectId: "local", source: "chatgpt" }, CONTEXT));
+});
+
+test("native rejection codes survive the real worker and helper without retrying mutations", async t => {
+  for (const rpcCode of [-32601, -32602, -32603, -32000, "-32602", null]) for (const action of ["create_thread", "move_thread_to_project"]) {
+    let requests = 0, commands = 0, worker;
+    const f = await fixture(t, (socket, request) => {
+      requests++; assert.equal(request.params.tool, action);
+      socket.end(frame({ id: request.id, jsonrpc: "2.0", error: { code: rpcCode, message: "private native error", data: { secret: "private native data" } } }));
+    });
+    const client = { async request(method, params) {
+      commands++; assert.equal(method, "command/exec");
+      return new Promise((resolve, reject) => {
+        // Use the test Node to run the unchanged worker; this fake local peer
+        // has no Desktop signing policy and no access to real user tasks.
+        execFile(process.execPath, params.command.slice(1), { timeout: 5000 }, (error, stdout, stderr) => {
+          if (error && error.code !== 1) return reject(error);
+          worker = JSON.parse(stdout);
+          resolve({ exitCode: error?.code ?? 0, stdout, stderr });
+        });
+      });
+    } };
+    const input = action === "create_thread" ? args : { threadId: CONTEXT.threadId, projectId: "project" };
+    const expectedCode = Number.isSafeInteger(rpcCode) ? rpcCode : undefined;
+    const unknown = ![-32601, -32602].includes(rpcCode);
+    await assert.rejects(nativeOnAppServer(client, f.endpoint, action, input, CONTEXT), error => {
+      assert.equal(error.code, "NATIVE_REJECTED"); assert.equal(error.rpcCode, expectedCode);
+      assert.equal(error.uncertain, unknown); assert.equal(mutationOutcomeUnknown(error), unknown);
+      assert.equal(error.message.includes("private native"), false);
+      return true;
+    });
+    assert.equal(worker.error.rpcCode, expectedCode); assert.equal(worker.error.uncertain, unknown);
+    assert.equal(JSON.stringify(worker).includes("private native"), false);
+    assert.equal(commands, 1); assert.equal(requests, 1);
+  }
 });

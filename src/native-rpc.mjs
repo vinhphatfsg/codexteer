@@ -68,7 +68,7 @@ export async function nativeRpc(endpoint, request, { timeoutMs = 30000 } = {}) {
   return new Promise((resolve, reject) => {
     let bytes = Buffer.alloc(0), settled = false, dispatched = false;
     const socket = net.createConnection(endpoint.socketPath);
-    const finish = (error, result) => { if (settled) return; settled = true; clearTimeout(timer); socket.destroy(); if (error) { error.uncertain ||= mutation && dispatched; reject(error); } else resolve(result); };
+    const finish = (error, result) => { if (settled) return; settled = true; clearTimeout(timer); socket.destroy(); if (error) { error.uncertain ||= mutation && dispatched && ![-32601, -32602].includes(error.rpcCode); reject(error); } else resolve(result); };
     const timer = setTimeout(() => finish(failure("Native request timed out. Do not retry creation automatically.", "NATIVE_TIMEOUT")), timeoutMs);
     socket.on("connect", () => { dispatched = true; socket.write(frame); });
     socket.on("error", () => finish(failure("Desktop native connection failed.", "NATIVE_CONNECTION_FAILED")));
@@ -83,7 +83,11 @@ export async function nativeRpc(endpoint, request, { timeoutMs = 30000 } = {}) {
       try {
         const response = JSON.parse(bytes.subarray(4, length + 4));
         if (response.id !== request.id || response.jsonrpc !== "2.0" || bytes.length !== length + 4) throw failure("Invalid native response identity/frame.");
-        if (response.error) return finish(failure("Desktop rejected the native request. Inspect the receipt before retrying.", "NATIVE_REJECTED"));
+        if (response.error) {
+          const error = failure("Desktop rejected the native request. Inspect the receipt before retrying.", "NATIVE_REJECTED");
+          if (Number.isSafeInteger(response.error.code)) error.rpcCode = response.error.code;
+          return finish(error);
+        }
         if (!Object.hasOwn(response, "result")) throw failure("Native response has no result.");
         finish(null, response.result);
       } catch (error) { finish(error.code ? error : failure("Invalid native response JSON.")); }
