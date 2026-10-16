@@ -1,25 +1,18 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { constants } from "node:os";
-import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
-import { prepareCodexHome, prepareDeployment } from "./distribution.mjs";
+import { prepareCodexHome } from "./distribution.mjs";
 import { normalizeThreadId } from "./thread-id.mjs";
 import { codexHome } from "./runtime.mjs";
 import { supervisorPrompt as pathSupervisorPrompt, validateSupervisionPolicy } from "./prompt.mjs";
 import { registerSupervisor, controlSupervisor } from "./supervision.mjs";
 import { connectionMode } from "./connection.mjs";
+import { preparePromptCommand, shellArgument, SUPERVISOR_AGENTS } from "./prompt-command.mjs";
 
-export const SUPERVISOR_AGENTS = ["claude", "codex"];
-
-function shellArgument(value) {
-  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(value)) {
-    throw Object.assign(new Error("Cannot generate supervision commands from a path containing control characters. Use a path without them and generate the prompt again."), { code: "SUPERVISION_PATH_UNSAFE" });
-  }
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
+export { SUPERVISOR_AGENTS };
 
 export async function prepareSupervisorPrompt(threadInput, policy, { agent = "claude", connection = "shared", usePathCli = false } = {}) {
   const threadId = normalizeThreadId(threadInput);
@@ -28,20 +21,15 @@ export async function prepareSupervisorPrompt(threadInput, policy, { agent = "cl
   if (!SUPERVISOR_AGENTS.includes(agent)) throw new Error("--agent must be claude or codex.");
   const supervisor = { session_id: randomUUID(), owner: agent, connection };
   const sessionOptions = `--supervisor ${shellArgument(supervisor.session_id)} --connection ${connection}`;
+  const { command: baseCommand, ...runtime } = await preparePromptCommand(usePathCli);
+  const command = `${baseCommand} ${sessionOptions}`;
   if (usePathCli) {
-    return { ...pathSupervisorPrompt(threadId, `codexteer ${sessionOptions}`, policy, supervisor, { usePathCli: true }),
-      cli_mode: "path", deployment: null, node: null, supervisor };
+    return { ...pathSupervisorPrompt(threadId, command, policy, supervisor, { usePathCli: true }), ...runtime, supervisor };
   }
-  const node = { path: await realpath(process.execPath), version: process.version };
-  const home = codexHome();
-  shellArgument(node.path); shellArgument(home);
-  const deployment = await prepareDeployment(home);
-  // Bind the validated canonical profile as well as the saved executable.
-  const command = `CODEX_HOME=${shellArgument(deployment.codex_home)} ${shellArgument(node.path)} ${shellArgument(path.join(deployment.directory, "bin/codexteer.mjs"))} --require-node-version ${shellArgument(node.version)} ${sessionOptions}`;
   // Render with the saved distribution's implementation as well as its CLI.
   // An update to the source/cache after placement cannot mix prompt and code.
-  const { supervisorPrompt } = await import(pathToFileURL(path.join(deployment.directory, "src/prompt.mjs")).href);
-  return { ...supervisorPrompt(threadId, command, policy, supervisor), cli_mode: "saved", deployment, node, supervisor };
+  const { supervisorPrompt } = await import(pathToFileURL(path.join(runtime.deployment.directory, "src/prompt.mjs")).href);
+  return { ...supervisorPrompt(threadId, command, policy, supervisor), ...runtime, supervisor };
 }
 
 function launchFailure(agent, error) {

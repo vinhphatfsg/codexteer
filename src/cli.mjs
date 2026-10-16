@@ -12,11 +12,13 @@ import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, ve
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 import { playSendSound } from "./sound.mjs";
 import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
+import { prepareOrchestrationPrompt } from "./orchestrate.mjs";
 import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
 import { connectionMode, observationConnection, desktopReadOnly } from "./connection.mjs";
 import { listProjects } from "./projects.mjs";
 import { createProjectThread } from "./thread-create.mjs";
+import { verifyProjectThread } from "./thread-verify.mjs";
 
 const DEFAULT_SEND_BACKEND = "app-server";
 
@@ -37,6 +39,7 @@ function fail(error, json) {
     receipt_path: error.receipt_path,
     creation_status: error.creation_status, attempt_id: error.attempt_id, receipt_update_required: error.receipt_update_required,
     native_call_id: error.native_call_id,
+    verification_checks: error.verification_checks,
   } }));
   else console.error(`codexteer: ${message}`);
   process.exitCode = 1;
@@ -127,7 +130,7 @@ export async function main(argv) {
     if (args.length === 0 || takeFlag(args, "--help") || args[0] === "help") {
       if (args[0] === "help") args.shift();
       const candidate = args[0] ?? "overview";
-      const topic = candidate === "supervise" && args[1] === "prompt" ? "supervise prompt"
+      const topic = ["supervise", "orchestrate"].includes(candidate) && args[1] === "prompt" ? `${candidate} prompt`
         : /^(codex:\/\/|[0-9a-f]{8}-)/i.test(candidate) ? "send" : candidate;
       const data = helpData(topic);
       success("help", data, json);
@@ -182,6 +185,21 @@ export async function main(argv) {
       data = single ? await handlers[action](args[0], options) : await handlers[action](args[0], args[1], options);
       success(`findings.${action}`, data, json);
       if (!json) console.log(JSON.stringify(data, null, 2));
+      return;
+    }
+    if (command === "orchestrate") {
+      if (supervisor) throw Object.assign(new Error("Managed supervision is bound to its existing task and cannot orchestrate a project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+      if (args.shift() !== "prompt") throw new Error("Expected: orchestrate prompt --project <ID-or-exact-name> <GOAL>. See codexteer help orchestrate prompt.");
+      const project = takeOption(args, "--project", undefined);
+      const agent = takeOption(args, "--agent", undefined);
+      const usePathCli = takeFlag(args, "--use-path-cli");
+      if (args[0] === "--") args.shift();
+      else if (args.some(arg => arg.startsWith("--"))) throw new Error("Unknown orchestrate prompt option. Use -- before a goal starting with --.");
+      if (args.length !== 1) throw new Error("Expected: orchestrate prompt --project <ID-or-exact-name> <GOAL>. Quote the goal as one argument, or use - for stdin.");
+      const goal = args[0] === "-" ? readFileSync(0, "utf8") : args[0];
+      const data = await prepareOrchestrationPrompt(project, goal, { agent, connection, usePathCli });
+      success("orchestrate.prompt", data, json);
+      if (!json) console.log(data.prompt);
       return;
     }
     if (command === "supervise" && args[0] === "prompt") {
@@ -400,6 +418,16 @@ export async function main(argv) {
 
     if (command === "thread") {
       const action = args.shift();
+      if (action === "verify") {
+        if (connection === "desktop") throw desktopReadOnly();
+        if (supervisor) throw Object.assign(new Error("Managed supervision is bound to its existing task. Verify a project creation receipt without --supervisor."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        const timeoutMs = Number(takeOption(args, "--timeout-ms", "120000"));
+        if (args.length !== 1 || args[0].startsWith("--")) throw new Error("Expected: thread verify <ATTEMPT-ID> [--timeout-ms N].");
+        const data = await verifyProjectThread(args[0], { timeoutMs });
+        success("thread.verify", data, json);
+        if (!json) console.log(`Verified existing ${data.deep_link}; creation and initial instruction were not repeated.`);
+        return;
+      }
       if (action === "create") {
         if (connection === "desktop") throw desktopReadOnly();
         if (supervisor) throw Object.assign(new Error("Managed supervision is bound to its existing task. Run thread create without --supervisor under the user's delegated creation scope."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
@@ -419,7 +447,7 @@ export async function main(argv) {
         if (!json) console.log(options.dryRun ? `Dry run: ${data.project_name} (${data.cwd}), ${data.message_characters} characters.` : `Created ${data.deep_link} in ${data.project_name}; initial instruction accepted${data.turn_id ? ` (turn ${data.turn_id})` : ""}.`);
         return;
       }
-      if (action !== "resolve") throw new Error("Expected: codexteer thread create|resolve. See help thread.");
+      if (action !== "resolve") throw new Error("Expected: codexteer thread create|verify|resolve. See help thread.");
       if (args.length !== 1) throw new Error("thread resolve requires exactly one thread ID or URL.");
       const threadId = normalizeThreadId(args[0]);
       const data = { thread_id: threadId, deep_link: threadDeepLink(threadId) };

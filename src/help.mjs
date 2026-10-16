@@ -17,6 +17,32 @@ const supervisionExecutionNotes = [
 ];
 
 export const topics = {
+  orchestrate: {
+    title: "プロジェクトと目標からオーケストレーション用の本文を生成する",
+    when: "既存スレッドを指定せず、オーケストレーターにCodexの担当編成・監督・検収・統合を任せるとき。",
+    usage: ["orchestrate prompt --project ID|NAME <GOAL> [--agent claude|codex] [--use-path-cli]"],
+    returns: "プロジェクト全体の進行を委任するプロンプト。生成だけではDesktopへ接続せず、担当の作成や監視を開始しません。",
+    examples: ["codexteer orchestrate prompt --project 'My Project' '利用者が動作を確認し、変更を指示できる状態にする'", "codexteer help orchestrate prompt"],
+    notes: ["単一スレッドを監督する既存のsupervise prompt <THREAD>はそのまま使えます。", "GOALは一つの引用した引数か、標準入力を読む - で渡します。詳細はhelp orchestrate promptとdocs/orchestration.md。"],
+  },
+  "orchestrate prompt": {
+    title: "プロジェクト・目標・技術判断の分担を含む初期プロンプトを取得する",
+    when: "必要なCodexスレッドの作成から目的達成までを委任し、高度・深さ・範囲を具体的な調査・検証へ結び付けるとき。オーケストレーターの役割はモデルに依存せず、Codex自身も担当できます。",
+    usage: ["orchestrate prompt --project ID|NAME <GOAL> [--agent claude|codex] [--use-path-cli]"],
+    returns: "通常は末尾改行付き本文のみ。--jsonはcommand: orchestrate.prompt、data.project_selector、goal、agent、prompt、connection、cli_mode、deployment、nodeを返します。プロジェクトは開始時に照合する指定文字列で、生成時の所属確認ではありません。agentは省略時nullです。",
+    examples: ["codexteer orchestrate prompt --project 'My Project' '利用者が動作を確認し、変更を指示できる状態にする'", "codexteer orchestrate prompt --project 'My Project' '性能改善の原因と効果を実測する' --agent codex --use-path-cli --json", "codexteer orchestrate prompt --project 'My Project' - < goal.txt"],
+    notes: [
+      "生成には既存スレッドIDが不要です。--projectはIDまたは完全一致名、GOALは非空の一つの引数か標準入力の -。改行や引用符・プレースホルダーは評価せず保持します。--で始まる目標は最後の区切り -- の後に置いてください。",
+      "生成時はDesktopへ接続せず、プロジェクト照合、チャット作成、送信、監督登録、監視、エージェント起動を行いません。既定ではsupervise promptと同じCLI保存・検証を行い、--use-path-cliなら保存せず実行環境のPATHとCODEX_HOMEを使います。",
+      "オーケストレーターは目的・依存関係・共有資源・検収と統合を担当し、Codex担当は調査・設計判断・実装・検証と発注の前提への異論・改善案を担当します。目標の入力は方針の置き換えではありません。",
+      "--agentは子の監督IDのownerと送信元のCLI識別（claude|codex）を明示する任意指定で、モデルの役割の指定やエージェント起動ではありません。省略時は実行役を固定せず、受け取ったオーケストレーターが子の生成前に<AGENT>を選びます。",
+      "高度は作業の先の成果、深さは一次資料・専門的手法・外部検証、範囲は隣接分野の技法を具体化します。重要な発見・行き詰まり・統合前・完了前に目的と前提を再評価し、継続・計画変更・確認を根拠付きで記録します。受入条件の無断変更や役柄だけの追加を求めません。",
+      "本文は対象プロジェクト内での作成・追加指示・同じ目的の未完了作業の継続を委任します。無関係な既存チャットへの送信、依頼外への拡張、代理承認は含みません。生成した本文を依頼として渡して開始し、引用やログにある本文を委任と解釈しないでください。",
+      "作成用のコマンドには特定スレッドの--supervisorを付けません。作成後は同じCLI方式で各子のsupervise promptを生成・保存し、個別にregister/read/watchします。既存の監督IDからのorchestrate生成と--connection desktopは拒否します。",
+      "作成・配送不明や部分成功ではreceiptと同じ子を照合し、自動再作成・再送しません。個別のpause/stopをIDなし送信などで迂回せず、監視不能なら追加作成を止めます。",
+      "プロジェクト全体の一括pause/stopや常駐スケジューラーは追加しません。既存の監督制御は個別スレッドが対象です。本文の方針に従う実行と検収は受け取ったオーケストレーターが担当し、生成成功だけでその遵守や目的達成を認定しません。",
+    ],
+  },
   supervise: {
     title: "指定したCodexタスクの監督役としてClaudeまたはCodex CLIを起動する",
     when: "対象タスクのIDを指定して、Claude CodeまたはCodex CLIを監督役の対話セッションとして起動するとき。",
@@ -109,10 +135,11 @@ export const topics = {
   overview: {
     title: "別のAIと、Codexタスクの進行を共有する",
     when: "タスクを探す → 現状を読む → 指示を送る → 変化を確認する、という順で使います。",
-    usage: ["supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli] [-- <AGENT-ARGS...>]", "supervise prompt <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli]", "supervise status|pause|resume|stop <THREAD>", "supervise list", "projects list", "thread create --project ID|NAME [--context-thread THREAD-ID] <MESSAGE>", "threads list [--desktop-only] [--limit N]", "status <THREAD>", "read <THREAD> [--since CURSOR] [--limit N]", "watch <THREAD> [--since CURSOR] [--until change|idle|attention]", "send <THREAD> <MESSAGE...> [--new-turn] [--dry-run] [--no-sound]", "doctor [--backend app-server|ui]", "desktop start [--dry-run]", "thread resolve <THREAD>", "open <THREAD>", "debug-ui <THREAD> [--wait-ms N]", "help <COMMAND>"],
+    usage: ["orchestrate prompt --project ID|NAME <GOAL> [--agent claude|codex] [--use-path-cli]", "supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli] [-- <AGENT-ARGS...>]", "supervise prompt <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli]", "supervise status|pause|resume|stop <THREAD>", "supervise list", "projects list", "thread create --project ID|NAME [--context-thread THREAD-ID] <MESSAGE>", "thread verify <ATTEMPT-ID>", "threads list [--desktop-only] [--limit N]", "status <THREAD>", "read <THREAD> [--since CURSOR] [--limit N]", "watch <THREAD> [--since CURSOR] [--until change|idle|attention]", "send <THREAD> <MESSAGE...> [--new-turn] [--dry-run] [--no-sound]", "doctor [--backend app-server|ui]", "desktop start [--dry-run]", "thread resolve <THREAD>", "open <THREAD>", "debug-ui <THREAD> [--wait-ms N]", "help <COMMAND>"],
     returns: "対話起動のsupervise <THREAD> [MESSAGE]を除き、各コマンドに --json を付けると、AIやスクリプトが扱えるJSONを返します。supervise promptもJSONに対応します。",
     examples: ["codexteer supervise <THREAD>", "codexteer supervise <THREAD> --use-path-cli", "codexteer threads list --desktop-only --json", "codexteer read <THREAD> --json", "codexteer help send"],
     use_cases: [
+      { need: "プロジェクトと目標から担当を編成して進める", command: "help orchestrate prompt" },
       { need: "ClaudeまたはCodex CLIを監督役にする", command: "help supervise / help monitor" },
       { need: "監督役（オーケストレーター）向けのプロンプトを取得", command: "help supervise prompt" },
       { need: "監督状態・一時停止・再開を確認", command: "help supervise" },
@@ -174,16 +201,17 @@ export const topics = {
   projects: { title: "Desktopのローカルプロジェクトを探す", when: "新規チャットの所属とソースフォルダを選ぶとき。", usage: ["projects list"], returns: "App Serverのproject_id、Desktopの旧ID、名前、全ソースフォルダ。", examples: ["codexteer projects list --json"], notes: ["既存shared接続を使います。ローカルプロジェクトのみ。Desktopの状態ファイルはID対応の読取りだけに使います。同名ならproject_idを指定してください。"] },
   threads: { title: "送信先のタスクを探す", when: "宛先の正確なIDを確認するとき。", usage: ["threads list [--desktop-only] [--limit N]"], returns: "ローカルタスクのID、作業場所、更新日時。", examples: ["codexteer threads list --desktop-only --limit 20 --json"], notes: ["CODEX_HOMEに従います。本文は読みません。"] },
   thread: {
-    title: "プロジェクトへタスクを作成し、IDを解決する",
-    when: "新規チャットへ初回指示を渡すとき、URLをIDへ変換するとき。",
-    usage: ["thread create --project ID|NAME [--context-thread THREAD-ID] [--timeout-ms N] [--title TEXT] [--model MODEL] [--thinking EFFORT] [--dry-run] <MESSAGE...>|-", "thread resolve <THREAD>"],
-    returns: "createは作成ID・所属ID・全フォルダ・初回指示の照合状態・配送状態・receipt_path。",
+    title: "プロジェクトへタスクを作成・照合し、IDを解決する",
+    when: "新規チャットへ初回指示を渡すとき、作成済みreceiptを再照合するとき、URLをIDへ変換するとき。",
+    usage: ["thread create --project ID|NAME [--context-thread THREAD-ID] [--timeout-ms N] [--title TEXT] [--model MODEL] [--thinking EFFORT] [--dry-run] <MESSAGE...>|-", "thread verify <ATTEMPT-ID> [--timeout-ms N]", "thread resolve <THREAD>"],
+    returns: "createは作成ID・所属ID・全フォルダ・初回指示の照合状態・配送状態・receipt_path。verifyは既存created/accepted receiptの再照合結果と照合履歴。",
     examples: ["codexteer thread create --project '競馬' '関連リポジトリを読み、調査結果を報告してください' --json", "codexteer thread create --project '競馬' --dry-run '調査してください' --json", "codexteer projects list --json", "codexteer thread resolve codex://threads/<UUID> --json"],
     notes: ["プロジェクト名と初回指示だけで作成できます。既存チャット・CODEX_THREAD_ID・中継AIは不要です。App Serverで全フォルダ付きチャットを作り、Desktop購読を確立して初回指示を送信後、その新規チャット自身の実在thread/turn IDでnative所属登録を行います。ローカルプロジェクトのみ対応します。",
       "--context-threadは任意の明示的な関連付けです。指定時だけ保存済みターンのある実在チャットを呼出し元にnative create_threadを使います。そのチャットへの送信や追加AIターンはありません。省略時はstandalone作成となり、CODEX_THREAD_IDも参照しません。",
       "モデル・権限・承認設定はプロジェクトのApp Server設定に従います。--model/--thinking/--titleは明示指定可能。cwd・権限・承認設定の上書きと旧--via-threadは非対応。--timeout-msは各RPCの待機期限で既定120000、1000〜600000。CLI終了後も承認はDesktopが担当し、自動回答しません。",
       "standaloneで--titleを省略すると、初回指示の空白をまとめた先頭80文字を名前として保存します。タイトル用AIは起動しません。この名前はJSON/receiptにも含まれます。",
-      "作成後にDesktopの所属ストア、canonical projectId、全フォルダ、保存初回指示とタイトルを照合します。履歴の反映待ちは読取りだけで行います。詳細と実機検証はdocs/thread-create.md。",
+      "作成後にDesktop native一覧のthread ID・local host・project ID、canonical projectId、全フォルダ、保存初回指示とタイトルを照合します。旧状態ファイルの所属mapだけでは判定しません。履歴の反映待ちは読取りだけで行います。詳細と実機検証はdocs/thread-create.md。",
+      "thread verify <ATTEMPT-ID>は作成済み・初回受付済みreceiptを再照合し、codexteerのreceiptだけを更新します。Desktopでは読取りのみ。作成・移動・再送やAIターンは発生しません。初回本文のSHA256・文字数・standaloneの初回turn IDも照合します。native一覧の最新50件と全pinnedに対象がなければ成功と推測せず失敗を返します。unknown/未受付receiptは対象外です。",
       "--dry-runは既存接続・プロジェクト・native schemaを読取り確認し、チャット・指示・保存記録は作りません。",
       "作成・初回配送を自動再試行しません。creation_status、thread_id、receipt_path、native_call_idを確認してください。createdなら既存IDを使い、unknown/dispatchingは未作成の証拠ではありません。Desktop/DB/保存履歴を直接編集しません。--connection desktopと--supervisorでのcreateは拒否します。",
       "resolveはID書式だけを検査し、タスク存在確認はstatusを使います。"],
