@@ -1,5 +1,25 @@
 # プロジェクトと目標からオーケストレーションを始める
 
+`prompt`を付けなければ、生成本文を渡して対話CLIを起動します。
+
+```bash
+codexteer orchestrate --project 'Example Project' '達成したい目標' --use-path-cli
+codexteer orchestrate --project 'Example Project' '達成したい目標' --agent codex
+codexteer orchestrate --project 'Example Project' '達成したい目標' --agent claude -- --model <MODEL>
+```
+
+起動方法は`supervise`と同じで、`--agent`の既定は`claude`です。`codex`も指定できます。これは起動先CLIの選択で、役割の本文はモデル非依存です。起動側は現在のcwd・環境・標準入出力を引き継ぎ、CLIの終了コードを返します。`SIGINT`・`SIGTERM`・`SIGHUP`を転送し、シグナル終了は128+シグナル番号です。
+
+最初の`--`以降はすべて起動するCLIの引数として、順序・空文字・改行を保持して渡します。その後ろにCLI側の`--`と生成本文を一つの引数として追加し、shellで再展開しません。`--json`は直接起動では使えません。本文のJSONが必要な場合は`orchestrate prompt ... --json`を使います。
+
+目標は一つの引用した引数か`-`で渡します。`--`で始まる目標はstdinの`-`を使ってください。stdinの目標は起動前に読み取るため、その入力は対話CLIへ再送しません。通常の引数で目標を渡す場合はstdinもそのまま対話CLIへ引き継ぎます。
+
+`--use-path-cli`は本文内のcodexteerコマンドをPATH方式にし、保存コピーを作りません。省略時は保存済みCLI・Node版・canonical `CODEX_HOME`を本文へ固定します。起動するエージェント自体は、どちらの方式でもPATHから選びます。PATH方式の直接起動でも`CODEX_HOME`の所有者と権限を検証し、必要ならディレクトリを作成します。入力不正や保存コピーの改変、unsafe profileではエージェントを起動しません。
+
+起動側はDesktopへ接続せず、本文を受け取ったオーケストレーターがプロジェクト照合・作成・監視を開始します。プロジェクト用の単一スレッド監督IDは作りません。各子の監督登録と制御は本文の手順に従います。
+
+## 本文だけ生成する
+
 ```bash
 codexteer orchestrate prompt --project 'Example Project' \
   'モーション図鑑で現状の動作を確認し、変更を指示できる状態にする'
@@ -27,7 +47,7 @@ codexteer help orchestrate prompt
 
 `--project`は登録済みローカルプロジェクトのIDか完全一致名です。生成時は指定文字列を保持し、実行開始時に `projects list` でIDと全rootsを照合します。同名ならIDで特定します。目標は一つの引用した引数か `-` で渡し、空文字・空白だけを拒否します。改行やプレースホルダーを評価せず保持します。
 
-`--agent claude|codex`は子の監督IDのownerと送信元を識別する任意指定です。省略時は特定の実行役を既定とせず、本文を受け取ったオーケストレーターが、自身のCLIに合わせて子の生成コマンドの `<AGENT>` を選びます。指定しても役割の内容や技術判断の分担は変わらず、エージェントを起動しません。
+`orchestrate prompt`の`--agent claude|codex`は子の監督IDのownerと送信元を識別する任意指定です。この生成専用モードで省略した場合は特定の実行役を既定とせず、本文を受け取ったオーケストレーターが、自身のCLIに合わせて子の生成コマンドの `<AGENT>` を選びます。指定しても役割の内容や技術判断の分担は変わらず、エージェントを起動しません。直接起動では、起動したCLIの識別が本文へ反映されます。
 
 ## 役割と委任
 

@@ -2,6 +2,8 @@
 
 ## 0.17.0 — 未公開
 
+- `orchestrate --project ID|NAME <GOAL>`で、`supervise`と同じ対話CLI起動に対応しました。既定のclaudeと`--agent codex|claude`、`--use-path-cli`、`--`以降の引数転送、入出力・終了コード・シグナル転送に対応します。既存の`orchestrate prompt`は生成専用のまま維持します。
+
 - Desktop所属を旧`thread-project-assignments`のディスク値だけで判定し、所属済みでも`CREATION_VERIFICATION_FAILED`になる問題を修正しました。native一覧でthread ID・local host・project IDを照合します。`thread verify <ATTEMPT-ID>`でcreated/acceptedの既存receiptを再検証でき、重複作成・所属移動・初回再送を行わず、照合履歴を保存します。
 
 - `orchestrate prompt --project ID|NAME <GOAL>`を追加しました。既存スレッドIDなしで、モデルに依存しないオーケストレーターの担当編成・監督・検収と、Codex担当の設計判断・実装・検証・前提への異論を含む本文を生成します。高度・深さ・範囲から目的を捉え、重要な発見・行き詰まり・統合前・完了前に根拠付きで再評価します。保存済みCLIとPATH方式に対応し、任意の`--agent`は子の監督CLI識別だけを指定します。生成時はDesktopへ接続せず、既存の`supervise prompt`は維持します。
