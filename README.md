@@ -92,9 +92,13 @@ Codex同梱CLI 0.155系列の保護ソケット形式にも対応します。従
 
 ### プロジェクトと目標から担当編成と進行を任せる
 
-既存のスレッドを指定せず、目的に合わせてCodexの担当を作成・監督するプロンプトを生成できます。
+既存のスレッドを指定せず、目的に合わせてCodexの担当を作成・監督する対話CLIを起動できます。`prompt`を付けると本文だけを生成します。
 
 ```bash
+codexteer orchestrate --project 'G004_cheetgame' '達成したい目標' --use-path-cli
+codexteer orchestrate --project 'G004_cheetgame' '達成したい目標' --agent codex
+codexteer orchestrate --project 'My Project' '達成したい目標' --agent claude -- --model <MODEL>
+
 codexteer orchestrate prompt --project 'G004_cheetgame' \
   'モーション図鑑で現状の動作を確認し、変更を指示できる状態にする'
 
@@ -104,9 +108,11 @@ codexteer orchestrate prompt --project 'My Project' - < goal.txt
 codexteer help orchestrate prompt
 ```
 
-本文を同じPCのオーケストレーターへ依頼として渡します。役割はモデルに依存せず、Codex自身も担当できます。オーケストレーターは目的・作業分担・共有資源・検収と統合を担当し、Codex担当は調査・設計判断・実装・検証に加え、依頼の前提への異論や改善案を出します。開始時と重要な節目に、高度（作業の先の成果）・深さ（一次資料と専門的手法・外部検証）・範囲（隣接分野の有効な技法）から目的と計画を再評価します。
+直接起動は`supervise`と同じく、既定で`claude`、`--agent codex`ならCodex CLIを起動します。入出力・cwd・環境と終了コードを引き継ぎ、最初の`--`以降はエージェント引数です。`--use-path-cli`は本文内のcodexteerコマンドをPATH方式にします。`prompt`なしの`--json`は非対応です。
 
-`--agent`は子の監督IDと送信元のCLI識別を明示する任意指定です。省略時は特定の実行役に固定せず、受け取ったオーケストレーターが自分のCLIを選びます。エージェントを起動する操作ではありません。
+生成専用の場合は本文を同じPCのオーケストレーターへ依頼として渡します。役割はモデルに依存せず、Codex自身も担当できます。オーケストレーターは目的・作業分担・共有資源・検収と統合を担当し、Codex担当は調査・設計判断・実装・検証に加え、依頼の前提への異論や改善案を出します。開始時と重要な節目に、高度（作業の先の成果）・深さ（一次資料と専門的手法・外部検証）・範囲（隣接分野の有効な技法）から目的と計画を再評価します。
+
+`orchestrate prompt`では`--agent`は子の監督IDと送信元のCLI識別を明示する任意指定です。省略時は特定の実行役に固定せず、受け取ったオーケストレーターが自分のCLIを選びます。この生成専用モードではエージェントを起動しません。
 
 生成時はDesktopへ接続せず、チャット作成や監視を開始しません。既定は保存済みCLIを使い、`--use-path-cli`は実行環境のPATHとCODEX_HOMEを使います。作成後は各子に監督IDを付けて登録・観測し、同じ目的の未完了作業の継続まで追います。[使い方・委任と制御の範囲](docs/orchestration.md)も参照してください。
 

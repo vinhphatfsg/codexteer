@@ -64,7 +64,8 @@ const { spawnSync } = require("node:child_process");
 const prompt = process.argv.at(-1);
 const command = prompt.split("\\n").find(line => line.endsWith(" --version"));
 if (!command) throw new Error("Missing bound version check");
-const result = spawnSync("/bin/sh", ["-c", command], { env: { ...process.env, PATH: "/no-supervisor-cli-on-path" }, encoding: "utf8" });
+const commandEnv = command.startsWith("codexteer ") ? process.env : { ...process.env, PATH: "/no-supervisor-cli-on-path" };
+const result = spawnSync("/bin/sh", ["-c", command], { env: commandEnv, encoding: "utf8" });
 if (result.status !== 0) throw new Error(result.stderr);
 console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
 `, { mode: 0o755 });
@@ -79,6 +80,15 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   assert.match(orchestration.data.prompt, /Codex.*異論/);
   const threadHelp = JSON.parse((await exec("npx", [...npxArgs, "help", "thread", "--json"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
   assert.ok(threadHelp.data.usage.some(usage => usage.startsWith("thread verify <ATTEMPT-ID>")));
+  for (const agent of ["claude", "codex"]) for (const pathMode of [false, true]) {
+    const launched = JSON.parse((await exec("npx", [...npxArgs, "orchestrate", "--project", "Package test", "Verify the user outcome", "--agent", agent,
+      ...(pathMode ? ["--use-path-cli"] : []), "--", "--model", "fixture-model", "--json"], { cwd: workspace, env: npxEnv, timeout: 20000 })).stdout);
+    assert.equal(launched.version, sourcePackage.version);
+    assert.ok(launched.prompt.includes(`--agent ${agent}${pathMode ? " --use-path-cli" : ""} --json`));
+    if (pathMode) assert.match(launched.prompt, /^codexteer --connection shared --version$/m);
+    else assert.ok(launched.prompt.includes(source.id));
+  }
+  assert.equal(await lstat(path.join(home, "codex-steer", "supervisors")).catch(error => { if (error.code !== "ENOENT") throw error; return null; }), null);
   const agent = JSON.parse((await exec("npx", [...npxArgs, "supervise", ID, "--agent", "claude"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
   assert.equal(agent.version, sourcePackage.version);
   const codexAgent = JSON.parse((await exec("npx", [...npxArgs, "supervise", ID, "--agent", "codex"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);

@@ -18,12 +18,19 @@ const supervisionExecutionNotes = [
 
 export const topics = {
   orchestrate: {
-    title: "プロジェクトと目標からオーケストレーション用の本文を生成する",
-    when: "既存スレッドを指定せず、オーケストレーターにCodexの担当編成・監督・検収・統合を任せるとき。",
-    usage: ["orchestrate prompt --project ID|NAME <GOAL> [--agent claude|codex] [--use-path-cli]"],
-    returns: "プロジェクト全体の進行を委任するプロンプト。生成だけではDesktopへ接続せず、担当の作成や監視を開始しません。",
-    examples: ["codexteer orchestrate prompt --project 'My Project' '利用者が動作を確認し、変更を指示できる状態にする'", "codexteer help orchestrate prompt"],
-    notes: ["単一スレッドを監督する既存のsupervise prompt <THREAD>はそのまま使えます。", "GOALは一つの引用した引数か、標準入力を読む - で渡します。詳細はhelp orchestrate promptとdocs/orchestration.md。"],
+    title: "プロジェクトと目標からオーケストレーターを起動する",
+    when: "既存スレッドを指定せず、オーケストレーターにCodexの担当編成・監督・検収・統合を任せるとき。promptを付けると本文だけ生成します。",
+    usage: ["orchestrate --project ID|NAME <GOAL> [--agent claude|codex] [--use-path-cli] [-- <AGENT-ARGS...>]", "orchestrate prompt --project ID|NAME <GOAL> [--agent claude|codex] [--use-path-cli]"],
+    returns: "直接起動ではエージェントの標準入力・標準出力・標準エラーと終了コードを引き継ぎ、codexteerの出力を混ぜません。promptではプロジェクト全体の進行を委任する本文だけを生成します。",
+    examples: ["codexteer orchestrate --project 'My Project' '達成したい目標' --use-path-cli", "codexteer orchestrate --project 'My Project' '達成したい目標' --agent codex -- --model <MODEL>", "codexteer orchestrate prompt --project 'My Project' '利用者が動作を確認し、変更を指示できる状態にする'", "codexteer help orchestrate prompt"],
+    notes: [
+      "promptなしはsuperviseと同じ対話CLI起動です。--agentの既定はclaude、codexも指定できます。PATHの実行ファイルへ、現在のcwd・環境・入出力を引き継ぎます。役割の本文はモデル非依存です。",
+      "--use-path-cliは生成本文内のcodexteerコマンドをPATH方式にします。省略時は保存済みCLI・Node版・canonical CODEX_HOMEを固定します。起動するエージェント自体はどちらもPATHから選びます。PATH方式の直接起動でもCODEX_HOMEの所有者と権限を検証します。",
+      "GOALは一つの引用した引数か、標準入力を読む -。直接起動の最初の -- 以降は全てエージェント引数で、順序・空文字・改行・--help/--json等を保持し、shellで再展開しません。最後にエージェント側の -- と生成本文を一つの引数として追加します。--で始まる目標は標準入力の - で渡してください。stdinで目標を読む場合、起動前にstdinを消費します。",
+      "SIGINT/SIGTERM/SIGHUPを起動したCLIへ転送し、シグナル終了は128+シグナル番号です。未導入・実行不可では起動エラー、無効な入力では保存・起動前に停止します。直接起動の--jsonは非対応。JSON本文はorchestrate prompt ... --jsonを使います。",
+      "起動側はDesktopへ接続せず、プロジェクト照合と担当作成は起動したオーケストレーターが本文に従って行います。プロジェクト用の監督IDを捏造せず、各子の登録と監視は本文の手順で行います。個別pause/stopや代理承認の制約は維持します。",
+      "orchestrate promptは既存どおり生成専用で、エージェントを起動しません。単一スレッドのsuperviseもそのまま使えます。詳細はhelp orchestrate promptとdocs/orchestration.md。",
+    ],
   },
   "orchestrate prompt": {
     title: "プロジェクト・目標・技術判断の分担を含む初期プロンプトを取得する",
@@ -135,7 +142,7 @@ export const topics = {
   overview: {
     title: "別のAIと、Codexタスクの進行を共有する",
     when: "タスクを探す → 現状を読む → 指示を送る → 変化を確認する、という順で使います。",
-    usage: ["orchestrate prompt --project ID|NAME <GOAL> [--agent claude|codex] [--use-path-cli]", "supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli] [-- <AGENT-ARGS...>]", "supervise prompt <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli]", "supervise status|pause|resume|stop <THREAD>", "supervise list", "projects list", "thread create --project ID|NAME [--context-thread THREAD-ID] <MESSAGE>", "thread verify <ATTEMPT-ID>", "threads list [--desktop-only] [--limit N]", "status <THREAD>", "read <THREAD> [--since CURSOR] [--limit N]", "watch <THREAD> [--since CURSOR] [--until change|idle|attention]", "send <THREAD> <MESSAGE...> [--new-turn] [--dry-run] [--no-sound]", "doctor [--backend app-server|ui]", "desktop start [--dry-run]", "thread resolve <THREAD>", "open <THREAD>", "debug-ui <THREAD> [--wait-ms N]", "help <COMMAND>"],
+    usage: ["orchestrate --project ID|NAME <GOAL> [--agent claude|codex] [--use-path-cli] [-- <AGENT-ARGS...>]", "orchestrate prompt --project ID|NAME <GOAL> [--agent claude|codex] [--use-path-cli]", "supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli] [-- <AGENT-ARGS...>]", "supervise prompt <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli]", "supervise status|pause|resume|stop <THREAD>", "supervise list", "projects list", "thread create --project ID|NAME [--context-thread THREAD-ID] <MESSAGE>", "thread verify <ATTEMPT-ID>", "threads list [--desktop-only] [--limit N]", "status <THREAD>", "read <THREAD> [--since CURSOR] [--limit N]", "watch <THREAD> [--since CURSOR] [--until change|idle|attention]", "send <THREAD> <MESSAGE...> [--new-turn] [--dry-run] [--no-sound]", "doctor [--backend app-server|ui]", "desktop start [--dry-run]", "thread resolve <THREAD>", "open <THREAD>", "debug-ui <THREAD> [--wait-ms N]", "help <COMMAND>"],
     returns: "対話起動のsupervise <THREAD> [MESSAGE]を除き、各コマンドに --json を付けると、AIやスクリプトが扱えるJSONを返します。supervise promptもJSONに対応します。",
     examples: ["codexteer supervise <THREAD>", "codexteer supervise <THREAD> --use-path-cli", "codexteer threads list --desktop-only --json", "codexteer read <THREAD> --json", "codexteer help send"],
     use_cases: [

@@ -12,7 +12,7 @@ import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, ve
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 import { playSendSound } from "./sound.mjs";
 import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
-import { prepareOrchestrationPrompt } from "./orchestrate.mjs";
+import { prepareOrchestrationPrompt, orchestrateAgent } from "./orchestrate.mjs";
 import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
 import { connectionMode, observationConnection, desktopReadOnly } from "./connection.mjs";
@@ -189,17 +189,24 @@ export async function main(argv) {
     }
     if (command === "orchestrate") {
       if (supervisor) throw Object.assign(new Error("Managed supervision is bound to its existing task and cannot orchestrate a project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
-      if (args.shift() !== "prompt") throw new Error("Expected: orchestrate prompt --project <ID-or-exact-name> <GOAL>. See codexteer help orchestrate prompt.");
-      const project = takeOption(args, "--project", undefined);
-      const agent = takeOption(args, "--agent", undefined);
-      const usePathCli = takeFlag(args, "--use-path-cli");
-      if (args[0] === "--") args.shift();
-      else if (args.some(arg => arg.startsWith("--"))) throw new Error("Unknown orchestrate prompt option. Use -- before a goal starting with --.");
-      if (args.length !== 1) throw new Error("Expected: orchestrate prompt --project <ID-or-exact-name> <GOAL>. Quote the goal as one argument, or use - for stdin.");
-      const goal = args[0] === "-" ? readFileSync(0, "utf8") : args[0];
-      const data = await prepareOrchestrationPrompt(project, goal, { agent, connection, usePathCli });
-      success("orchestrate.prompt", data, json);
-      if (!json) console.log(data.prompt);
+      const promptOnly = args[0] === "prompt";
+      if (promptOnly) args.shift();
+      else if (json) throw new Error("orchestrate inherits agent output and does not support --json. Use help orchestrate --json or orchestrate prompt --project ID|NAME <GOAL> --json.");
+      const separator = promptOnly ? -1 : args.indexOf("--");
+      const ownArgs = separator < 0 ? args : args.slice(0, separator);
+      const agentArgs = separator < 0 ? [] : args.slice(separator + 1);
+      const project = takeOption(ownArgs, "--project", undefined);
+      const agent = takeOption(ownArgs, "--agent", promptOnly ? undefined : "claude");
+      const usePathCli = takeFlag(ownArgs, "--use-path-cli");
+      if (promptOnly && ownArgs[0] === "--") ownArgs.shift();
+      else if (ownArgs.some(arg => arg.startsWith("--"))) throw new Error("Unknown orchestrate option. See help orchestrate; agent arguments belong after --.");
+      if (ownArgs.length !== 1) throw new Error("Expected: orchestrate [prompt] --project <ID-or-exact-name> <GOAL>. Quote the goal as one argument, or use - for stdin.");
+      const goal = ownArgs[0] === "-" ? readFileSync(0, "utf8") : ownArgs[0];
+      if (promptOnly) {
+        const data = await prepareOrchestrationPrompt(project, goal, { agent, connection, usePathCli });
+        success("orchestrate.prompt", data, json);
+        if (!json) console.log(data.prompt);
+      } else process.exitCode = await orchestrateAgent(project, goal, { agent, agentArgs, connection, usePathCli });
       return;
     }
     if (command === "supervise" && args[0] === "prompt") {

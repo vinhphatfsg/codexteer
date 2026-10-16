@@ -108,7 +108,7 @@ test("both help routes work offline and describe metadata and generation boundar
     assert.equal(result.status, 0, result.stderr);
     const { data } = JSON.parse(result.stdout);
     assert.match(data.topic, /^orchestrate( prompt)?$/);
-    assert.match(data.usage[0], /orchestrate prompt --project/);
+    assert.ok(data.usage.some(usage => /orchestrate prompt --project/.test(usage)));
     if (data.topic.endsWith(" prompt")) assert.match(data.returns, /project_selector.*goal.*cli_mode/);
   }
   const overview = JSON.parse(cli(options, ["help", "--json"]).stdout).data;
