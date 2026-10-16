@@ -29,11 +29,11 @@ terminal CLI → App Server thread/start（選択プロジェクトの全フォ�
   → Desktopの所属サービスで登録・表示更新
 ```
 
-App Serverはnative操作用にcodexteer同梱の固定helperだけを起動します。native引数は所有者専用の一時JSONファイルで渡し、shellやargvへ埋め込みません。helperの許可操作はcatalog、list_projects、ローカルcreate_thread、新規チャット自身のmove_thread_to_projectだけです。新規チャットの初回処理以外のモデル推論は発生しません。
+App Serverはnative操作用にcodexteer同梱の固定helperだけを起動します。native引数は所有者専用の一時JSONファイルで渡し、shellやargvへ埋め込みません。helperの許可操作はcatalog、list_projects、固定上限のlist_threads、ローカルcreate_thread、新規チャット自身のmove_thread_to_projectだけです。新規チャットの初回処理以外のモデル推論は発生しません。
 
 作成前に、実行中サーバーと同じ同梱CLIからcommand/execとread-only sandboxのschemaを確認します。helperはDesktopのpeer認証を通過する署名付きApp Serverの正規の子として実行されます。Unix socketへ接続するためsandboxのnetworkAccessはtrueですが、helperにHTTP/DNSや外部サービスへの接続処理はありません。認証チェックや署名は変更しません。
 
-codexteerは選択プロジェクトからプライマリcwdと全workspace rootsを解決します。名前とcanonical所属をAPIで保存し、Desktopの購読を確立します。初回指示の前に範囲と空の履歴を確認します。初回受付後、Desktopのnative所属サービスを呼び、スケジュールと同じ所属ストアと表示へ反映します。作成応答だけを成功の証拠にせず、保存されたDesktop所属、canonical projectId、全フォルダ、userMessageとして保存された初回指示の完全一致とタイトルを照合します。関連付けを明示したnative作成の場合は、`codex_delegation`の呼出し元IDと本文を含むliteral全文を比較します。XMLとして解釈しません。
+codexteerは選択プロジェクトからプライマリcwdと全workspace rootsを解決します。名前とcanonical所属をAPIで保存し、Desktopの購読を確立します。初回指示の前に範囲と空の履歴を確認します。初回受付後、Desktopのnative所属サービスを呼び、スケジュールと同じ所属ストアと表示へ反映します。作成応答だけを成功の証拠にせず、Desktop native一覧のthread ID・local host・Desktop project ID、canonical projectId、全フォルダ、userMessageとして保存された初回指示の完全一致とタイトルを照合します。旧global stateファイルの`thread-project-assignments`だけを現在の所属とはみなしません。関連付けを明示したnative作成の場合は、`codex_delegation`の呼出し元IDと本文を含むliteral全文を比較します。XMLとして解釈しません。
 
 受付が履歴の永続化より早い場合は、最大5秒間、読取りだけで反映を待ちます。作成や初回ターンを再実行しません。standaloneではcanonical所属をthread/startで指定し、購読前にmetadata APIでも保存します。関連付けを明示したnative作成では必要に応じてmetadata APIでcanonical所属を登録します。Desktopの状態ファイル・DBを直接書き換えません。
 
@@ -66,6 +66,24 @@ wrapperはnative endpointを所有者専用runtimeに公開します。公開さ
 - `creation_status: unknown` / `dispatching`は未作成の証拠ではありません。接続断・時間切れ・不明応答で自動再送しません。
 - `verification_status: verified`と所属・初回指示の個別verifiedが、照合完了の証拠です。
 - 最終receipt保存だけ失敗した場合は`receipt_update_required`を返します。受付済み操作を再送可能な失敗に変換しません。
+
+## 作成済みreceiptの再照合
+
+```bash
+codexteer thread verify <ATTEMPT-ID> --json
+```
+
+`creation_status: created`、`sent: true`、`delivery_status: accepted`を持つschema 2/3のreceiptを、同じCODEX_HOMEで再照合します。作成・購読・移動・metadata更新・指示送信は行いません。新しいthread/turnやAI処理も発生しません。更新するのはcodexteer自身のreceiptだけで、以前の照合状態・エラーと今回の全チェックを`verification_history`へ残します。unknown/dispatching/未受付をこのコマンドで成功扱いにはしません。
+
+Desktop native所属、現在のプロジェクトID対応と全フォルダ、threadのcanonical所属・cwd・全フォルダ・指定タイトルに加え、保存された初回本文のSHA-256とUnicode文字数をreceiptと比較します。standaloneでは初回turn IDも一致が必要です。初回本文を再度渡す必要はありません。関連付けを明示した場合は既知の呼出し元を含むliteral envelopeから本文を取り出し、XMLとして解釈しません。
+
+native一覧はDesktopの実schemaに従い最新50件と全pinnedです。対象が見つからない、別host/projectに所属する、重複して見える、schemaやruntimeが変わる場合は成功と推測しません。失敗の`verification_checks`を確認してください。`--timeout-ms`は各RPCの期限です。`--supervisor`と観測専用の`--connection desktop`からは実行できません。保存済みCLIは変更しないため、この機能には修正版CLIが必要です。
+
+## 所属照合の修正と実Desktop再検証 (2026-10-17 JST)
+
+Desktop `26.1007.71326`で、作成済みthread `aaaaaaaa-aaaa-4aaa-8aaa-000000000013`のnative一覧は`codex-steer`のDesktop ID `aaaaaaaa-aaaa-4aaa-8aaa-968c2c908b5d`を返す一方、ディスクの旧所属mapにはエントリがありませんでした。canonical ID、全フォルダ、初回指示、名前は全て一致し、旧mapだけに依存する`desktopMembership`がfalseを返して`CREATION_VERIFICATION_FAILED`になっていました。native現在値へ照合先を変更し、canonical所属の独立したチェックを維持しています。
+
+同じattempt `aaaaaaaa-aaaa-4aaa-8aaa-000000000014`へ通常の`codexteer thread verify`を実行し、exit 0、全10チェックtrue、保存receiptのverifiedを確認しました。thread ID・初回turn ID・初回client ID・本文SHA256は保持され、初回指示は1件、既存2ターンは両方completed、threadはidleのままです。重複作成・初回再送・所属移動は行っていません。以前の作成コマンドの失敗記録も保持しています。
 
 ## 検証
 

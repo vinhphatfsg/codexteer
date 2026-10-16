@@ -39,11 +39,14 @@ export async function discoverNativeEndpoint(state, { run = spawnSync } = {}) {
 
 export function nativeRequest(action, args, context, callId = randomUUID()) {
   if (action === "catalog") return { jsonrpc: "2.0", id: randomUUID(), method: "tools/list", params: { threadStartKind: "all" } };
-  if (!["list_projects", "create_thread", "move_thread_to_project"].includes(action)) throw failure("Unsupported native operation.");
+  if (!["list_projects", "list_threads", "create_thread", "move_thread_to_project"].includes(action)) throw failure("Unsupported native operation.");
   const threadId = normalizeThreadId(context?.threadId);
   if (typeof context.turnId !== "string" || !context.turnId.trim() || context.turnId.length > 150) throw failure("A stored caller turn is required.");
   if (typeof callId !== "string" || !/^[a-zA-Z0-9-]{1,150}$/.test(callId)) throw failure("Invalid native call ID.");
   if (action === "list_projects") args = {};
+  // A bounded, read-only Desktop snapshot, including every pinned task. Never
+  // allow arbitrary native tools or caller-provided filters through this path.
+  else if (action === "list_threads") args = { limit: 50 };
   else if (action === "move_thread_to_project") {
     // Standalone creation registers only the new task itself. Never use this
     // transport to move another task or grant additional workspace access.

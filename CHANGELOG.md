@@ -2,6 +2,10 @@
 
 ## 0.17.0 — 未公開
 
+- Desktop所属を旧`thread-project-assignments`のディスク値だけで判定し、所属済みでも`CREATION_VERIFICATION_FAILED`になる問題を修正しました。native一覧でthread ID・local host・project IDを照合します。`thread verify <ATTEMPT-ID>`でcreated/acceptedの既存receiptを再検証でき、重複作成・所属移動・初回再送を行わず、照合履歴を保存します。
+
+- `orchestrate prompt --project ID|NAME <GOAL>`を追加しました。既存スレッドIDなしで、モデルに依存しないオーケストレーターの担当編成・監督・検収と、Codex担当の設計判断・実装・検証・前提への異論を含む本文を生成します。高度・深さ・範囲から目的を捉え、重要な発見・行き詰まり・統合前・完了前に根拠付きで再評価します。保存済みCLIとPATH方式に対応し、任意の`--agent`は子の監督CLI識別だけを指定します。生成時はDesktopへ接続せず、既存の`supervise prompt`は維持します。
+
 - `projects list`と`thread create --project`を追加しました。プロジェクト名と初回指示だけで作成でき、既存チャット・`CODEX_THREAD_ID`・中継AIは不要です。App Serverで作成・Desktop購読・初回配送を行い、新規チャット自身の実在IDからnative RPCで所属登録し、全フォルダと初回指示を照合します。明示的な`--context-thread`は任意で、従来のnative直接作成を使います。配送不明・部分成功を保持し、自動再作成・再送を行いません。
 
 - 内部RPCエラー（`-32603`など）では作成・配送が実行済みの可能性を保持し、`unknown`として記録します。メソッド・引数エラー（`-32601`/`-32602`）だけを実行前の拒否として区別し、自動再作成・再送は行いません。

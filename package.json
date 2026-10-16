@@ -32,6 +32,7 @@
     "assets/send-pururu.wav",
     "CHANGELOG.md",
     "docs/distribution.md",
+    "docs/orchestration.md",
     "docs/thread-create.md"
   ],
   "bundleDependencies": [

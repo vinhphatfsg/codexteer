@@ -98,3 +98,10 @@ test("native rejection codes survive the real worker and helper without retrying
     assert.equal(commands, 1); assert.equal(requests, 1);
   }
 });
+
+test("native membership read is bounded and a lost read response is never uncertain delivery", async t => {
+  const request = nativeRequest("list_threads", { limit: 999999, source: "anything" }, CONTEXT);
+  assert.deepEqual(request.params.arguments, { limit: 50 });
+  const f = await fixture(t, socket => socket.destroy());
+  await assert.rejects(nativeRpc(f.endpoint, request), error => error.uncertain === false);
+});

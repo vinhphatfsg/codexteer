@@ -1,6 +1,6 @@
 # codexteer
 
-登録済みプロジェクトへの初回指示付きチャット作成は、`projects list`と`thread create --project`で行えます。プロジェクト名と指示だけで使え、既存チャットや中継AIは不要です。Desktopのnative RPCで所属を登録し、複数フォルダや重複フォルダを持つ「サンプル」も、所属・全フォルダ・初回指示を照合します。[使い方と実機検証](docs/thread-create.md)
+登録済みプロジェクトへの初回指示付きチャット作成は、`projects list`と`thread create --project`で行えます。プロジェクト名と指示だけで使え、既存チャットや中継AIは不要です。Desktopのnative RPCで所属を登録し、複数フォルダや重複フォルダを持つ「サンプル」も、所属・全フォルダ・初回指示を照合します。作成済み・初回受付済みで照合だけ失敗した場合は、`thread verify <ATTEMPT-ID> --json`で再作成・再送せずに再照合できます。[使い方と実機検証](docs/thread-create.md)
 
 ```bash
 codexteer projects list --json
@@ -89,6 +89,26 @@ Codex同梱CLI 0.155系列の保護ソケット形式にも対応します。従
 
 以下の`<thread-id>`は対象のタスクIDに置き換えてください。`codex://threads/...`形式のタスクURLも使えます。
 コマンド一覧では`codexteer`と略記します。npxで手動実行する場合は、その部分を`npx -y codexteer`に置き換えてください。
+
+### プロジェクトと目標から担当編成と進行を任せる
+
+既存のスレッドを指定せず、目的に合わせてCodexの担当を作成・監督するプロンプトを生成できます。
+
+```bash
+codexteer orchestrate prompt --project 'Example Project' \
+  'モーション図鑑で現状の動作を確認し、変更を指示できる状態にする'
+
+codexteer orchestrate prompt --project 'My Project' '達成したい目標' --use-path-cli --json
+codexteer orchestrate prompt --project 'My Project' '達成したい目標' --agent codex
+codexteer orchestrate prompt --project 'My Project' - < goal.txt
+codexteer help orchestrate prompt
+```
+
+本文を同じPCのオーケストレーターへ依頼として渡します。役割はモデルに依存せず、Codex自身も担当できます。オーケストレーターは目的・作業分担・共有資源・検収と統合を担当し、Codex担当は調査・設計判断・実装・検証に加え、依頼の前提への異論や改善案を出します。開始時と重要な節目に、高度（作業の先の成果）・深さ（一次資料と専門的手法・外部検証）・範囲（隣接分野の有効な技法）から目的と計画を再評価します。
+
+`--agent`は子の監督IDと送信元のCLI識別を明示する任意指定です。省略時は特定の実行役に固定せず、受け取ったオーケストレーターが自分のCLIを選びます。エージェントを起動する操作ではありません。
+
+生成時はDesktopへ接続せず、チャット作成や監視を開始しません。既定は保存済みCLIを使い、`--use-path-cli`は実行環境のPATHとCODEX_HOMEを使います。作成後は各子に監督IDを付けて登録・観測し、同じ目的の未完了作業の継続まで追います。[使い方・委任と制御の範囲](docs/orchestration.md)も参照してください。
 
 ### Claude Code・Codex CLIに監視とステアリングを任せる
 

@@ -36,7 +36,7 @@ try {
   const { stdout } = await exec("npm", ["pack", "--offline", "--ignore-scripts", "--json", "--pack-destination", root], { cwd: repo, env });
   const [artifact] = JSON.parse(stdout);
   assert.equal(artifact.name, source.manifest.package);
-  const required = new Set([...source.manifest.files.map(f => f.path), "README.md", "CHANGELOG.md", "docs/distribution.md", "docs/thread-create.md"]);
+  const required = new Set([...source.manifest.files.map(f => f.path), "README.md", "CHANGELOG.md", "docs/distribution.md", "docs/orchestration.md", "docs/thread-create.md"]);
   for (const file of artifact.files) {
     assert.ok(required.delete(file.path), `Unexpected or duplicate packed file: ${file.path}`);
     if (file.path.startsWith("bin/")) assert.ok(file.mode & 0o100, "packed executable lost its mode");
@@ -71,6 +71,14 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   const npxEnv = { ...env, PATH: `${agentBin}:${env.PATH}` };
   await symlink(path.join(agentBin, "claude"), path.join(agentBin, "codex"));
   const npxArgs = ["--offline", "--yes", "--ignore-scripts", `file:${tarball}`];
+  const orchestration = JSON.parse((await exec("npx", [...npxArgs, "orchestrate", "prompt", "--project", "Package test", "Verify the user outcome", "--agent", "codex", "--json"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
+  assert.equal(orchestration.command, "orchestrate.prompt");
+  assert.equal(orchestration.data.goal, "Verify the user outcome");
+  assert.equal(orchestration.data.agent, "codex");
+  assert.equal(orchestration.data.deployment.directory, path.join(home, "codex-steer/runtimes", source.id));
+  assert.match(orchestration.data.prompt, /Codex.*異論/);
+  const threadHelp = JSON.parse((await exec("npx", [...npxArgs, "help", "thread", "--json"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
+  assert.ok(threadHelp.data.usage.some(usage => usage.startsWith("thread verify <ATTEMPT-ID>")));
   const agent = JSON.parse((await exec("npx", [...npxArgs, "supervise", ID, "--agent", "claude"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
   assert.equal(agent.version, sourcePackage.version);
   const codexAgent = JSON.parse((await exec("npx", [...npxArgs, "supervise", ID, "--agent", "codex"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
