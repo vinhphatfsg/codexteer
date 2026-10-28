@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add explicit native/control/paired remote transports, official dedicated-key enrollment and pairing, and host-bound observation and supervision.
+- Add live remote project/task discovery, exact-turn steering, Desktop-owned creation/new turns, remote checkpoint/resource execution and host-preserving orchestration.
+- Preserve unknown outcomes without replay, enforce pause/stop/finding deduplication, and keep full-access thread-shell execution an explicit choice.
+- Serialize supervised shell dispatch with pause/stop after preparation, release the control lock after its RPC receipt, and correct seven documentation/help discrepancies against the implemented CLI.
+- Add remote operation documentation and scoped live-validation results. Remote UI sending, host process management and offline rollout repair remain unsupported.
+
 ## 0.17.0 — 未公開
 
 - `projects list`と`thread create --project`を追加しました。プロジェクト名と初回指示だけで作成でき、既存チャット・`CODEX_THREAD_ID`・中継AIは不要です。App Serverで作成・Desktop購読・初回配送を行い、新規チャット自身の実在IDからnative RPCで所属登録し、全フォルダと初回指示を照合します。明示的な`--context-thread`は任意で、従来のnative直接作成を使います。配送不明・部分成功を保持し、自動再作成・再送を行いません。

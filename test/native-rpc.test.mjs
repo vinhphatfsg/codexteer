@@ -65,6 +65,13 @@ test("native self-assignment requires an actual task context matching the moved 
   assert.throws(() => nativeRequest("move_thread_to_project", { threadId: CONTEXT.threadId, projectId: "local", source: "chatgpt" }, CONTEXT));
 });
 
+test("native membership read is bounded and a lost read response is never uncertain delivery", async t => {
+  const request = nativeRequest("list_threads", { limit: 999999, source: "anything" }, CONTEXT);
+  assert.deepEqual(request.params.arguments, { limit: 50 });
+  const f = await fixture(t, socket => socket.destroy());
+  await assert.rejects(nativeRpc(f.endpoint, request), error => error.uncertain === false);
+});
+
 test("native rejection codes survive the real worker and helper without retrying mutations", async t => {
   for (const rpcCode of [-32601, -32602, -32603, -32000, "-32602", null]) for (const action of ["create_thread", "move_thread_to_project"]) {
     let requests = 0, commands = 0, worker;

@@ -36,7 +36,7 @@ try {
   const { stdout } = await exec("npm", ["pack", "--offline", "--ignore-scripts", "--json", "--pack-destination", root], { cwd: repo, env });
   const [artifact] = JSON.parse(stdout);
   assert.equal(artifact.name, source.manifest.package);
-  const required = new Set([...source.manifest.files.map(f => f.path), "README.md", "CHANGELOG.md", "docs/distribution.md", "docs/thread-create.md"]);
+  const required = new Set([...source.manifest.files.map(f => f.path), "README.md", "CHANGELOG.md", "docs/distribution.md", "docs/orchestration.md", "docs/remote-observation.md", "docs/remote-control.md", "docs/remote-device-enrollment.md", "docs/remote-operations.md", "docs/remote-cli-validation.json", "docs/thread-create.md"]);
   for (const file of artifact.files) {
     assert.ok(required.delete(file.path), `Unexpected or duplicate packed file: ${file.path}`);
     if (file.path.startsWith("bin/")) assert.ok(file.mode & 0o100, "packed executable lost its mode");
@@ -47,7 +47,8 @@ try {
   // keep this check separate from real publication, even on a logged-in machine.
   const preview = await exec("npm", ["publish", "--dry-run", "--offline", "--ignore-scripts", "--json", "--access", "public", "--registry", "http://127.0.0.1:9/"], { cwd: repo, env, timeout: 20000 });
   assert.doesNotMatch(preview.stderr, /auto-corrected|errors corrected|invalid and removed/i, "Publish must not repair or remove release metadata");
-  const publishArtifact = JSON.parse(preview.stdout);
+  const publishPreview = JSON.parse(preview.stdout);
+  const publishArtifact = publishPreview[sourcePackage.name] ?? publishPreview;
   assert.equal(publishArtifact.name, sourcePackage.name);
   assert.equal(publishArtifact.version, sourcePackage.version);
   assert.equal(publishArtifact.shasum, artifact.shasum, "Publish preparation must pack the tested artifact");
@@ -64,13 +65,31 @@ const { spawnSync } = require("node:child_process");
 const prompt = process.argv.at(-1);
 const command = prompt.split("\\n").find(line => line.endsWith(" --version"));
 if (!command) throw new Error("Missing bound version check");
-const result = spawnSync("/bin/sh", ["-c", command], { env: { ...process.env, PATH: "/no-supervisor-cli-on-path" }, encoding: "utf8" });
+const commandEnv = command.startsWith("codexteer ") ? process.env : { ...process.env, PATH: "/no-supervisor-cli-on-path" };
+const result = spawnSync("/bin/sh", ["-c", command], { env: commandEnv, encoding: "utf8" });
 if (result.status !== 0) throw new Error(result.stderr);
 console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
 `, { mode: 0o755 });
   const npxEnv = { ...env, PATH: `${agentBin}:${env.PATH}` };
   await symlink(path.join(agentBin, "claude"), path.join(agentBin, "codex"));
   const npxArgs = ["--offline", "--yes", "--ignore-scripts", `file:${tarball}`];
+  const orchestration = JSON.parse((await exec("npx", [...npxArgs, "orchestrate", "prompt", "--project", "Package test", "Verify the user outcome", "--agent", "codex", "--json"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
+  assert.equal(orchestration.command, "orchestrate.prompt");
+  assert.equal(orchestration.data.goal, "Verify the user outcome");
+  assert.equal(orchestration.data.agent, "codex");
+  assert.equal(orchestration.data.deployment.directory, path.join(home, "codex-steer/runtimes", source.id));
+  assert.match(orchestration.data.prompt, /Codex.*異論/);
+  const threadHelp = JSON.parse((await exec("npx", [...npxArgs, "help", "thread", "--json"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
+  assert.ok(threadHelp.data.usage.some(usage => usage.startsWith("thread verify <ATTEMPT-ID>")));
+  for (const agent of ["claude", "codex"]) for (const pathMode of [false, true]) {
+    const launched = JSON.parse((await exec("npx", [...npxArgs, "orchestrate", "--project", "Package test", "Verify the user outcome", "--agent", agent,
+      ...(pathMode ? ["--use-path-cli"] : []), "--", "--model", "fixture-model", "--json"], { cwd: workspace, env: npxEnv, timeout: 20000 })).stdout);
+    assert.equal(launched.version, sourcePackage.version);
+    assert.ok(launched.prompt.includes(`--agent ${agent}${pathMode ? " --use-path-cli" : ""} --json`));
+    if (pathMode) assert.match(launched.prompt, /^codexteer --connection shared --version$/m);
+    else assert.ok(launched.prompt.includes(source.id));
+  }
+  assert.equal(await lstat(path.join(home, "codex-steer", "supervisors")).catch(error => { if (error.code !== "ENOENT") throw error; return null; }), null);
   const agent = JSON.parse((await exec("npx", [...npxArgs, "supervise", ID, "--agent", "claude"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
   assert.equal(agent.version, sourcePackage.version);
   const codexAgent = JSON.parse((await exec("npx", [...npxArgs, "supervise", ID, "--agent", "codex"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);

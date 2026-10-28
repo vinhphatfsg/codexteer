@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { threadComposerDeepLink, threadDeepLink } from "./thread-id.mjs";
+import { threadComposerDeepLink, threadDeepLink, parseThreadTarget } from "./thread-id.mjs";
 import { readDesktopSettings } from "./settings.mjs";
+import { targetHost, remoteReadOnly } from "./target.mjs";
 
 const APP_PATH = "/Applications/ChatGPT.app";
 const APP_BUNDLE_ID = "com.openai.codex";
@@ -179,6 +180,7 @@ export function sendDesktopMessage(
   message,
   { dryRun = false, waitMs = 1500, newTurn = false, keepFocus = false } = {},
 ) {
+  if ((parseThreadTarget(threadId).hostId ?? targetHost()) !== "local") throw remoteReadOnly();
   if (message.trim() === "") throw new Error("Message must not be empty.");
   validateWaitMs(waitMs);
 

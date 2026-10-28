@@ -88,7 +88,7 @@ export async function describeDistribution(root = PACKAGE_ROOT) {
   root = await realpath(root);
   await checkAncestors(root);
   check(await lstat(root), true, false);
-  const names = ["package.json", "LICENSE", "bin/codexteer.mjs", "bin/codexteer-wrapper.mjs", "assets/send-pururu.wav",
+  const names = ["package.json", "LICENSE", "bin/codexteer.mjs", "bin/codexteer-wrapper.mjs", "assets/send-pururu.wav", "assets/remote-device-key.swift",
     "scripts/send.applescript", "scripts/inspect.applescript", "scripts/accessibility.applescript"];
   for (const directory of ["bin", "assets", "scripts", "src", "node_modules", "node_modules/ws", "node_modules/ws/lib"]) {
     check(await lstat(path.join(root, directory)), true, false);

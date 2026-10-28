@@ -10,7 +10,7 @@ import { readSendState } from "./app-server.mjs";
 import { fetchThread } from "./observe.mjs";
 import { discoverNativeEndpoint, inspectNativeEndpoint, nativeToolJson } from "./native-rpc.mjs";
 import { nativeOnAppServer, inspectNativeCommandProtocol, mutationOutcomeUnknown } from "./native-command.mjs";
-import { desktopMembership, initialInstructionMatches } from "./creation-verification.mjs";
+import { desktopMembership, initialInstructionMatches, validateMembershipCatalog } from "./creation-verification.mjs";
 import { writeRecord, storePath } from "./store.mjs";
 import { createStandaloneProjectThread } from "./standalone-create.mjs";
 
@@ -26,11 +26,12 @@ export function creationOptions(options = {}) {
 }
 
 export function validateNativeCreationCatalog(catalog) {
+  const membership = validateMembershipCatalog(catalog);
   const schemas = ["list_projects", "create_thread"].map(name => catalog?.tools?.find(tool => tool.name === name && tool.namespace === "codex_app")?.inputSchema);
   const creation = schemas[1], project = creation?.properties?.target?.anyOf?.find(target => target.properties?.type?.enum?.includes("project"));
   const local = project?.properties?.environment?.anyOf?.find(environment => environment.properties?.type?.enum?.includes("local"));
   if (schemas[0]?.type !== "object" || creation?.properties?.prompt?.type !== "string" || !creation.required?.includes("prompt") || !creation.required.includes("target") || project?.properties?.projectId?.type !== "string" || !project.required?.includes("projectId") || !local) throw failure("Desktop native tools do not expose the required local creation schema.", "NATIVE_CREATION_UNSUPPORTED");
-  return { status: "verified", source: "desktop-native-schema", schema_sha256: createHash("sha256").update(JSON.stringify(schemas)).digest("hex") };
+  return { status: "verified", source: "desktop-native-schema", schema_sha256: createHash("sha256").update(JSON.stringify([...schemas, membership])).digest("hex") };
 }
 
 export async function createProjectThread(selector, prompt, options = {}, dependencies = {}) {
@@ -99,7 +100,7 @@ export async function createProjectThread(selector, prompt, options = {}, depend
     await write("creations", attemptId, receipt, storage);
     if (!accepted) throw failure("Child exists but its initial turn was not confirmed. Inspect the child before resending.", "INITIAL_TURN_UNCONFIRMED");
     const thread = (await client.request("thread/read", { threadId, includeTurns: false })).thread;
-    if (thread?.id !== threadId || thread.cwd !== scope.cwd || !await membership(paths.home, threadId, selected.projectId)) throw failure("Created child did not confirm the selected Desktop project.", "DESKTOP_MEMBERSHIP_MISMATCH");
+    if (thread?.id !== threadId || thread.cwd !== scope.cwd || !await membership(invokeNative, nativeEndpoint, threadId, selected.projectId, context, nativeOptions)) throw failure("Created child did not confirm the selected Desktop project.", "DESKTOP_MEMBERSHIP_MISMATCH");
     const roots = thread.environments?.find(environment => environment.environmentId === "local")?.runtimeWorkspaceRoots;
     if (!Array.isArray(roots) || roots.length !== scope.runtimeWorkspaceRoots.length || !scope.runtimeWorkspaceRoots.every(root => roots.includes(root))) throw failure("Created child did not confirm all project source folders.", "CREATION_SCOPE_MISMATCH");
     let saved = await history(client, threadId), named = thread;

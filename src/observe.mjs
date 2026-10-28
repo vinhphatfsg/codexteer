@@ -5,6 +5,7 @@ import { discoverRuntime } from "./runtime.mjs";
 import { RpcClient, RpcFailure } from "./rpc.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 import { assertSupervisor, recordSupervisorFailure, recordSupervisorObservation } from "./supervision.mjs";
+import { targetHost, hostFields, remoteTransport } from "./target.mjs";
 
 export const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const mutableStatus = new Set(["inProgress", "running", "pending"]);
@@ -15,6 +16,8 @@ export function decodeCursor(value, threadId) {
   try {
     if (typeof value !== "string" || value.length > 1024 * 1024) throw invalidCursor();
     const c = JSON.parse(Buffer.from(value, "base64url").toString());
+    if ((c.host_id ?? "local") !== targetHost()) throw invalidCursor();
+    if (targetHost() !== "local" && (c.remote_transport ?? "native") !== remoteTransport()) throw invalidCursor();
     if (c?.v === 2) {
       const hash = x => x === null || (typeof x === "string" && /^[a-f0-9]{64}$/.test(x));
       const pos = x => x === null || (typeof x === "string" && x.length < 16384);
@@ -31,7 +34,8 @@ export function decodeCursor(value, threadId) {
     }
     if (c.v !== 1 || c.thread_id !== threadId || !Number.isSafeInteger(c.count) || c.count < 0 || !Array.isArray(c.open)
       || !c.open.every(x => Number.isSafeInteger(x.index) && x.index >= 0 && x.index < c.count && typeof x.hash === "string")
-      || new Set(c.open.map(x => x.index)).size !== c.open.length || typeof c.prefix !== "string") throw invalidCursor();
+      || new Set(c.open.map(x => x.index)).size !== c.open.length || typeof c.prefix !== "string"
+      || !(c.latest_turn_id === undefined || c.latest_turn_id === null || (typeof c.latest_turn_id === "string" && c.latest_turn_id))) throw invalidCursor();
     return c;
   } catch { throw invalidCursor(); }
 }
@@ -101,11 +105,11 @@ export function readSnapshot(thread, { since, limit = 50, maxChars = 2000, inclu
     if (pending || mutableStatus.has(s.events[i].status) || i === count - 1) open.push({ index: i, hash: pending?.hash ?? s.hashes[i] });
   }
   const stateHash = digest(s.state);
-  const cursor = Buffer.from(JSON.stringify({ v: 1, thread_id: thread.id, count, open, prefix: prefixHash(s.hashes, count, open), state: stateHash,
-    active_turn_id: s.state.active_turn_id, user_revision: s.user_revision })).toString("base64url");
+  const cursor = Buffer.from(JSON.stringify({ v: 1, ...hostFields(), thread_id: thread.id, count, open, prefix: prefixHash(s.hashes, count, open), state: stateHash,
+    active_turn_id: s.state.active_turn_id, latest_turn_id: thread.turns?.at(-1)?.id ?? null, user_revision: s.user_revision })).toString("base64url");
   return { ...s.state, events: selected.map(i => ({ ...trimEvent(s.events[i], maxChars, includeOutput), change: old && i < old.count ? "updated" : "added" })),
     running_commands: s.events.filter(e => e.type === "commandExecution" && mutableStatus.has(e.status)).map(e => trimEvent(e, maxChars, includeOutput)),
-    cursor, changed: !old || selected.length > 0 || old.state !== stateHash, has_more: updates.length + added.length > selected.length,
+    ...hostFields(), cursor, changed: !old || selected.length > 0 || old.state !== stateHash, has_more: updates.length + added.length > selected.length,
     omitted_older_events: old ? 0 : Math.max(0, s.events.length - limit), observed_at: new Date().toISOString() };
 }
 
@@ -138,7 +142,7 @@ async function readAttempt(client, threadId, options) {
     return readPaged(client, thread, options);
   }
   if (old?.v === 2) throw invalidCursor();
-  return { ...readSnapshot(await fetchThread(client, threadId, thread), options), history_scope: "full" };
+  return { ...readSnapshot(await fetchThread(client, threadId, thread), options), history_scope: thread.observationSource ?? "full" };
 }
 
 export async function readOnClient(client, threadId, options = {}) {

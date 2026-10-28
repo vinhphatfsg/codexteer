@@ -10,6 +10,7 @@
     "check": "node scripts/check-syntax.mjs",
     "test": "node --test",
     "test:protocol": "node scripts/probe-app-server.mjs",
+    "test:remote-control": "node scripts/probe-remote-control.mjs",
     "test:connection": "node scripts/probe-desktop-connection.mjs",
     "benchmark:read": "node scripts/benchmark-read.mjs",
     "test:package": "node scripts/test-package.mjs"
@@ -30,9 +31,16 @@
     "src/*.mjs",
     "scripts/*.applescript",
     "assets/send-pururu.wav",
+    "assets/remote-device-key.swift",
     "CHANGELOG.md",
     "docs/distribution.md",
-    "docs/thread-create.md"
+    "docs/orchestration.md",
+    "docs/thread-create.md",
+    "docs/remote-observation.md",
+    "docs/remote-control.md",
+    "docs/remote-device-enrollment.md",
+    "docs/remote-operations.md",
+    "docs/remote-cli-validation.json"
   ],
   "bundleDependencies": [
     "ws"

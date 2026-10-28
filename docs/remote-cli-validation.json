@@ -1,0 +1,124 @@
+{
+  "validation_scope": "Public aggregate results only. Test identifiers and fixture hosts are synthetic; no account metadata or conversation content is included.",
+  "transport": "paired",
+  "pull_request_validation": {
+    "tests": 404,
+    "pass": 403,
+    "fail": 0,
+    "skipped": 1,
+    "syntax": "passed",
+    "diff_check": "passed",
+    "package": {
+      "suite": "package",
+      "result": "PASS",
+      "package": "codexteer",
+      "version": "0.17.0",
+      "packed_files": 101,
+      "publish_dry_run": true,
+      "offline_install": true,
+      "npm_exec": true,
+      "npx_supervision": true,
+      "copied_prompt": true,
+      "cache_update": true,
+      "cache_removal": true,
+      "mixed_versions": true,
+      "feature_isolation": true,
+      "real_desktop_validated": false
+    }
+  },
+  "pause_stop_regression": {
+    "date": "2026-10-28",
+    "scope": "Local temporary state, fake remote RPC and synthetic commands only. No real enrollment, pairing or chat sends.",
+    "before_fix": {
+      "tests": 4,
+      "pass": 1,
+      "fail": 3,
+      "result": "Acknowledged pause/stop during preparation did not prevent shell dispatch; resource execution dropped supervisor binding."
+    },
+    "after_fix": {
+      "tests": 7,
+      "pass": 7,
+      "fail": 0,
+      "result": "Pause/stop before dispatch rejects execution. Dispatch holds the supervisor control lock through the RPC receipt; concurrent control returns RECORD_BUSY. The lock releases after the receipt. Unknown execution retains resource lease without replay."
+    },
+    "test_file": "test/supervised-shell.test.mjs",
+    "accepted_commands_cancelled_by_pause": false,
+    "real_chat_messages_sent": false
+  },
+  "dependency_advisory_audit": {
+    "checked_at_utc": "2026-10-28T02:29:39Z",
+    "scope": "Installed and bundled npm dependencies from package.json, package-lock.json and npm ls --all. One package: ws 8.21.3; no transitive dependencies. Optional peers bufferutil/utf-8-validate are not installed or bundled.",
+    "npm_version": "11.20.0",
+    "databases": [
+      {
+        "name": "npm Audit",
+        "matching_vulnerabilities": 0,
+        "severity_counts": {
+          "info": 0,
+          "low": 0,
+          "moderate": 0,
+          "high": 0,
+          "critical": 0,
+          "total": 0
+        },
+        "command": "npm audit --json --registry=https://registry.npmjs.org",
+        "registry": "https://registry.npmjs.org/"
+      },
+      {
+        "name": "OSV",
+        "endpoint": "https://api.osv.dev/v1/query",
+        "query": {
+          "package": {
+            "name": "ws",
+            "ecosystem": "npm"
+          },
+          "version": "8.21.3"
+        },
+        "matching_vulnerabilities": 0
+      },
+      {
+        "name": "GitHub Advisory Database (reviewed)",
+        "endpoint": "https://api.github.com/advisories?ecosystem=npm&affects=ws%408.21.3&type=reviewed&per_page=100",
+        "matching_vulnerabilities": 0
+      }
+    ],
+    "positive_control": {
+      "database": "OSV",
+      "queried_not_installed_version": "ws 8.20.0",
+      "matching_advisories": [
+        "GHSA-58qx-3vcg-4xpx",
+        "GHSA-96hv-2xvq-fx4p"
+      ],
+      "note": "Read-only API query; vulnerable version was not installed or executed."
+    },
+    "distribution_integrity": {
+      "name": "ws",
+      "version": "8.21.3",
+      "registry_integrity_matches_lockfile": true,
+      "installed_files_match_registry_tarball": true,
+      "files_compared": 19
+    },
+    "remediation": "No known affected dependency found; retain the existing exact pin and lockfile.",
+    "limitations": "Point-in-time known-advisory check, not proof of absence of unknown vulnerabilities. External Node/npm runtimes, Codex Desktop/native addons and OS components are not project npm dependencies and were not audited against their own advisory feeds.",
+    "real_chat_messages_sent": false,
+    "audited_dependency_tree": "package-lock.json: ws 8.21.3"
+  },
+  "publication_review": {
+    "date": "2026-10-28",
+    "scope": "Public source tree, PR-only commits, PR description/comments, and npm tarball. Environment-specific investigation records are excluded.",
+    "secret_scanner": {
+      "name": "Gitleaks",
+      "version": "8.30.1",
+      "configuration": "Built-in rules; ignore-allow comments disabled; no repository suppression list.",
+      "credential_findings": 0
+    },
+    "privacy_controls": [
+      "Examples and tests use synthetic UUIDs and fixture names only.",
+      "No personal home paths, real workstation names, real project/chat IDs or conversation transcripts.",
+      "Investigation notes excluded from the repository publication tree and npm file allowlist.",
+      "Local authentication, environment and diagnostic files ignored by Git."
+    ],
+    "regression_tests": "test/publication.test.mjs",
+    "limitations": "No scan proves absence of unknown secret formats. Removing current files or rewriting PR-only commits does not erase earlier base-branch history, third-party clones or hosting-provider caches."
+  }
+}
