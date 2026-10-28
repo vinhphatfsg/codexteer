@@ -24,6 +24,7 @@ const ID = "11111111-1111-4111-8111-111111111111", TURN = "22222222-2222-4222-82
 let lease, http, control, ws;
 try {
   await mkdir(home, { mode: 0o700 }); await mkdir(workspace);
+  const cloudDocs = new Set(["docs/cloud.md"]);
   const source = await describeDistribution(repo);
   const sourcePackage = JSON.parse(source.contents.get("package.json"));
   assert.equal(sourcePackage.name, "codexteer");
@@ -36,12 +37,13 @@ try {
   const { stdout } = await exec("npm", ["pack", "--offline", "--ignore-scripts", "--json", "--pack-destination", root], { cwd: repo, env });
   const [artifact] = JSON.parse(stdout);
   assert.equal(artifact.name, source.manifest.package);
-  const required = new Set([...source.manifest.files.map(f => f.path), "README.md", "CHANGELOG.md", "docs/distribution.md", "docs/thread-create.md", "docs/cloud.md"]);
+  const required = new Set([...source.manifest.files.map(f => f.path), "README.md", "CHANGELOG.md", "docs/distribution.md", "docs/thread-create.md"]);
   for (const file of artifact.files) {
-    assert.ok(required.delete(file.path), `Unexpected or duplicate packed file: ${file.path}`);
+    assert.ok(required.delete(file.path) || cloudDocs.delete(file.path), `Unexpected or duplicate packed file: ${file.path}`);
     if (file.path.startsWith("bin/")) assert.ok(file.mode & 0o100, "packed executable lost its mode");
   }
   assert.deepEqual([...required], [], "Required files are absent from the real tarball");
+  assert.deepEqual([...cloudDocs], [], "Cloud documentation is absent from the real tarball");
   const tarball = path.join(root, artifact.filename);
   // Scrubbed credentials, offline mode, dry-run and an explicit loopback registry
   // keep this check separate from real publication, even on a logged-in machine.

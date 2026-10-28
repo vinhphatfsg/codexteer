@@ -1,3 +1,4 @@
+import { createCloudTask, cloudTaskStatus, cloudTaskDiff, cloudCreationReceipt } from "./cloud.mjs";
 import { readFileSync } from "node:fs";
 import { desktopDoctor, inspectDesktopUi, openDesktopThread, sendDesktopMessage } from "./desktop.mjs";
 import { normalizeThreadId, threadDeepLink } from "./thread-id.mjs";
@@ -17,7 +18,6 @@ import { createFinding, findingStatus, listFindings, resolveFinding, dismissFind
 import { connectionMode, observationConnection, desktopReadOnly } from "./connection.mjs";
 import { listProjects } from "./projects.mjs";
 import { createProjectThread } from "./thread-create.mjs";
-import { createCloudTask, cloudTaskStatus, cloudTaskDiff, cloudCreationReceipt } from "./cloud.mjs";
 
 const DEFAULT_SEND_BACKEND = "app-server";
 
@@ -31,6 +31,11 @@ export function fail(error, json) {
   if (json) console.log(JSON.stringify({ ok: false, ...(error.watch ? { command: "watch", data: error.watch } : {}), error: {
     message, code: error.code, delivery_status: error.delivery_status,
     operation: error.operation, capability: error.capability,
+    ...((error.execution_environment === "cloud" || (typeof error.code === "string" && error.code.startsWith("CLOUD_"))) ? {
+      execution_environment: error.execution_environment, task_id: error.task_id, url: error.url,
+      submission_status: error.submission_status, uncertain: error.uncertain,
+      cli_exit_code: error.cli_exit_code, cli_signal: error.cli_signal,
+    } : {}),
     sent: error.sent, thread_id: error.thread_id, rpc_code: error.rpc_code ?? error.rpcCode,
     message_id: error.message_id, client_message_id: error.client_message_id, journal_update_required: error.journal_update_required,
     existing_message_id: error.existing_message_id,
@@ -38,9 +43,6 @@ export function fail(error, json) {
     receipt_path: error.receipt_path,
     creation_status: error.creation_status, attempt_id: error.attempt_id, receipt_update_required: error.receipt_update_required,
     native_call_id: error.native_call_id,
-    execution_environment: error.execution_environment, task_id: error.task_id, url: error.url,
-    submission_status: error.submission_status, uncertain: error.uncertain,
-    cli_exit_code: error.cli_exit_code, cli_signal: error.cli_signal,
   } }));
   else console.error(`codexteer: ${message}`);
   process.exitCode = 1;
@@ -139,11 +141,9 @@ export async function main(argv) {
       return;
     }
 
-    let command = args.shift();
-    // An explicit observation endpoint can never silently route a mutation to
-    // the shared wrapper or UI. Local records/help remain available.
-    if (connection === "desktop" && !["supervise", "findings", "history", "instructions", "checkpoint", "resource", "read", "status", "watch", "doctor", "threads", "thread"].includes(command)) throw desktopReadOnly();
-    if (command === "cloud") {
+    if (args[0] === "cloud") {
+      args.shift();
+      if (connection === "desktop") throw desktopReadOnly();
       if (supervisor) throw Object.assign(new Error("Cloud operations cannot run from a supervisor bound to a Desktop task."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
       const action = args.shift(), timeout = takeOption(args, "--timeout-ms", undefined);
       const settings = timeout === undefined ? {} : { timeoutMs: Number(timeout) };
@@ -162,7 +162,7 @@ export async function main(argv) {
         if (!["status", "diff", "receipt"].includes(action) || args.length !== 1 || args[0].startsWith("--") || (action === "receipt" && timeout !== undefined)) throw new Error("Expected: cloud create|status|diff|receipt. See help cloud.");
         data = action === "status" ? await cloudTaskStatus(args[0], settings) : action === "diff" ? await cloudTaskDiff(args[0], settings) : await cloudCreationReceipt(args[0]);
       }
-      success(`cloud.${action}`, data, json);
+      if (json) console.log(JSON.stringify({ ok: true, command: `cloud.${action}`, data }));
       if (!json) {
         if (action === "diff") process.stdout.write(data.diff);
         else if (action === "status") process.stdout.write(data.output);
@@ -170,6 +170,11 @@ export async function main(argv) {
       }
       return;
     }
+
+    let command = args.shift();
+    // An explicit observation endpoint can never silently route a mutation to
+    // the shared wrapper or UI. Local records/help remain available.
+    if (connection === "desktop" && !["supervise", "findings", "history", "instructions", "checkpoint", "resource", "read", "status", "watch", "doctor", "threads", "thread"].includes(command)) throw desktopReadOnly();
     if (command === "supervise" && ["register", "status", "list", "pause", "resume", "stop"].includes(args[0])) {
       const action = args.shift(), owner = action === "register" ? takeOption(args, "--owner", "external") : undefined;
       if (args.length !== (action === "list" ? 0 : 1)) throw new Error(`Expected: supervise ${action}${action === "list" ? "" : " <THREAD>"}.`);

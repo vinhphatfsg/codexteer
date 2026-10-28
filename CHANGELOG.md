@@ -1,10 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.17.0 — 未公開
 
 - 公式Codex CLIを使う独立した`cloud create/status/diff`を追加しました。環境とGitブランチを明示して新規タスクを作成し、ID・URL・状態・差分を取得できます。`cloud receipt`で作成記録を確認でき、結果不明時は自動再送しません。Desktop接続・監督・差分適用とは分離しています。
-
-## 0.17.0 — 未公開
 
 - `projects list`と`thread create --project`を追加しました。プロジェクト名と初回指示だけで作成でき、既存チャット・`CODEX_THREAD_ID`・中継AIは不要です。App Serverで作成・Desktop購読・初回配送を行い、新規チャット自身の実在IDからnative RPCで所属登録し、全フォルダと初回指示を照合します。明示的な`--context-thread`は任意で、従来のnative直接作成を使います。配送不明・部分成功を保持し、自動再作成・再送を行いません。
 

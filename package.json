@@ -26,14 +26,14 @@
     "url": "git+https://github.com/vinhphatfsg/codexteer.git"
   },
   "files": [
+    "docs/cloud.md",
     "bin/*.mjs",
     "src/*.mjs",
     "scripts/*.applescript",
     "assets/send-pururu.wav",
     "CHANGELOG.md",
     "docs/distribution.md",
-    "docs/thread-create.md",
-    "docs/cloud.md"
+    "docs/thread-create.md"
   ],
   "bundleDependencies": [
     "ws"
