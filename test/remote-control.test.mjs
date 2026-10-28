@@ -16,6 +16,8 @@ import { BUNDLED_NODE } from "../src/wrapper.mjs";
 import { registerSupervisor, controlSupervisor, assertSupervisor } from "../src/supervision.mjs";
 import { createFinding } from "../src/findings.mjs";
 import { sendTrackedMessage, reconcileMessages } from "../src/journal.mjs";
+import { runRemoteCommand } from "../src/remote-io.mjs";
+import { runWithResource, resourceStatus } from "../src/resource.mjs";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001", HOST = "remote-control:env_fixture", SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-000000000002";
 const LINK = `codex://threads/${ID}?hostId=${encodeURIComponent(HOST)}`;
@@ -63,6 +65,7 @@ async function fixture(t, options = {}) {
         const { method, params, id } = envelope.message; methods.push({ method, params });
         if (method === "initialized") return;
         if (method === "initialize") return wire.response(envelope, { id, result: { userAgent: "codex-cli/fixture" } });
+        if (["command/exec", "thread/shellCommand"].includes(method) && options.executionError !== undefined) return wire.response(envelope, { id, error: { code: options.executionError, message: "fixture error after dispatch" } });
         if (method === "thread/read") return wire.response(envelope, { id, result: { thread: structuredClone(thread) } });
         if (method === "thread/loaded/list") return wire.response(envelope, { id, result: { data: [ID] } });
         if (method === "turn/steer") {
@@ -83,6 +86,26 @@ async function fixture(t, options = {}) {
 }
 
 function cli(args, home) { const p = spawnSync(process.execPath, ["bin/codexteer.mjs", "--json", ...args], { encoding: "utf8", env: { ...process.env, CODEX_HOME: home, CODEX_THREAD_ID: "" } }); return { status: p.status, ...JSON.parse(p.stdout) }; }
+
+test("remote mutation RPC errors preserve unknown execution and resource leases", async t => {
+  for (const rpcCode of [-32601, -32602, -32603, -32000]) {
+    const f = await fixture(t, { transport: "paired", executionError: rpcCode }), unknown = ![-32601, -32602].includes(rpcCode);
+    await withTarget(HOST, undefined, async () => {
+      const runtime = await f.route.discover(), client = await f.route.connect(runtime.paths.socket);
+      try {
+        for (const [method, params] of [["command/exec", { command: ["fixture"], processId: "fixture" }], ["thread/shellCommand", { threadId: ID, command: "fixture" }]]) {
+          await assert.rejects(client.request(method, params), error => error.rpcCode === rpcCode && error.uncertain === unknown);
+          assert.equal(f.methods.filter(call => call.method === method).length, 1);
+        }
+      } finally { client.close(); }
+      await assert.rejects(runWithResource("fixture-resource", ["fixture"], { home: f.home, owner: "test", threadId: ID }, {
+        execute: (argv, options) => runRemoteCommand(argv, options, { route: () => f.route }),
+      }), error => error.uncertain === unknown && (!unknown || (error.lease_retained === true && error.remote_execution_status === "unknown")));
+      assert.equal((await resourceStatus("fixture-resource", { home: f.home })).state, unknown ? "held" : "released");
+      assert.equal(f.methods.filter(call => call.method === "command/exec").length, 2);
+    }, { transport: "paired" });
+  }
+});
 
 test("socket authentication validates account, target, scope, expiry and enrolled proof without creating a key", async () => {
   assert.deepEqual(authIdentity({ authMethod: "chatgpt", authToken: token() }), identity);

@@ -13,6 +13,20 @@ import { nativeRequest } from "../src/native-rpc.mjs";
 import { prepareSupervisorPrompt } from "../src/supervise.mjs";
 import { streamThread } from "../src/monitor.mjs";
 
+test("supervisor controls reject a changed transport without corrupting the paired session", async t => {
+  const home = await mkdtemp("/private/tmp/ct-transport-control-"); t.after(() => rm(home, { recursive: true, force: true }));
+  await withTarget(HOST, undefined, () => registerSupervisor(ID, CALLER, { home }), { transport: "paired" });
+  for (const transport of ["native", "control"]) await withTarget(HOST, undefined, async () => {
+    for (const action of ["pause", "resume", "stop"]) await assert.rejects(controlSupervisor(ID, action, { home }), { code: "SUPERVISOR_MISMATCH" });
+    const state = await supervisorStatus(ID, { home }); assert.equal(state.state, "active"); assert.equal(state.remote_transport, "paired");
+  }, { transport });
+  await withTarget(HOST, undefined, async () => {
+    assert.equal((await controlSupervisor(ID, "pause", { home })).remote_transport, "paired");
+    assert.equal((await controlSupervisor(ID, "resume", { home })).state, "active");
+    assert.equal((await controlSupervisor(ID, "stop", { home })).remote_transport, "paired");
+  }, { transport: "paired" });
+});
+
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001", CALLER = "aaaaaaaa-aaaa-4aaa-8aaa-000000000002";
 const HOST = "remote-control:env_remote", LINK = `codex://threads/${ID}?hostId=${encodeURIComponent(HOST)}`;
 const task = () => ({ id: ID, status: { type: "idle" }, turns: [{ id: "one", status: "completed", items: [{ type: "agentMessage", id: "a", text: "回答" }] }] });

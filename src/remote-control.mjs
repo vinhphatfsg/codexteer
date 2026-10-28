@@ -1,7 +1,7 @@
 import { RpcClient } from "./rpc.mjs";
 import { discoverRuntime } from "./runtime.mjs";
 import { assertRuntimeOperation } from "./compatibility.mjs";
-import { inspectNativeCommandProtocol } from "./native-command.mjs";
+import { inspectNativeCommandProtocol, mutationOutcomeUnknown } from "./native-command.mjs";
 import { targetHost, remoteTransport } from "./target.mjs";
 import { VERSION } from "./version.mjs";
 import { authIdentity, readEnrollment, enrollmentHash, signConnectionChallenge, inspectConnectionKey, controlFailure } from "./remote-control-auth.mjs";
@@ -13,6 +13,7 @@ import { deviceKey, dedicatedConnectionProof } from "./remote-device-key.mjs";
 const methods = new Set(["thread/read", "thread/loaded/list", "thread/turns/list", "thread/items/list", "turn/steer"]);
 const managementReads = new Set(["thread/list", "project/list", "project/read", "fs/readFile", "fs/getMetadata", "fs/readDirectory", "fs/watch", "fs/unwatch"]);
 const managementWrites = new Set(["turn/start", "thread/metadata/update", "command/exec", "command/exec/terminate", "thread/shellCommand"]);
+const executionWrites = new Set(["command/exec", "command/exec/terminate", "thread/shellCommand"]);
 const capabilities = { thread_read: [1], history_pagination: [1], turn_steer: [1], turn_start: [], desktop_subscribe: [] };
 export const remoteNewTurnUnsupported = () => Object.assign(controlFailure("Remote Control supports steering an existing active turn only. --new-turn remains unavailable because this route does not establish Desktop approval ownership.", "REMOTE_NEW_TURN_UNSUPPORTED"), { sent: false, delivery_status: "not_sent" });
 
@@ -118,7 +119,13 @@ export function remoteControlConnection({ hostId = targetHost(), transport = rem
             await check();
             // The server, not a Desktop view or a fresh inferred turn, performs
             // the atomic expectedTurnId comparison. Never resume or retry here.
-            return remote.request(method, params, { ...requestOptions, mutation: method === "turn/steer" || managementWrites.has(method) });
+            const mutation = method === "turn/steer" || managementWrites.has(method);
+            try { return await remote.request(method, params, { ...requestOptions, mutation }); }
+            catch (error) {
+              // An RPC error is not proof that the host rolled a mutation back.
+              if (executionWrites.has(method) && error.code === "RPC_REJECTED") error.uncertain = mutationOutcomeUnknown(error);
+              throw error;
+            }
           },
         };
       } catch (error) { close(); throw error; }

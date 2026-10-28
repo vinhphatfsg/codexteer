@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
 import { withTarget } from "../src/target.mjs";
 import { readRecord } from "../src/store.mjs";
 import { validateControlRequest } from "../src/remote-control.mjs";
-import { listRemoteThreads, remoteProjectsOnClient, createRemoteProjectThread, ensureRemoteDesktopSubscription } from "../src/remote-management.mjs";
+import { listRemoteThreads, remoteProjectsOnClient, createRemoteProjectThread, verifyRemoteProjectThread, ensureRemoteDesktopSubscription } from "../src/remote-management.mjs";
 import { remoteCaptureInputs, remoteFingerprintFile, remoteWatchInputs, runRemoteCommand, runRemoteShellCommand, remoteShellScript } from "../src/remote-io.mjs";
 import { spawnSync } from "node:child_process";
 
@@ -54,9 +54,48 @@ async function creationFixture(t, { wrongHost = false, unknown = false, assigned
     if (method === "thread/metadata/update") { thread.projectId = args.projectId; return {}; }
     assert.equal(method, "thread/read"); return { thread: structuredClone(thread) };
   } };
-  return { prompt, title, home, nativeCalls, rawCalls, dependencies: { registry: async () => [saved], desktop: async () => session,
+  return { prompt, title, home, thread, project, saved, nativeCalls, rawCalls, dependencies: { registry: async () => [saved], desktop: async () => session,
     route: () => ({ discover: async () => ({ paths: { socket: "fake", home } }), connect: async () => client }) } };
 }
+
+function fixturePaths(f, projectRoot, savedRoot = projectRoot, cwd = projectRoot, roots = [projectRoot]) {
+  f.project.roots = [{ path: projectRoot }]; f.saved.roots = [savedRoot];
+  f.thread.cwd = cwd; f.thread.environments[0].runtimeWorkspaceRoots = roots;
+}
+
+test("POSIX remote project mapping and scope preserve case while Windows paths remain insensitive", t => scope(async () => {
+  const wrong = await creationFixture(t); fixturePaths(wrong, "/srv/project", "/srv/Project");
+  await assert.rejects(createRemoteProjectThread("desktop", wrong.prompt, { dryRun: true }, wrong.dependencies), { code: "PROJECT_NOT_FOUND" });
+  await assert.rejects(createRemoteProjectThread("canonical", wrong.prompt, { dryRun: true }, wrong.dependencies), { code: "DESKTOP_PROJECT_MAPPING_UNVERIFIED" });
+  assert.equal(wrong.nativeCalls.length, 0);
+  for (const [a, b] of [["C:\\Projects\\Example", "c:/projects/example"], ["\\\\HOST\\Share\\Example", "\\\\host\\share\\example"]]) {
+    const f = await creationFixture(t); fixturePaths(f, a, b);
+    assert.equal((await createRemoteProjectThread("desktop", f.prompt, { dryRun: true }, f.dependencies)).project_id, "canonical");
+  }
+  const cwd = await creationFixture(t); fixturePaths(cwd, "/srv/Project", "/srv/Project", "/srv/project");
+  await assert.rejects(createRemoteProjectThread("canonical", cwd.prompt, { title: cwd.title }, cwd.dependencies), { code: "CREATION_SCOPE_MISMATCH" });
+  const artifact = await creationFixture(t); fixturePaths(artifact, "/srv/Project", "/srv/Project", "/srv/Project",
+    ["/srv/Project", `/home/example/visualizations/2026/10/28/${ID}`]);
+  artifact.thread.path = "/home/example/sessions/2026/10/28/fixture.jsonl";
+  assert.equal((await createRemoteProjectThread("canonical", artifact.prompt, { title: artifact.title }, artifact.dependencies)).verification_status, "verified");
+}));
+
+test("failed remote reverification revokes stale flags while preserving accepted creation", t => scope(async () => {
+  const f = await creationFixture(t), prior = process.env.CODEX_HOME; process.env.CODEX_HOME = f.home;
+  try {
+    const created = await createRemoteProjectThread("canonical", f.prompt, { title: f.title }, f.dependencies);
+    const mutations = () => f.nativeCalls.filter(c => c.action === "create_thread").length + f.rawCalls.filter(c => c.method === "thread/metadata/update").length;
+    const before = mutations(); f.thread.projectId = "moved";
+    await assert.rejects(verifyRemoteProjectThread(created.attempt_id, { timeoutMs: 1 }, f.dependencies), error => error.code === "CREATION_VERIFICATION_FAILED" && error.sent === true);
+    const failed = await readRecord("creations", created.attempt_id, { home: f.home });
+    assert.equal(failed.verification_status, "failed"); assert.equal(failed.creation_status, "created"); assert.equal(failed.delivery_status, "accepted");
+    for (const key of ["desktop_project_membership", "app_server_project_membership", "initial_instruction", "observed_runtime_workspace_roots"]) assert.equal(Object.hasOwn(failed, key), false);
+    assert.equal(failed.verification_history.at(-1).status, "failed"); assert.equal(mutations(), before);
+    f.thread.projectId = "canonical";
+    const recovered = await verifyRemoteProjectThread(created.attempt_id, { timeoutMs: 1 }, f.dependencies);
+    assert.equal(recovered.verification_status, "verified"); assert.equal(Object.hasOwn(recovered, "error_code"), false); assert.equal(mutations(), before);
+  } finally { if (prior === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = prior; }
+}));
 
 test("remote native creation sends once, verifies both project identities and preserves no-op dry run", t => scope(async () => {
   const f = await creationFixture(t);

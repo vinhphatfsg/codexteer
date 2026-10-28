@@ -2,11 +2,13 @@
 
 ## Unreleased
 
-- Add explicit native/control/paired remote transports, official dedicated-key enrollment and pairing, and host-bound observation and supervision.
-- Add live remote project/task discovery, exact-turn steering, Desktop-owned creation/new turns, remote checkpoint/resource execution and host-preserving orchestration.
-- Preserve unknown outcomes without replay, enforce pause/stop/finding deduplication, and keep full-access thread-shell execution an explicit choice.
-- Serialize supervised shell dispatch with pause/stop after preparation, release the control lock after its RPC receipt, and correct seven documentation/help discrepancies against the implemented CLI.
-- Add remote operation documentation and scoped live-validation results. Remote UI sending, host process management and offline rollout repair remain unsupported.
+- native/control/pairedのリモート経路、専用端末鍵の登録・ペアリング、ホストを保持する観測・監督に対応しました。
+- リモートのプロジェクト・タスク一覧、指定ターンへの送信、Desktopによる作成・new-turn、checkpoint/resource実行とorchestrationを追加しました。
+- 配送・実行結果が不明な場合は自動再送せず、pause/stopと指摘の重複防止を維持します。full-accessのthread-shellは明示選択が必要です。
+- 準備後の監督付きシェル送信をpause/stopと排他し、RPC応答後に制御ロックを解放します。help・文書も実装に揃えました。
+- リモート操作の手順と検証の集計を追加しました。リモートのUI送信・ホストのプロセス管理・履歴修復は未対応です。
+- POSIXパスの大文字小文字を保持し、CLIの宛先はオプション値ではなく位置引数から選択します。監督の制御は登録時のtransportと一致する場合だけ受け付けます。
+- リモート作成の再照合失敗時は古い認定フラグを除去してreceiptへ記録します。実行RPCの内部エラーでは実行済みの可能性を保持し、resource leaseを解放しません。
 
 ## 0.17.0 — 未公開
 

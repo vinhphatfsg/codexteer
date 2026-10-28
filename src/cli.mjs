@@ -75,6 +75,23 @@ function takeOptions(args, name) {
   return values;
 }
 
+function routingThread(probe) {
+  const valued = new Set(["--backend", "--source", "--kind", "--evidence", "--based-on", "--supersedes", "--expires-at", "--checkpoint", "--finding",
+    "--wait-ms", "--limit", "--max-chars", "--since", "--until", "--timeout-ms", "--poll-ms", "--notify", "--settle-ms", "--max-hold-ms",
+    "--owner", "--agent", "--status", "--note", "--by", "--reason", "--condition", "--ttl-ms", "--token", "--cwd", "--exec-backend", "--shell", "--key", "--title", "--rating", "--path", "--exclude", "--artifact"]);
+  const positional = [];
+  for (let i = 0; i < probe.length; i++) {
+    if (probe[i] === "--") { positional.push(...probe.slice(i + 1)); break; }
+    if (probe[i].startsWith("--")) { if (valued.has(probe[i])) i++; continue; }
+    positional.push(probe[i]);
+  }
+  const [command, action] = positional;
+  if (/^(codex:\/\/|[0-9a-f]{8}-)/i.test(command ?? "")) return command;
+  const nested = ["history", "instructions", "findings", "checkpoint", "thread"].includes(command)
+    || (command === "supervise" && ["prompt", "register", "status", "pause", "resume", "stop", "list"].includes(action));
+  return positional[nested ? 2 : 1];
+}
+
 function readMessage(parts) {
   if (parts[0] === "--") parts.shift();
   if (parts.length === 1 && parts[0] === "-") return readFileSync(0, "utf8");
@@ -134,7 +151,7 @@ export async function main(argv) {
     else if (command === "resource") candidate = takeOption(probe, "--thread", undefined);
     else if (["read", "status", "watch", "send", "open", "debug-ui", "supervise", "history", "instructions", "findings", "checkpoint"].includes(command)
       || (command === "thread" && ["resolve", "repair"].includes(probe[1])) || /^(codex:\/\/|[0-9a-f]{8}-)/i.test(command ?? "")) {
-      candidate = probe.find(arg => /^(codex:\/\/|[0-9a-f]{8}-[0-9a-f]{4}-)/i.test(arg));
+      candidate = routingThread(probe);
     }
     const linkHost = candidate === undefined ? undefined : parseThreadTarget(candidate).hostId;
     if (explicitHost !== undefined && linkHost !== undefined && explicitHost !== linkHost) throw Object.assign(new Error("--host conflicts with the thread link hostId."), { code: "HOST_MISMATCH" });

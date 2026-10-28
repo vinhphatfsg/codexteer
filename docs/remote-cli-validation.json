@@ -2,8 +2,8 @@
   "validation_scope": "Public aggregate results only. Test identifiers and fixture hosts are synthetic; no account metadata or conversation content is included.",
   "transport": "paired",
   "pull_request_validation": {
-    "tests": 404,
-    "pass": 403,
+    "tests": 409,
+    "pass": 408,
     "fail": 0,
     "skipped": 1,
     "syntax": "passed",
@@ -120,5 +120,20 @@
     ],
     "regression_tests": "test/publication.test.mjs",
     "limitations": "No scan proves absence of unknown secret formats. Removing current files or rewriting PR-only commits does not erase earlier base-branch history, third-party clones or hosting-provider caches."
+  },
+  "review_follow_up": {
+    "scope": "Remote CLI parent branch; temporary profiles and fake RPC only. No real host or conversation operations.",
+    "targeted_tests": 68,
+    "targeted_pass": 68,
+    "fixed": [
+      "POSIX case-sensitive project and scope comparisons; explicit Windows drive/UNC handling",
+      "Positional destination routing independent of metadata option values",
+      "Reject mismatched supervisor transport before pause/resume/stop writes",
+      "Persist failed remote reverification and clear stale certification flags",
+      "Keep internal execution RPC errors unknown and retain resource leases without replay",
+      "Japanese Unreleased changelog entries"
+    ],
+    "previously_fixed": "Supervised shell dispatch remains serialized with pause/stop; seven existing regression tests pass.",
+    "github_test_ci": "No repository test workflow configured; local regression/package suites executed."
   }
 }

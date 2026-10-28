@@ -45,6 +45,8 @@ paired一覧の`availability: verified`は`availability_scope: project-catalog`�
 
 `--dry-run`はnative schema・live project・登録の対応を検査するだけで、作成・送信・receipt保存をしません。作成後は実ホスト、Desktop所属とcanonical所属、タイトル、初回本文、project rootsを照合します。Desktopが付与するそのタスク固有のvisualizations rootだけは、同じprofile・履歴日・thread IDから照合して許容し、それ以外の追加rootは拒否します。
 
+POSIXパスの大文字小文字は区別します。Windowsのドライブ付きパスとバックスラッシュのUNCパスだけは、Windowsの表記を正規化して照合します。再照合が失敗した場合はreceiptのverificationをfailedへ更新して古い認定フラグを除去し、created/acceptedは保持します。
+
 `creation_status: created`は既存タスクがある状態です。後段の照合失敗でもそのIDとacceptedを保持します。応答不明はunknownとしてreceiptを残し、自動再作成・再送しません。異なるホストが返った場合も判明したIDを保持して停止し、そのタスクへ追加操作しません。
 
 ## 新しいターンと監督
@@ -83,3 +85,5 @@ checkpointは接続先の`fs/watch`で途中変更を観測し、入力hashも�
 回帰テストは架空の識別子・ホスト・一時プロファイルを使います。実アカウントの登録情報、接続先一覧、チャットやプロジェクトの実ID、業務タイトル、実行ログは公開しません。テスト件数、pause競合のローカル再現、依存DB照合の要約は`remote-cli-validation.json`を参照してください。
 
 `native`は観測専用、`control`は既存のactiveターンへの送信、`paired`は明示した管理操作を扱います。正式project IDとDesktop登録IDは別の識別子です。Desktopの承認・質問UIや表示は、RPC受付とは別に利用環境で確認してください。
+
+監督のpause/resume/stopでも、生成された`--host`と`--remote-transport`を保持してください。登録と異なるtransportの制御は`SUPERVISOR_MISMATCH`で拒否し、保存状態を変更しません。

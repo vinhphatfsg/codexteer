@@ -17,7 +17,8 @@ import { writeRecord, readRecord, storePath, withStoreLock } from "./store.mjs";
 
 const failure = (message, code = "REMOTE_MANAGEMENT_FAILED") => Object.assign(new Error(message), { code, uncertain: false });
 const remotePath = value => typeof value === "string" && (path.win32.isAbsolute(value) || path.posix.isAbsolute(value)) && !/[\0\r\n]/.test(value);
-const samePath = (a, b) => typeof a === "string" && typeof b === "string" && (a === b || (path.win32.isAbsolute(a) && path.win32.isAbsolute(b) && path.win32.normalize(a).toLowerCase() === path.win32.normalize(b).toLowerCase()));
+const windowsPath = value => typeof value === "string" && (/^[a-z]:[\\/]/i.test(value) || /^\\\\[^\\]+\\[^\\]+/.test(value));
+const samePath = (a, b) => typeof a === "string" && typeof b === "string" && (a === b || (windowsPath(a) && windowsPath(b) && path.win32.normalize(a).toLowerCase() === path.win32.normalize(b).toLowerCase()));
 export function requirePairedManagement() {
   if (targetHost() === "local" || remoteTransport() !== "paired") throw failure("Remote management requires an explicit remote host and --remote-transport paired.", "REMOTE_MANAGEMENT_TRANSPORT_REQUIRED");
 }
@@ -129,7 +130,7 @@ export async function ensureRemoteDesktopSubscription(threadId, { session: exist
 function scopeMatches(thread, receipt) {
   const roots = thread?.environments?.find(item => item.environmentId === "local")?.runtimeWorkspaceRoots;
   const match = typeof thread?.path === "string" && thread.path.match(/^(.*)[\\/]sessions[\\/](\d{4})[\\/](\d{2})[\\/](\d{2})[\\/]/);
-  const artifactRoot = match ? path.win32.isAbsolute(thread.path) ? path.win32.join(match[1], "visualizations", match[2], match[3], match[4], receipt.thread_id)
+  const artifactRoot = match ? windowsPath(thread.path) ? path.win32.join(match[1], "visualizations", match[2], match[3], match[4], receipt.thread_id)
     : path.posix.join(match[1], "visualizations", match[2], match[3], match[4], receipt.thread_id) : null;
   return thread?.id === receipt.thread_id && thread.projectId === receipt.project_id && samePath(thread.cwd, receipt.cwd)
     && thread.name === receipt.title && Array.isArray(roots) && new Set(roots).size === roots.length
@@ -210,10 +211,24 @@ export async function verifyRemoteProjectThread(attemptId, options = {}, depende
     const receipt = await readRecord("creations", attemptId);
     if (receipt?.schema !== 4 || receipt.creation_mode !== "remote-native" || receipt.host_id !== targetHost() || receipt.remote_transport !== "paired"
       || receipt.creation_status !== "created" || receipt.delivery_status !== "accepted" || !receipt.thread_id || !/^[a-f0-9]{64}$/.test(receipt.prompt_sha256 ?? "")) throw failure("A matching created remote receipt is required.", "CREATION_RECEIPT_UNVERIFIED");
-    const session = await (dependencies.desktop ?? remoteDesktopSession)({ contextThread: receipt.context_thread_id, ...options });
-    try { return await withRemoteClient(async client => {
-      const result = { ...receipt, ...await verifyRemoteCreationOnClient(client, receipt, session, options.timeoutMs ?? 120000) };
-      await writeRecord("creations", attemptId, result); return result;
-    }, dependencies); } finally { session.close(); }
+    let session;
+    const history = status => [...(receipt.verification_history ?? []), { checked_at: new Date().toISOString(), status,
+      previous_status: receipt.verification_status, source: "desktop-and-remote-read-only" }];
+    try {
+      session = await (dependencies.desktop ?? remoteDesktopSession)({ contextThread: receipt.context_thread_id, ...options });
+      return await withRemoteClient(async client => {
+        const result = { ...receipt, ...await verifyRemoteCreationOnClient(client, receipt, session, options.timeoutMs ?? 120000), verification_history: history("verified") };
+        delete result.error_code;
+        await writeRecord("creations", attemptId, result); return result;
+      }, dependencies);
+    } catch (error) {
+      const failed = { ...receipt, verification_status: "failed", error_code: error.code ?? "CREATION_VERIFICATION_FAILED", verification_history: history("failed") };
+      delete failed.desktop_project_membership; delete failed.app_server_project_membership; delete failed.initial_instruction;
+      delete failed.observed_runtime_workspace_roots;
+      try { await writeRecord("creations", attemptId, failed); } catch { error.receipt_update_required = true; }
+      Object.assign(error, { attempt_id: attemptId, thread_id: receipt.thread_id, creation_status: receipt.creation_status,
+        sent: receipt.sent, delivery_status: receipt.delivery_status, receipt_path: receipt.receipt_path });
+      throw error;
+    } finally { session?.close(); }
   });
 }
