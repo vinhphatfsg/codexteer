@@ -204,9 +204,9 @@ npx -y codexteer@0.17.0 --version
 
 ここからの監督制御、指摘管理、Codex CLI起動、接続方式の選択は0.15.0で追加しました。保存済みCLIの機能自体は0.14.1から利用できます。0.16.0は通知集約と監督プロンプトの改善を含むminor更新です。`watch --stream`の既定はdigestで、`--notify all`を明示すると従来の即時出力になります。単発watchと保存済みCLIの動作は変わりません。runtime protocolと既存capabilityのv1契約は維持し、0.15.0で起動したDesktopとの通信に再起動は不要です。
 
-保存したCLIへのコマンドは、canonical CODEX_HOME、Node guard、`--supervisor <session-id>`、`--connection shared|desktop`を一緒に保持します。各プロンプト生成は新しいIDを発行しますが、生成だけでは登録しません。直接起動はエージェント起動前に登録し、終了時に停止します。コピーした本文は最初のregisterで開始します。
+保存したCLIへのコマンドは、canonical CODEX_HOME、Node guard、`--supervisor <session-id>`、`--connection shared|desktop|cloud`を一緒に保持します。各プロンプト生成は新しいIDを発行しますが、生成だけでは登録しません。直接起動はエージェント起動前に登録し、終了時に停止します。コピーした本文は最初のregisterで開始します。
 
-同じホームの`codex-steer/supervisors`はタスク別の制御、`supervisor-observations`はセッション別の最終CLI観測、`findings`は指摘・解決条件・revision・評価を保存します。既存のstoreと同じ所有者専用のディレクトリ0700・ファイル0600を使い、シンボリックリンクや不適切な所有者・権限を拒否します。観測と制御を別レコードにし、readの完了でpause/stopを上書きしません。
+同じホームの`codex-steer/supervisors`はDesktopタスク別の制御、`cloud-supervisors`はCloudタスク別の制御、`supervisor-observations`はセッション別の最終CLI観測、`findings`は指摘・解決条件・revision・評価を保存します。既存のstoreと同じ所有者専用のディレクトリ0700・ファイル0600を使い、シンボリックリンクや不適切な所有者・権限を拒否します。観測と制御を別レコードにし、readの完了でpause/stopを上書きしません。
 
 送信とpause/stopはタスクの監督ロック、指摘の変更と送信履歴はタスクのメッセージロックで直列化します。処理中の競合は`RECORD_BUSY`で明示し、未知の受付結果を自動再送しません。送信受付後に監督状態の書き込みだけが失敗した場合は、配送結果とIDを維持して`supervision_update_required: true`を返します。これは再送の指示ではありません。
 

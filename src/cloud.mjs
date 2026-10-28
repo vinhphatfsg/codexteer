@@ -5,9 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { readRecord, storePath, writeRecord } from "./store.mjs";
 import { cloudApi } from "./cloud-api.mjs";
+import { cloudTaskId } from "./cloud-id.mjs";
+export { cloudTaskId } from "./cloud-id.mjs";
 
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code });
-const taskPattern = /^task_[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/;
 const taskUrl = id => `https://chatgpt.com/codex/tasks/${id}`;
 
 // Inspect original argv before a Desktop router can consume its host flags.
@@ -26,17 +27,6 @@ export function cloudRoutingError(argv) {
     return failure("Cloud commands use the official CLI directly. --host, --remote-transport, and --context-thread are Desktop options and cannot select a cloud destination.", "CLOUD_TARGET_CONFLICT");
   }
   return null;
-}
-
-export function cloudTaskId(value) {
-  if (typeof value !== "string") throw failure("A Codex Cloud task ID or chatgpt.com/codex/tasks link is required.");
-  if (taskPattern.test(value)) return value;
-  try {
-    const url = new URL(value);
-    const id = url.pathname.slice("/codex/tasks/".length);
-    if (url.origin === "https://chatgpt.com" && !url.username && !url.password && url.pathname.startsWith("/codex/tasks/") && taskPattern.test(id)) return id;
-  } catch {}
-  throw failure("Invalid Codex Cloud task. Desktop thread IDs and remote-host links are not cloud task IDs.");
 }
 
 function options(settings = {}) {
@@ -185,4 +175,27 @@ export async function cloudCreationReceipt(attemptId) {
   const receipt = await readRecord("cloud-creations", attemptId) ?? await readRecord("cloud-messages", attemptId);
   if (!receipt) throw failure("Cloud creation receipt was not found.", "CLOUD_RECEIPT_NOT_FOUND");
   return receipt;
+}
+
+export async function listCloudTasks({ limit = 20, cursor, environment } = {}, { run = runCloudCli } = {}) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500 || (cursor !== undefined && (typeof cursor !== "string" || !cursor || cursor.length > 4096 || /[\x00-\x1f]/u.test(cursor)))
+    || (environment !== undefined && (typeof environment !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(environment)))) throw failure("Invalid cloud task-list limit, cursor, or environment.");
+  await preflight("list", run);
+  const collected = new Map(), seen = new Set(); let next = cursor;
+  for (let page = 0; page < 100; page++) {
+    const size = Math.min(20, limit - collected.size);
+    const result = await run(["list", "--json", "--limit", String(size), ...(next ? ["--cursor", next] : []), ...(environment ? ["--env", environment] : [])]);
+    if (!completed(result) || result.exitCode !== 0) throw cliFailure(result);
+    let data; try { data = JSON.parse(result.stdout); } catch { throw failure("Invalid official cloud task list.", "CLOUD_PROTOCOL_UNVERIFIED"); }
+    if (!Array.isArray(data.tasks) || data.tasks.length > size || (data.cursor != null && (typeof data.cursor !== "string" || !data.cursor || data.cursor.length > 4096 || /[\x00-\x1f]/u.test(data.cursor) || seen.has(data.cursor)))) throw failure("Invalid official cloud task list.", "CLOUD_PROTOCOL_UNVERIFIED");
+    for (const task of data.tasks) {
+      const id = cloudTaskId(task.id);
+      collected.set(id, { thread_id: id, task_id: id, title: typeof task.title === "string" ? task.title : null,
+        status: typeof task.status === "string" ? task.status : "unknown", updated_at: typeof task.updated_at === "string" || typeof task.updated_at === "number" ? task.updated_at : null, execution_environment: "cloud", url: taskUrl(id) });
+    }
+    next = data.cursor ?? null;
+    if (!next || collected.size >= limit) return { threads: [...collected.values()], count: collected.size, cursor: next, has_more: !!next, execution_environment: "cloud" };
+    seen.add(next);
+  }
+  throw failure("Cloud task pagination exceeded its safety limit.", "CLOUD_PROTOCOL_UNVERIFIED");
 }

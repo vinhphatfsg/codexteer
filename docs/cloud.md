@@ -1,86 +1,99 @@
-# Codex Cloudタスクの作成と確認
+# Codex Cloudを既存の操作体系で使う
 
-`cloud`はDesktop接続から独立した機能です。作成・状態・差分はPATH上の公式Codex CLIの`codex cloud exec/status/diff`をシェルなしで呼びます。環境一覧・履歴・監視・継続指示は公式App Serverの認証APIと公式クライアントで使用されているクラウドHTTP APIを使います。Node.js 20以降、公式Codex CLI 0.157.1以降とChatGPTログイン・クラウド環境への利用権限が必要です。Desktopの起動や既存チャットは不要です。HTTP APIは公開された安定版SDK契約ではなく、未知の応答形式では停止します。
+CloudのタスクIDまたは公式リンクを指定すると、通常の`read`・`watch`・`send`・`supervise`・`history`・`instructions`・`findings`を使えます。Desktopには接続・フォールバックしません。タスクをまだ選んでいない環境一覧・タスク一覧・新規作成では`--connection cloud`で接続先を指定します。
 
 ```bash
-codexteer cloud environments list --json
-codexteer cloud create --env env_example --branch main \
-  '変更箇所に回帰テストを追加してください' --json
-codexteer cloud status task_example --json
+codexteer --connection cloud projects list --json
+codexteer --connection cloud threads list --limit 20 --json
+codexteer --connection cloud thread create --project env_example --branch main \
+  'テストを追加してください' --json
+codexteer read task_example --include-output --json
+codexteer watch task_example --stream --notify digest --since <CURSOR> --json
+codexteer supervise task_example --agent claude
+codexteer supervise task_example --agent codex -- exec
+codexteer supervise prompt task_example --use-path-cli --json
+```
+
+IDはすべて架空の例です。`--project`は環境IDまたは一意の正確な名前です。`--branch`を省略したときは、一つのリポジトリの既定ブランチを環境が明示している場合だけ使い、`branch_source: environment-default`を返します。不明・複数リポジトリの場合は明示指定が必要です。ローカルの現在ブランチや未コミット差分を暗黙に送信しません。
+
+Node.js 20以降、PATH上の公式Codex CLI 0.157.1以降、ChatGPTログインとCloud利用権限が必要です。Desktopの起動は不要です。対象は従来型Cloudタスク用環境であり、新世代Cloud環境設定や別サービスを含む一覧ではありません。環境一覧にはID・名前・リポジトリ名・既定ブランチだけを返し、環境変数・secrets・セットアップ内容は出しません。掲載は実行成功の保証ではありません。タスク一覧は最大500件を公式CLIのページに分けて取得し、続きのcursorを返します。
+
+## 共通の監督と介入
+
+```bash
+codexteer --supervisor <SESSION_ID> --connection cloud supervise register task_example
+codexteer --supervisor <SESSION_ID> --connection cloud read task_example --include-output --json
+codexteer --supervisor <SESSION_ID> --connection cloud findings create task_example \
+  --key timeout-contract --title '期限処理' --condition '期限の検証が通る' --based-on <CURSOR> --json
+codexteer --supervisor <SESSION_ID> --connection cloud send task_example \
+  '期限処理を確認してください' --finding <FINDING_ID> --based-on <CURSOR> --json
+codexteer --supervisor <SESSION_ID> --connection cloud history check task_example <MESSAGE_ID> --json
+```
+
+監督プロンプトが返した実際のSESSION_ID・保存済みCLI・Node・CODEX_HOMEをそのまま使います。PATHモードも共通です。監督エージェントの起動前に登録し、終了時にその登録を停止します。自分の状態を解除したり、IDを外して介入したりしないでください。
+
+ユーザーは通常の制御を使えます。
+
+```bash
+codexteer supervise status task_example --json
+codexteer supervise pause task_example --json
+codexteer supervise resume task_example --json
+codexteer supervise stop task_example --json
+```
+
+pauseはその監督の送信・撤回を拒否し、観測は許可します。stopはその監督の観測・送信を拒否し、watchも終了します。Cloud作業自体を取り消す操作ではありません。送信とpause/stopは同じローカル排他を使い、送信中の競合は`RECORD_BUSY`です。監督IDのない明示的な手動送信や旧CLIは、この制御の対象外です。
+
+Cloud監督レコードは所有者専用の`CODEX_HOME/codex-steer/cloud-supervisors`へ保存します。旧Desktop CLIが新しいレコードを誤読しないようDesktopの登録と分け、新CLIの`supervise list`では両方を扱います。CLIと保存済みランタイムを更新しても、使用中の旧ランタイムは変更しません。
+
+`findings`の安定したkey・revision、対応待ちの重複介入拒否、`history mark`、指示の置換・撤回・有効期限、明示的な根拠、checkpointによる解決・再検証も共通です。登録は継続監視やモデルの読了の証明ではなく、最後の観測時刻と接続状態を区別します。
+
+## 実行中と停止中のsend
+
+- 通常の`send`は、実行中の現在のターンを再確認し、その親IDを指定してCloudのfollow-upを一度送ります。実機では元ターンがキャンセルされ、**同じタスク内の後続ターン**が開始する方式を確認しました。結果は`delivery_action: interrupt-and-follow-up`です。同じターンIDを保持するローカルのsteerとは内部動作が異なります。
+- 停止中の継続は`send --new-turn`です。ユーザーが再開を委任している場合だけ使います。対象が実行中なら拒否します。
+- タスク・親ターン・ユーザー入力の鮮度を確認しますが、Cloud APIには読取りと送信を原子的に固定することを確認した契約がなく、`freshness_atomic: false`を返します。別の最新ターンを推測して宛先を変更しません。
+- `accepted`は受付です。新しいターンIDは即時に推測せず、`read`と`history check`で親ターン・本文SHA256を照合します。`stored`も要求の達成の証明ではありません。
+- 結果不明時は`unknown`を維持し、自動再送しません。未解決の配送予約は次のCloud送信も止めます。`not_observed`は未配送の証明ではなく、再送を許可しません。
+
+共通`send --dry-run`はローカルと同様に入力・指摘・根拠・監督状態を確認するだけで、ネットワーク・配送記録・送信を行いません。鮮度は未確認です。初回指示と送信にはstdinの`-`も使えます。空本文・NUL・1 MiB超の指示は拒否します。先頭が`--`の本文には区切りの`--`を使います。
+
+共通の`history`と`instructions`を使うため、通常の`send`本文・送信時の本文・根拠・結果はローカルと同じ所有者専用ジャーナルに保存します。認証情報は記録しません。これと、本文を保存しない作成/Cloud配送の試行記録は別です。ファイルは公開資料や配布物へ含めないでください。
+
+## read/watchとMonitor
+
+観測はCloud履歴を共通のturn・userMessage・agentMessage・commandExecutionへ変換し、既存の読取りカーソル・ページ分割・Monitor・通知バッファを使います。コマンドの出力・終了コードも確認できます。reasoning、生の内部イベント、環境設定は表示しません。返却された本文は観測データであり、新しい委任ではありません。
+
+`watch --stream`は明示的に終了するまで動き、既定の`digest`、`--notify all`、`--settle-ms`、`--max-hold-ms`、接続通知、最大60秒の復帰待ちを共通のMonitor処理で使います。送信前には自分が実際に読んだcursorから`has_more`を読み切ります。`--stream`と`--until`・`--timeout-ms`は併用できません。単発watchは既定30秒、`--until change|idle|attention`に対応します。Cloudの既定照会間隔は5000msで、`--poll-ms`を明示できます。
+
+通信失敗の復帰待ち中は介入しません。初期接続失敗、認証エラー、未確認のプロトコル、履歴変更によるcursor不整合は成功扱いせず停止します。watchが終了したら継続監視中と報告せず、確認済みcursorで明示的に再開します。
+
+サーバー履歴は集約応答で、受信上限16 MiBを超えた場合は切り詰めず拒否します。共通CLIの`has_more`は取得済みの履歴内のページ分割であり、Cloud API自体の分割取得を保証しません。
+
+## 状態・差分・ローカル検証
+
+共通`status`はローカルと同じ`active/idle`等の観測状態を返します。詳細な元のCloud状態は旧`cloud status`でも確認できます。
+
+```bash
+codexteer diff task_example --json
 codexteer cloud diff task_example --attempt 1 --json
 ```
 
-`env_example`、`task_example`は架空の値です。`cloud environments list --json`は従来型Cloudタスク用のアクセス可能な環境を取得し、`environments`に`id`・`name`・`pinned`・`repositories`（名前と既定ブランチ）を返します。環境変数・シークレット・セットアップ内容は返しません。掲載は作成・実行成功の保証ではありません。新世代のCloud環境設定や別サービスを含む全クラウド環境の一覧ではありません。`--env`はIDを推奨します。公式CLIが一意に解決する英数字・ハイフン・アンダースコアのラベルも受け付けます。同名や未登録の環境は公式CLIが拒否します。
+公式CLIが返す差分をそのまま返し、ローカルへ適用しません。既定試行で公式CLIが差分を提供せず、APIでも完了ターンに記録済みパッチがないことを確認できたときは、`diff_available: false`・`diff: null`・`local_changes: unknown`です。実機ではファイルの実差分があっても記録済みパッチが提供されない場合がありました。変更ゼロと解釈せず、`read --include-output`のコマンド証拠と区別します。特定の`--attempt 1..4`では他の試行から推測しません。
 
-`--branch`は必須です。指定した環境に設定されているリポジトリのGitブランチで実行されます。ローカルの未コミット変更をアップロードする機能ではなく、現在のブランチを暗黙に採用しません。環境のリポジトリ設定と対象ブランチは実行前に確認してください。
+checkpoint・resourceは同じローカル記録/コマンド機能で、Cloudタスクにも関連付けられます。明示したローカル入力・成果物・コマンドが対象であり、Cloud作業コピーがローカルにあるとは仮定しません。出力に`execution_environment: local`を示します。ローカルのテスト成功をCloud側の検証と取り違えないでください。
 
-## 初回指示とID
+Cloud作成時のタイトル・モデル/推論設定・ローカルの権限上書きは、現在の作成経路で適用を確認できていないため、無視せず送信前に拒否します。監督エージェント自身のモデルなどは、従来どおり`supervise --agent ... -- <AGENT_ARGS>`でそのエージェントへ渡します。承認/質問の代理回答、環境登録、Desktop UI操作はこのCloud接続の対象外です。
 
-指示を引数で渡すほか、`cloud create --env env_example --branch main -`のstdin入力も使えます。先頭が`--`の指示には区切りの`--`を付けてください。空の指示・NUL・1 MiBを超える指示は送信前に拒否します。
+## 認証と失敗時の保護
 
-codexteerは初回指示を公式CLIのstdinへ渡し、子プロセスのargvや一時ファイルに埋め込みません。利用者のシェルの引数・履歴には通常のコマンドとして残り得るので、必要ならstdin入力を使ってください。指示は指定先クラウドに送信され、公式CLI/サービス側の設定・ログ・データ管理が適用されます。CLIは所有者専用の一時作業ディレクトリで実行し、そこに生成され得る診断ログを終了時に削除します。`CODEX_STARTING_DIFF`は引き継がず、暗黙の差分アップロードを防ぎます。
+一覧・観測・配送照合・継続指示は、公式`codex app-server --listen stdio://`へ初期化と`getAuthStatus`を送り、既存のChatGPT認証とそのアカウントをメモリ内で使います。認証ファイルを直接読まず、トークン・アカウントIDは表示/保存せず、認証取得のためのモデルターンやDesktop接続も作りません。APIキーや未確認の認証形式は拒否します。
 
-HTTP操作の認証は`codex app-server --listen stdio://`へ初期化と`getAuthStatus`だけを送り、ChatGPTトークンとそのアカウントIDをメモリ内で使います。認証ファイルを直接読まず、トークン・アカウントIDを表示・保存せず、モデルターンやDesktop接続も作りません。APIキー認証や未確認の認証形式は拒否します。送信先は公式HTTPSオリジンに固定し、リダイレクト・任意URL指定・認証エラー時の自動ログインや自動再送は行いません。
+HTTP APIは安定した公開SDK契約ではありません。送信先は公式HTTPSオリジンに固定し、リダイレクト・任意URL・自動ログイン・自動再送を使いません。作成・タスク一覧・元の状態・差分は公式Cloud CLIを使い、必要なhelpと版を確認します。公式CLIは私有の一時作業ディレクトリで動かして診断ログを終了時に削除し、`CODEX_STARTING_DIFF`を引き継ぎません。未確認の入力や認証/通信エラーを、空の正常結果に置き換えません。
 
-通常実行は各操作前にCLIのhelpと`codex cloud --version`を確認します。必要なオプションと、stdinの`-`を指示本文として誤送信しない最低対応版を照合し、未対応時は送信前に停止します。作成は一つの試行を要求します。公式CLIが返した単一の公式タスクURLから`task_id`を取得します。JSONは共通の`ok/command/data`形式で、`execution_environment`は`cloud`、`backend`は`codex-cli`です。クラウドタスクIDをDesktopの`thread_id`として扱いません。
+## 旧cloudサブコマンド
 
-`--dry-run`は入力検証のみです。CLI起動・ネットワーク・環境の存在確認・作成・永続記録を行わないので、成功してもクラウドでの作成可能性を証明しません。
+`cloud environments list/create/read/watch/send/reconcile/status/diff/receipt`は互換用に残します。新しい監督では共通コマンドを使います。旧`cloud read`の`cloud_v1:...`カーソルと共通`read`のカーソルは別形式なので混ぜません。旧`cloud watch --stream`は期限付きで、共通`watch --stream`とは終了条件が異なります。旧`cloud send`は明示した完了ターンへの継続用で、監督ID付きの旧cloud操作は拒否します。
 
-## 作成結果が不明な場合
+作成・配送の試行記録は`cloud receipt <ATTEMPT_ID>`で確認できます。初回指示は保存せずダイジェストを持ち、作成結果不明時も再作成しません。受付後に記録更新だけ失敗した場合は、確認できた実IDと`receipt_update_required: true`を保持します。
 
-送信前に`CODEX_HOME/codex-steer/cloud-creations/<attempt_id>.json`を所有者専用で保存します。指示本文は保存せずSHA256と文字数、環境指定、ブランチ、作成・受付状態、判明したタスクIDを記録します。
-
-```bash
-codexteer cloud receipt <ATTEMPT_ID> --json
-codex cloud list --env env_example --json
-```
-
-`created/accepted`は公式CLIがタスク作成を受け付けたことを示し、処理完了を意味しません。`unknown`や中断で残った`dispatching`では、すでにタスクが存在する可能性があります。タイムアウト、認証/通信エラー、想定外の出力でも自動再送しません。記録と公式のタスク一覧を照合してから判断してください。タスクURLだけ確認できた途中失敗では、そのIDと`created/unknown`を保持します。
-
-最終記録の保存に失敗しても、確認できたIDと受付結果を返し、`receipt_update_required: true`を付けます。記録を直す目的でタスクを作り直さないでください。
-
-送信後の失敗では、通常表示のstderrにも試行ID・記録先・作成/受付状態と、判明済みのタスクID・URLを表示します。最終記録を保存できなくても画面に出たIDから確認を続けられます。指示本文や公式CLIの生の診断は表示しません。
-
-## 状態・差分
-
-`cloud status`と`cloud diff`は`task_...`形式のID、または`https://chatgpt.com/codex/tasks/...`を受け付けます。リンクのクエリ・フラグメントは送信せず、タスクIDだけを公式CLIへ渡します。
-
-状態は`pending`、`ready`、`applied`、`error`です。公式CLIはready以外の正常な状態取得でも終了コード1を返すため、codexteerは既知の先頭状態と終了コードを照合します。既知の状態を取得できれば`ok: true`であり、`status: error`はタスク側の失敗です。未知の状態や認証・通信失敗をpendingと推測しません。元の状態表示は`data.output`に返します。
-
-差分は`data.diff`にそのまま返し、通常出力ではunified diff本文のみを出します。`--attempt 1..4`で試行を指定できます。省略時は公式CLIの既定に従い、選択した試行番号を推測しません。ローカルファイルへの適用やPR作成は行いません。
-
-試行番号を省略し、公式CLIが差分を提供せず、同じタスクのAPIでも完了ターンに記録済みパッチがないことを確認できた場合は、`diff_available: false`・`diff: null`・`local_changes: unknown`を返します。これは変更ゼロを意味しません。通常表示ではstderrに説明を出します。特定の`--attempt`では他の試行から推測せず、取得できなければエラーです。実ファイルの状態は`cloud read`のコマンド証拠で確認してください。
-
-各操作の`--timeout-ms`は既定120000、1000〜600000です。helpとバージョンの確認は各10秒が期限です。stdoutとstderrの合計上限は16 MiBで、超過時に部分出力を成功として返しません。CLIの生のエラー診断はプライバシー保護のため返さず、エラーコードと終了コードを示します。期限切れや中断は子プロセスを終了しますが、受付済みクラウドタスクの取消しを意味しません。
-
-## 対応範囲と検証
-
-環境一覧・指定・新規作成・ID取得・履歴・ポーリング監視・完了ターンへの継続指示・配送照合・状態・差分確認が対象です。実行中ターンへの割込み、環境の新規登録、差分適用は含みません。DesktopのMonitor・監督登録・pause/stop・findingsはクラウドには適用しません。`--supervisor`付き操作と観測専用`--connection desktop`からの実行は拒否します。Desktop向けの`--host`・`--remote-transport`・`--context-thread`も、宛先の取り違えを防ぐため拒否します。Desktopへ自動フォールバックしません。
-
-公式CLI `0.157.1`のhelpと同版の公開ソースでstdin入力・作成URL・状態/終了コード・差分選択を確認しました。回帰テストは架空のCLI・HTTP・隔離HOMEで実行します。検証専用の実タスクでも環境一覧・作成・計算実行・履歴・同じIDへの継続・監視・配送照合を確認しました。実ID・リポジトリ名・認証情報・生レスポンスはテストや公開資料へ含めません。この実機確認は全アカウント・環境・将来のAPI互換性の保証ではありません。
-
-一次資料: [公式CLIリファレンス](https://developers.openai.com/codex/cli/reference)、[Codex CLI 0.157.1のクラウド実装](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/cloud-tasks/src/lib.rs)。
-
-## 同じタスクを読み取り・継続・監視する
-
-```bash
-codexteer cloud read task_example --json
-codexteer cloud watch task_example --since <CURSOR> --until change --timeout-ms 30000 --json
-codexteer cloud watch task_example --since <CURSOR> --stream --timeout-ms 30000 --json
-codexteer cloud send task_example --turn <TURN_ID> --based-on <CURSOR> \
-  '前の結果に基づいて続けてください' --json
-codexteer cloud reconcile <ATTEMPT_ID> --json
-codexteer cloud receipt <ATTEMPT_ID> --json
-```
-
-`read`はサーバーから返された全ターンの親ID・本文・進捗・コマンド実行（コマンド・出力・終了コード）・状態と現在の`turn_id`・`cursor`を返します。`--since`に前回カーソルを渡すと`changed`で変化を確認できます。本文はクラウド上の観測データであり、新しい送信許可ではありません。応答が16 MiBを超える履歴は切り詰めず拒否し、`has_more: false`はその上限内で返却された履歴を読み切ったことだけを示します。
-
-`watch`は読み取りだけの定期照会で、既定は変化が出るまで最大30秒待ちます。`--since`省略時は初回の観測も変更として返します。`--stream`は期限内の変化をNDJSONで返し、終了時に`timed_out: true`を出します。定期照会間隔は既定5000ms、`--interval-ms`は1000〜60000です。期限切れは観測終了であり、タスク停止や継続監視の保証ではありません。必要に応じて新しい`read`を行い、確認済みのカーソルから再開してください。通信失敗はエラーで終了し、正常な無変化と区別します。
-
-監督するエージェントは、ユーザーが委任した範囲内で`read → watch → read → send → reconcile → read/watch`を使います。介入前に新しい本文・進捗・制約を読み、対応待ちの指示を重複送信しないでください。観測だけの委任は送信を許可しません。監督を止められたら自分が開始したwatchを終了し、追加送信を止めます。
-
-`send`は完了・失敗・キャンセル済みの現在のassistantターンへ継続します。`--turn`と`--based-on`は直前の`read`から取得し、別タスク・古いターン・変更後のカーソルは送信前に拒否します。読み取りと送信の間をサーバー側で原子的に固定する契約ではありませんが、送信先の親ターンはリクエストに明示し、別の最新ターンへ自動変更しません。`send --dry-run`は認証と履歴・鮮度を確認し、ローカル排他の準備はしますが配送記録も送信も行いません。
-
-送信記録は`CODEX_HOME/codex-steer/cloud-messages`、排他と最後の配送予約はローカルの所有者専用領域に保存します。指示本文は保存せず、SHA256・親ターン・観測カーソルと結果だけを記録します。送信は1回だけで、通信失敗や応答不一致は`unknown`です。確認できた受付結果は最終記録の保存失敗でも保持します。
-
-`reconcile`は、同じタスクの履歴に親ターンと本文SHA256が一致するuserターンが一つある場合だけ`delivery_verification: stored`にします。受け付けられた入力の保存確認であり、要求の達成確認とは別です。`not_observed`は未配送の証明ではなく`retry_safe: false`です。未解決の配送予約は次の送信も止めます。受付が確認できても、同じ親ターンへの重複送信は拒否します。
+一次資料: [公式CLIリファレンス](https://developers.openai.com/codex/cli/reference)、[公式Cloud CLI実装](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/cloud-tasks/src/lib.rs)。実機検証は専用タスクに限定し、実ID・環境名・認証情報・生ログを公開資料に含めません。

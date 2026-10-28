@@ -6,18 +6,21 @@ const LIMIT = 16 * 1024 * 1024;
 
 // Credentials stay in memory and come from the official process, never auth.json.
 // No model session is started and no Desktop connection is used.
-export function cloudCredentials({ spawnProcess = spawn, timeoutMs = 15000 } = {}) {
+export function cloudCredentials({ spawnProcess = spawn, timeoutMs = 15000, signal } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(failure("CLOUD_CANCELLED", "Cloud authentication was cancelled.")); return; }
     let child, buffer = "", bytes = 0, settled = false, killTimer, initialized = false;
     const finish = (error, result) => {
       if (settled) return;
-      settled = true; clearTimeout(timer);
+      settled = true; clearTimeout(timer); signal?.removeEventListener("abort", cancel);
       child?.stdin.destroy(); child?.kill();
       killTimer = setTimeout(() => child?.kill("SIGKILL"), 500); killTimer.unref();
       buffer = "";
       if (error) reject(error); else resolve(result);
     };
+    const cancel = () => finish(failure("CLOUD_CANCELLED", "Cloud authentication was cancelled."));
     const timer = setTimeout(() => finish(failure("CLOUD_AUTH_TIMEOUT", "Official CLI authentication timed out.")), timeoutMs);
+    signal?.addEventListener("abort", cancel, { once: true });
     try { child = spawnProcess("codex", ["app-server", "--listen", "stdio://"], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true }); }
     catch { finish(failure("CLOUD_AUTH_UNAVAILABLE", "Cannot start the official Codex App Server.")); return; }
     child.on("error", () => finish(failure("CLOUD_AUTH_UNAVAILABLE", "Cannot start the official Codex App Server.")));
@@ -57,12 +60,13 @@ export function cloudCredentials({ spawnProcess = spawn, timeoutMs = 15000 } = {
 }
 
 // Fixed official origin, no redirects, URL overrides, raw diagnostics or retries.
-export async function cloudApi(route, { timeoutMs = 120000, credentials = cloudCredentials, fetchRequest = fetch, body } = {}) {
+export async function cloudApi(route, { timeoutMs = 120000, credentials = cloudCredentials, fetchRequest = fetch, body, signal } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) throw failure("CLOUD_OPTIONS_INVALID", "Invalid cloud request deadline.");
   if (!(body === undefined ? /^(?:environments|tasks\/task_[A-Za-z0-9_-]{1,200}(?:\/turns)?)$/.test(route) : route === "tasks")) throw failure("CLOUD_OPTIONS_INVALID", "Unsupported cloud API route.");
+  if (signal?.aborted) throw failure("CLOUD_CANCELLED", "Cloud request was cancelled.");
   const started = Date.now();
   let auth;
-  try { auth = await credentials({ timeoutMs: Math.min(timeoutMs, 15000) }); }
+  try { auth = await credentials({ timeoutMs: Math.min(timeoutMs, 15000), signal }); }
   catch (error) {
     if (error.code === "CLOUD_AUTH_TIMEOUT" && Date.now() - started >= timeoutMs) throw failure("CLOUD_TIMEOUT", "Cloud authentication exceeded the request deadline.");
     throw error;
@@ -70,6 +74,8 @@ export async function cloudApi(route, { timeoutMs = 120000, credentials = cloudC
   const remaining = timeoutMs - (Date.now() - started);
   if (remaining <= 0) throw failure("CLOUD_TIMEOUT", "Cloud authentication exceeded the request deadline.");
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), remaining);
+  const cancel = () => controller.abort(); signal?.addEventListener("abort", cancel, { once: true });
+  if (signal?.aborted) controller.abort();
   try {
     const response = await fetchRequest(`https://chatgpt.com/backend-api/wham/${route}`, {
       method: body === undefined ? "GET" : "POST", redirect: "error", signal: controller.signal,
@@ -89,8 +95,8 @@ export async function cloudApi(route, { timeoutMs = 120000, credentials = cloudC
     catch { throw failure("CLOUD_PROTOCOL_UNVERIFIED", "Cloud returned an unrecognized response. No raw payload was disclosed."); }
   } catch (error) {
     if (typeof error.code === "string" && error.code.startsWith("CLOUD_")) throw error;
-    throw failure(controller.signal.aborted ? "CLOUD_TIMEOUT" : "CLOUD_CONNECTION_FAILED", "Cloud request did not complete. No credentials or raw diagnostics were disclosed.");
-  } finally { clearTimeout(timer); }
+    throw failure(signal?.aborted ? "CLOUD_CANCELLED" : controller.signal.aborted ? "CLOUD_TIMEOUT" : "CLOUD_CONNECTION_FAILED", "Cloud request did not complete. No credentials or raw diagnostics were disclosed.");
+  } finally { clearTimeout(timer); signal?.removeEventListener("abort", cancel); }
 }
 
 export async function cloudEnvironments(settings = {}, { request = cloudApi } = {}) {

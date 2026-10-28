@@ -8,6 +8,7 @@ const failure = (code, message) => Object.assign(new Error(message), { code, exe
 const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const validCursor = value => typeof value === "string" && /^cloud_v1:[a-f0-9]{64}$/.test(value);
 const validTurn = (task, value) => typeof value === "string" && value.startsWith(`${task}~`) && /^(?:usertrn|assttrn)_[A-Za-z0-9_-]{1,200}$/.test(value.slice(task.length + 1));
+export const cloudUserRevision = snapshot => digest(snapshot.turns.filter(turn => turn.role === "user").map(turn => ({ id: turn.turn_id, parent: turn.parent_turn_id, messages: turn.messages })));
 
 function texts(items, progress = false) {
   return (Array.isArray(items) ? items : []).filter(item => item?.type === "message" || (progress && item && Array.isArray(item.content))).map(item => ({
@@ -34,9 +35,9 @@ export async function readCloudTask(target, settings = {}, { request = cloudApi 
   if (settings.timeoutMs !== undefined && (!Number.isSafeInteger(settings.timeoutMs) || settings.timeoutMs < 1000 || settings.timeoutMs > 600000)) throw failure("CLOUD_OPTIONS_INVALID", "--timeout-ms must be 1000..600000.");
   if (settings.since !== undefined && !validCursor(settings.since)) throw failure("CLOUD_OPTIONS_INVALID", "--since requires a cloud read cursor.");
   const timeoutMs = settings.timeoutMs ?? 120000, deadline = Date.now() + timeoutMs;
-  const details = await request(`tasks/${taskId}`, { timeoutMs });
+  const details = await request(`tasks/${taskId}`, { timeoutMs, ...(settings.signal ? { signal: settings.signal } : {}) });
   if (deadline - Date.now() < 1) throw failure("CLOUD_TIMEOUT", "Cloud history deadline expired.");
-  const history = await request(`tasks/${taskId}/turns`, { timeoutMs: deadline - Date.now() });
+  const history = await request(`tasks/${taskId}/turns`, { timeoutMs: deadline - Date.now(), ...(settings.signal ? { signal: settings.signal } : {}) });
   const current = details.current_assistant_turn;
   if (details.task?.id !== taskId || current?.role !== "assistant" || !validTurn(taskId, current?.id) || !current.id.startsWith(`${taskId}~assttrn_`) || !history.turn_mapping || typeof history.turn_mapping !== "object" || Array.isArray(history.turn_mapping)) {
     throw failure("CLOUD_PROTOCOL_UNVERIFIED", "Cloud did not confirm the requested task and its turn history.");
@@ -52,7 +53,8 @@ export async function readCloudTask(target, settings = {}, { request = cloudApi 
     progress: texts(node.turn.worklog?.messages, true),
     commands: commands(node.turn),
   })).sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.turn_id.localeCompare(b.turn_id));
-  const snapshot = { task_id: taskId, turn_id: current.id, current_turn_id: history.current_turn_id, status: current.turn_status ?? "unknown", turns };
+  const snapshot = { task_id: taskId, turn_id: current.id, current_turn_id: history.current_turn_id, status: current.turn_status ?? "unknown",
+    title: typeof details.task.title === "string" && details.task.title.length <= 2000 ? details.task.title : null, turns };
   const cursor = `cloud_v1:${digest(snapshot)}`;
   return { backend: "codex-api", execution_environment: "cloud", ...snapshot, cursor,
     changed: settings.since === undefined || settings.since !== cursor, has_more: false,
@@ -94,14 +96,21 @@ export async function sendCloudTask(target, expectedTurn, prompt, settings = {},
   const api = (route, options = {}) => request(route, { ...options, ...(auth ? { credentials: async () => auth } : {}) });
   try { return await lock(`cloud-send-${taskId}`, async () => {
     const observation = await read(taskId, { timeoutMs: settings.timeoutMs }, { request: api });
-    if (observation.turn_id !== expectedTurn || observation.cursor !== settings.basedOn) throw failure("CLOUD_STATE_CHANGED", "Cloud task or turn changed after observation. Read again; no message was sent.");
-    if (!["completed", "failed", "cancelled"].includes(observation.status)) throw failure("CLOUD_TASK_BUSY", "Cloud follow-up requires a finished turn. In-progress steering is not supported.");
+    if (observation.turn_id !== expectedTurn || (settings.expectedUserRevision === undefined ? observation.cursor !== settings.basedOn : cloudUserRevision(observation) !== settings.expectedUserRevision)) throw failure("CLOUD_STATE_CHANGED", "Cloud task or user input changed after observation. Read again; no message was sent.");
+    const active = ["in_progress", "pending", "queued", "running"].includes(observation.status);
+    if (settings.deliveryMode === "steer" ? !active : !["completed", "failed", "cancelled"].includes(observation.status)) {
+      throw failure(active ? "CLOUD_TASK_BUSY" : "CLOUD_TASK_IDLE", settings.deliveryMode === "steer"
+        ? "The task has no active turn. Use --new-turn to continue an idle cloud task."
+        : "A new turn requires a finished cloud turn. Nothing was sent.");
+    }
     const previous = await load("cloud-send-heads", taskId);
     if (previous && (previous.submission_status !== "accepted" || previous.parent_turn_id === expectedTurn)) throw Object.assign(failure("CLOUD_DUPLICATE_SEND", "An accepted or uncertain send needs inspection before another send. Use cloud reconcile; do not resend."), { attempt_id: previous.attempt_id, receipt_path: previous.receipt_path });
     const attemptId = randomUUID();
     const receipt = { execution_environment: "cloud", backend: "codex-api", task_id: taskId, parent_turn_id: expectedTurn,
       attempt_id: attemptId, receipt_path: storePath("cloud-messages", attemptId), based_on: settings.basedOn,
-      prompt_sha256: createHash("sha256").update(prompt).digest("hex"), prompt_hash_encoding: "utf8", message_characters: [...prompt].length, submission_status: "not_sent", dry_run: !!settings.dryRun };
+      prompt_sha256: createHash("sha256").update(prompt).digest("hex"), prompt_hash_encoding: "utf8", message_characters: [...prompt].length,
+      delivery_action: active ? "interrupt-and-follow-up" : "new-turn", parent_status: observation.status, submission_status: "not_sent", dry_run: !!settings.dryRun };
+    await settings.beforeSend?.(observation);
     if (settings.dryRun) return receipt;
     await write("cloud-messages", attemptId, receipt);
     const dispatched = { ...receipt, submission_status: "dispatching" };

@@ -7,6 +7,8 @@ import { normalizeThreadId } from "./thread-id.mjs";
 import { ensureDesktopSubscription } from "./subscription.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 import { turnMetadata } from "./paged-read.mjs";
+import { isCloudTask } from "./task-id.mjs";
+import { sendCloudInput } from "./cloud-send.mjs";
 
 export class SendFailure extends Error {
   constructor(message, { code = "NOT_SENT", uncertain = false, threadId, rpcCode, capability, operation } = {}) {
@@ -85,6 +87,7 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
 }
 
 export async function sendAppServerMessage(threadInput, message, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend, connect = RpcClient.connect, discover = discoverRuntime, subscribe = ensureDesktopSubscription, inspectControl = verifyControlEndpoint } = {}) {
+  if (isCloudTask(threadInput)) return sendCloudInput(threadInput, message, { dryRun, newTurn, clientMessageId, beforeSend });
   const threadId = normalizeThreadId(threadInput);
   if (typeof message !== "string" || !message.trim()) throw new Error("Message must not be empty.");
   const plan = { thread_id: threadId, backend: "app-server", delivery_action: newTurn ? "new-turn" : "steer", message_characters: [...message].length, dry_run: dryRun };

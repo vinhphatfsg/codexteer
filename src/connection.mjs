@@ -1,3 +1,4 @@
+import { cloudConnection } from "./cloud-connection.mjs";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { codexHome } from "./runtime.mjs";
@@ -7,7 +8,7 @@ import { inspectAppServerSocket } from "./socket-endpoint.mjs";
 const failure = (message, code) => Object.assign(new Error(message), { code });
 const reads = new Set(["thread/loaded/list", "thread/read", "thread/turns/list", "thread/items/list"]);
 export function connectionMode(value = "shared") {
-  if (!["shared", "desktop"].includes(value)) throw new Error("--connection must be shared or desktop.");
+  if (!["shared", "desktop", "cloud"].includes(value)) throw new Error("--connection must be shared, desktop, or cloud.");
   return value;
 }
 export function desktopReadOnly() {
@@ -97,6 +98,7 @@ export async function connectDesktop(paths, options, connect = RpcClient.connect
 // profile, daemon, or wrapper, including after connection failures.
 export function observationConnection(mode) {
   if (connectionMode(mode) === "shared") return {};
+  if (mode === "cloud") return cloudConnection();
   let selected;
   return {
     async discover(home) {

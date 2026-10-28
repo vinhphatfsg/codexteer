@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { digest } from "./observe.mjs";
 import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
-import { normalizeThreadId } from "./thread-id.mjs";
+import { normalizeTaskId } from "./task-id.mjs";
 import { runCommand } from "./runner.mjs";
 
 function resourceKey(name) {
@@ -19,7 +19,7 @@ export async function resourceStatus(name, { now = Date.now, ...storage } = {}) 
 export async function acquireResource(name, { owner, ttlMs = 600000, reason = "", condition = "", threadId, now = Date.now, ...storage }) {
   const key = resourceKey(name); validTtl(ttlMs);
   if (!owner?.trim()) throw new Error("--owner is required (for example claude-code or codex).");
-  if (threadId) threadId = normalizeThreadId(threadId);
+  if (threadId) threadId = normalizeTaskId(threadId);
   return withStoreLock(`resource-${key}`, async () => {
     const current = await readRecord("resources", key, storage);
     if (leaseState(current, now()) === "held") throw Object.assign(new Error(`Resource is held by ${current.owner} until ${current.expires_at}.`), { code: "RESOURCE_BUSY" });

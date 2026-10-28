@@ -8,7 +8,7 @@ import { VERSION } from "./version.mjs";
 const supervisionExecutionNotes = [
   "--use-path-cliを付けると、本文はPATH上のcodexteerを案内します。CLIの保存・Nodeの固定・CODEX_HOMEの埋め込みを行わず、実行環境のPATHとCODEX_HOMEを使います。CLIの更新は次の実行から反映されます。--supervisor・--connectionと監督の制御は維持します。直接起動ではエージェント引数の区切り -- より前に指定してください。",
   "各生成に新しい--supervisor IDと--connectionを埋め込みます。直接起動はagent起動前にregisterし、終了時にstopします。本文だけの生成は未登録で、貼り付け先が本文のregisterを実行して開始します。同じ本文の再登録は一時停止を解除せず、停止済みIDは復活しません。",
-  "--connectionの既定はshared（既存wrapper）。desktopは既存の共有制御ソケットを使う観測専用です。送信の実行例を含めず、方針に送信指示があっても送信を許可しません。詳細はhelp connectionを参照してください。",
+  "--connectionの既定はshared（既存wrapper）。desktopは既存の共有制御ソケットを使う観測専用です。送信の実行例を含めず、方針に送信指示があっても送信を許可しません。CloudタスクIDはcloudへ自動選択し、共通の監督・送信・観測を使えます。詳細はhelp connectionとhelp cloudを参照してください。",
   "本文は必須の共通テンプレートと監督方針で構成します。MESSAGEを省略すると標準方針（目的・制約の範囲で必要最小限の介入と結果確認、簡潔な報告）を使い、指定すると標準方針全体をその文に置き換えます。対象ID、実行コマンド、help/read/watch、送信時の確認、停止手順はどちらにも含めます。",
   "MESSAGEは引用して一つの引数として渡してください。空文字・空白だけはINVALID_SUPERVISION_POLICYで拒否します。改行等はそのまま本文に含め、プレースホルダー展開やシェル実行はしません。指定は今回の生成・起動だけに適用し、既定設定や保存したCLIは変更しません。",
   "既定ではCLI本体と依存をCODEX_HOME/codex-steer/runtimes/<version>-<sha256>へ検証して保存し、そのコピーへの実行コマンドを本文に埋め込みます。supervise promptもこの保存処理を行います。同じ内容は検証して再利用し、既存のコピーは上書き・自動削除しません。保存・検証に失敗した場合は本文を出力せず、監督エージェントも起動しません。",
@@ -20,7 +20,7 @@ export const topics = {
   supervise: {
     title: "指定したCodexタスクの監督役としてClaudeまたはCodex CLIを起動する",
     when: "対象タスクのIDを指定して、Claude CodeまたはCodex CLIを監督役の対話セッションとして起動するとき。",
-    usage: ["supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli] [-- <AGENT-ARGS...>]", "supervise status <THREAD>", "supervise list", "supervise pause <THREAD>", "supervise resume <THREAD>", "supervise stop <THREAD>", "--supervisor <SESSION-ID> supervise register <THREAD> [--owner NAME]"],
+    usage: ["supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop|cloud] [--use-path-cli] [-- <AGENT-ARGS...>]", "supervise status <THREAD>", "supervise list", "supervise pause <THREAD>", "supervise resume <THREAD>", "supervise stop <THREAD>", "--supervisor <SESSION-ID> supervise register <THREAD> [--owner NAME]"],
     returns: "監督エージェントの標準入力・標準出力・標準エラーと終了コードを引き継ぎます。codexteerの出力は混ぜません。",
     examples: ["codexteer supervise <THREAD>", "codexteer supervise <THREAD> --use-path-cli", 'codexteer supervise <THREAD> "セキュリティの問題だけを私へ報告し、Codexへは送信しないでください。"', 'codexteer supervise <THREAD> "テスト失敗を優先して監督してください。" --agent claude -- --model <MODEL> --effort <LEVEL>'],
     notes: [...supervisionExecutionNotes,
@@ -51,7 +51,7 @@ export const topics = {
   connection: {
     title: "共有wrapperまたは通常起動Desktopの観測接続を選ぶ",
     when: "通常起動したDesktopを再起動せずに観測したいとき。",
-    usage: ["--connection shared|desktop doctor --thread <THREAD>", "--connection desktop read <THREAD>", "--connection desktop watch <THREAD> --stream [--notify all|digest] [--settle-ms N] [--max-hold-ms N] [--since CURSOR]", "supervise <THREAD> [MESSAGE] --connection desktop [--agent claude|codex]", "supervise prompt <THREAD> [MESSAGE] --connection desktop [--agent claude|codex]"],
+    usage: ["--connection shared|desktop|cloud doctor --thread <THREAD>", "--connection desktop read <THREAD>", "--connection desktop watch <THREAD> --stream [--notify all|digest] [--settle-ms N] [--max-hold-ms N] [--since CURSOR]", "supervise <THREAD> [MESSAGE] --connection desktop [--agent claude|codex]", "supervise prompt <THREAD> [MESSAGE] --connection desktop [--agent claude|codex]"],
     returns: "desktopでは既存ソケットを検証して読み取りだけを行います。doctorのconnection.observation_onlyはtrue、送信操作はunsupportedです。",
     examples: ["codexteer --connection desktop doctor --thread <THREAD> --json", "codexteer --connection desktop read <THREAD> --include-output --json", "codexteer supervise <THREAD> --agent codex --connection desktop"],
     notes: ["既定sharedは従来のdesktop startで用意するwrapperです。desktopはCODEX_HOME/app-server-control/app-server-control.sockを使います。Desktopが共有ローカルdaemonを使っている環境だけで利用でき、通常起動なら必ず存在するわけではありません。ソケットがなければDESKTOP_CONNECTION_UNAVAILABLEです。",
@@ -62,11 +62,11 @@ export const topics = {
   "supervise prompt": {
     title: "監督役（オーケストレーター）向けのプロンプトを出力する",
     when: "Claude Codeなどの監督役へ渡す、対象タスク入りの初期プロンプト本文を取得・確認するとき。",
-    usage: ["supervise prompt <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli]"],
+    usage: ["supervise prompt <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop|cloud] [--use-path-cli]"],
     returns: "通常はプロンプト本文だけを標準出力へ返します。--jsonではdata.thread_id、data.prompt、元のホーム（codex_home）・保存先・版・ハッシュ・再利用の有無を示すdata.deployment、Nodeのパスと版を示すdata.node、セッションID・owner・connectionを示すdata.supervisor、実行方式を示すdata.cli_mode（savedまたはpath）を返します。--use-path-cliではdeploymentとnodeはnullです。",
     examples: ["codexteer supervise prompt <THREAD>", "codexteer supervise prompt <THREAD> --use-path-cli", 'codexteer supervise prompt <THREAD> "進捗を観測し、完了時だけ私へ報告してください。Codexへの送信は不要です。"', "codexteer supervise prompt codex://threads/<UUID> --json", "codexteer supervise <THREAD>"],
     notes: [...supervisionExecutionNotes,
-      "出力は監督役（オーケストレーター）へ渡す初期指示です。THREADはUUIDまたはcodex://threads/...。IDの書式を確認して正規化し、本文へ埋め込みます。Desktopへの接続・履歴取得・送信・Claudeの起動・設定変更は行いません。タスクの存在と接続は監督開始時に確認します。", "Claudeを起動する場合はsupervise <THREAD> [MESSAGE]を使います。追加の起動引数は -- の後ろへ渡してください。", "共通の操作手順はhelp monitorと同じです。観測の観点・介入の判断基準・報告方法は選択した監督方針に従います。Monitorが使えない場合は短いwatchで観測します。", "生成した本文を既存のエージェントへ貼り付けても使えます。本文のregisterで開始し、監督停止は端末のsupervise stopかそのセッションへの指示を使います。プロンプトはCLIやOSの権限設定を変更しません。"],
+      "出力は監督役（オーケストレーター）へ渡す初期指示です。THREADはDesktopのUUID/codex://threads/...またはCloudのtask_ID/公式タスクURL。IDの書式を確認して正規化し、本文へ埋め込みます。Desktopへの接続・履歴取得・送信・Claudeの起動・設定変更は行いません。タスクの存在と接続は監督開始時に確認します。", "Claudeを起動する場合はsupervise <THREAD> [MESSAGE]を使います。追加の起動引数は -- の後ろへ渡してください。", "共通の操作手順はhelp monitorと同じです。観測の観点・介入の判断基準・報告方法は選択した監督方針に従います。Monitorが使えない場合は短いwatchで観測します。", "生成した本文を既存のエージェントへ貼り付けても使えます。本文のregisterで開始し、監督停止は端末のsupervise stopかそのセッションへの指示を使います。プロンプトはCLIやOSの権限設定を変更しません。"],
   },
   monitor: {
     title: "Codexタスクを観測・介入・結果確認の順で監督する",
@@ -109,7 +109,7 @@ export const topics = {
   overview: {
     title: "別のAIと、Codexタスクの進行を共有する",
     when: "タスクを探す → 現状を読む → 指示を送る → 変化を確認する、という順で使います。",
-    usage: ["supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli] [-- <AGENT-ARGS...>]", "supervise prompt <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli]", "supervise status|pause|resume|stop <THREAD>", "supervise list", "projects list", "thread create --project ID|NAME [--context-thread THREAD-ID] <MESSAGE>", "threads list [--desktop-only] [--limit N]", "status <THREAD>", "read <THREAD> [--since CURSOR] [--limit N]", "watch <THREAD> [--since CURSOR] [--until change|idle|attention]", "send <THREAD> <MESSAGE...> [--new-turn] [--dry-run] [--no-sound]", "doctor [--backend app-server|ui]", "desktop start [--dry-run]", "thread resolve <THREAD>", "open <THREAD>", "debug-ui <THREAD> [--wait-ms N]", "help <COMMAND>"],
+    usage: ["supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop|cloud] [--use-path-cli] [-- <AGENT-ARGS...>]", "supervise prompt <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop|cloud] [--use-path-cli]", "supervise status|pause|resume|stop <THREAD>", "supervise list", "projects list", "thread create --project ID|NAME [--context-thread THREAD-ID] <MESSAGE>", "threads list [--desktop-only] [--limit N]", "status <THREAD>", "read <THREAD> [--since CURSOR] [--limit N]", "watch <THREAD> [--since CURSOR] [--until change|idle|attention]", "send <THREAD> <MESSAGE...> [--new-turn] [--dry-run] [--no-sound]", "doctor [--backend app-server|ui]", "desktop start [--dry-run]", "thread resolve <THREAD>", "open <THREAD>", "debug-ui <THREAD> [--wait-ms N]", "help <COMMAND>"],
     returns: "対話起動のsupervise <THREAD> [MESSAGE]を除き、各コマンドに --json を付けると、AIやスクリプトが扱えるJSONを返します。supervise promptもJSONに対応します。",
     examples: ["codexteer supervise <THREAD>", "codexteer supervise <THREAD> --use-path-cli", "codexteer threads list --desktop-only --json", "codexteer read <THREAD> --json", "codexteer help send"],
     use_cases: [
@@ -128,7 +128,7 @@ export const topics = {
       { need: "テストしたソースと成果物を照合", command: "help checkpoint" },
       { need: "画面・Unityなどの利用を調整", command: "help resource" },
     ],
-    notes: ["THREADにはUUIDまたはcodex://threads/...を指定します。", "監督役の対話起動: codexteer supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop] [--use-path-cli] [-- <AGENT-ARGS...>]。superviseの標準入出力と終了コードは監督エージェントのものです。", "コマンド別のhelpには、使い所・出力・例・制約を載せています。help自体も --json に対応します。"],
+    notes: ["THREADにはDesktopのUUID/codex://threads/...またはCloudのtask_ID/公式タスクURLを指定します。", "監督役の対話起動: codexteer supervise <THREAD> [MESSAGE] [--agent claude|codex] [--connection shared|desktop|cloud] [--use-path-cli] [-- <AGENT-ARGS...>]。superviseの標準入出力と終了コードは監督エージェントのものです。", "コマンド別のhelpには、使い所・出力・例・制約を載せています。help自体も --json に対応します。"],
   },
   read: {
     title: "直近の発言・コマンド・変更ファイルを読む",
@@ -192,29 +192,26 @@ export const topics = {
   open: { title: "タスクをDesktopで開く", when: "ユーザーが画面でタスクを見たいとき。", usage: ["open <THREAD>"], returns: "開いたタスクのURL。", examples: ["codexteer open <THREAD>"], notes: ["画面を操作する明示的なコマンドです。"] },
   "debug-ui": { title: "UI送信のために画面構造を調べる", when: "明示的なUI方式を診断するとき。", usage: ["debug-ui <THREAD> [--wait-ms N]"], returns: "Accessibilityの診断情報。", examples: ["codexteer debug-ui <THREAD> --wait-ms 1500"], notes: ["画面を操作します。通常のバックグラウンド送信には不要です。"] },
   cloud: {
-    title: "Codex Cloudの環境一覧・作成・履歴・継続・監視",
-    when: "Desktopと独立したクラウド環境で新規タスクを実行し、ID・状態・差分を取得するとき。",
-    usage: ["cloud environments list [--timeout-ms N]", "cloud create --env ENV_ID --branch BRANCH [--timeout-ms N] [--dry-run] <MESSAGE...>|-", "cloud read <TASK_ID|URL> [--since CURSOR] [--timeout-ms N]", "cloud watch <TASK_ID|URL> [--since CURSOR] [--stream | --until change] [--interval-ms N] [--timeout-ms N]", "cloud send <TASK_ID|URL> --turn TURN_ID --based-on CURSOR [--dry-run] [--timeout-ms N] <MESSAGE...>|-", "cloud reconcile <ATTEMPT_ID>", "cloud status <TASK_ID|URL> [--timeout-ms N]", "cloud diff <TASK_ID|URL> [--attempt N] [--timeout-ms N]", "cloud receipt <ATTEMPT_ID>"],
-    returns: "createはtask_id・url・attempt_id・receipt_pathと作成/受付状態。statusはpending/ready/applied/error。diffは適用せずunified diffを返し、記録済みパッチ不在を確認できた場合はdiff_available:false。receiptはローカルの作成/送信記録です。",
-    examples: ["codexteer cloud environments list --json", "codexteer cloud create --env env_example --branch main 'テストを追加してください' --json", "codexteer cloud read task_example --json", "codexteer cloud watch task_example --since <CURSOR> --stream --timeout-ms 30000 --json", "codexteer cloud send task_example --turn <TURN_ID> --based-on <CURSOR> '前の結果に基づいて続けてください' --json", "codexteer cloud reconcile <ATTEMPT_ID> --json", "codexteer cloud diff task_example --attempt 1 --json"],
-    notes: ["PATH上の公式Codex CLI 0.157.1以降と、そのCLIのクラウド利用権限・ログイン設定が必要です。Desktopの起動や既存チャットは不要。codexteerは認証ファイルを読み取らず、CLIを自動導入しません。",
-      "--envは環境IDを推奨し、公式CLIが一意に解決できる単純なラベルも指定できます。--branchは必須で、ローカルの現在ブランチを暗黙に送りません。初回指示はクラウドへ送信され、CLIにはstdinで渡します。",
-      "createのdry-runは入力検証だけです。sendのdry-runは認証・履歴・鮮度を読み取り、配送記録と送信は行いません。--timeout-msは既定120000、watchのみ30000。範囲は1000〜600000。",
-      "作成試行はCODEX_HOME/codex-steer/cloud-creationsへ所有者専用で保存します。本文は保存せずSHA256と文字数だけを記録。unknown/dispatchingは未作成の証明ではなく、自動再作成しません。receiptと公式codex cloud list --env ENV_ID --jsonで既存タスクを確認してください。",
-      "CLIのstatusはready以外で終了コード1になるため、既知の状態出力を照合して問い合わせ成功とタスク結果を区別します。未知の形式・認証エラー・切断は成功扱いしません。",
-      "diffの--attemptは1〜4、省略時は公式CLIの選択に従います。データはJSONではdata.diff、通常出力では差分本文。既定試行で記録済みパッチの不在をAPI確認できた場合はdiff:nullとdiff_available:falseであり、変更ゼロを意味しません。CLI出力は最大16 MiBで、超過時は切り詰めた成功を返しません。",
-      "environments listは従来型Cloudタスク用環境のID・名前・リポジトリ・既定ブランチを返します。新世代Cloud環境設定を含む全サービスの一覧ではなく、掲載は実行成功の保証ではありません。環境変数・secrets・セットアップ内容は返しません。",
-      "一覧・read/watch/send/reconcileは公式App ServerのgetAuthStatusから認証を取得し、公式クラウドAPIへ接続します。トークンはメモリ内だけで使い、保存・表示・認証ファイルの直接解析はしません。認証方式が未対応なら停止します。",
-      "sendは完了ターンへの継続指示です。readで得た同じタスクのturn_idとcursorを必須照合し、実行中の割込みは拒否します。受付と履歴保存は別なのでreconcileで親ターンと本文SHA256を照合してください。unknownは自動再送せず、未解決の配送は次の送信も止めます。",
-      "watchは読み取りだけの定期照会です。間隔は既定5000、1000〜60000ms。streamは変更をNDJSONで返し、期限で終了します。切断は成功扱いせず、再接続時はreadから再開してください。DesktopのMonitor・監督登録・pause/stop・findingsはクラウドには適用しません。",
-      "クラウドIDはDesktopのUUID/hostIdリンクと別体系です。差分適用・環境作成は未対応。--host/--remote-transport/--context-thread、--supervisor、観測専用--connection desktopとの併用は拒否します。docs/cloud.mdを参照してください。"],
+    title: "共通の操作体系でCodex Cloudを使う",
+    when: "Cloudの環境・タスクを選び、既存と同じ監督・観測・介入・指摘管理を使うとき。",
+    usage: ["--connection cloud projects list", "--connection cloud threads list [--limit N] [--cursor CURSOR] [--env ENV_ID]", "--connection cloud thread create --project ENV_ID_OR_NAME [--branch BRANCH] [--dry-run] <MESSAGE...>|-", "supervise <CLOUD_TASK_ID|URL> [POLICY] [--agent claude|codex] [--use-path-cli] [-- <AGENT_ARGS...>]", "read <CLOUD_TASK_ID|URL> [--since CURSOR] [--include-output]", "watch <CLOUD_TASK_ID|URL> [--stream --notify digest|all] [--since CURSOR]", "send <CLOUD_TASK_ID|URL> <MESSAGE...>|- [--new-turn] [--based-on CURSOR] [--finding ID]", "supervise status|pause|resume|stop <CLOUD_TASK_ID|URL>", "history list|show|check|mark <CLOUD_TASK_ID|URL> ...", "instructions list|retract <CLOUD_TASK_ID|URL> ...", "findings create|list|show|resolve|dismiss|reopen|evaluate|stats <CLOUD_TASK_ID|URL> ...", "cloud receipt <ATTEMPT_ID>", "cloud diff <TASK_ID|URL> [--attempt N]"],
+    returns: "共通のthread_id・status・events・cursor・has_more・配送履歴・監督状態。Cloudの実IDを保持し、Desktopへ接続しません。",
+    examples: ["codexteer --connection cloud projects list --json", "codexteer --connection cloud thread create --project env_example --branch main 'テストを追加してください' --json", "codexteer supervise task_example --agent claude", "codexteer read task_example --include-output --json", "codexteer supervise pause task_example --json", "codexteer history check task_example <MESSAGE_ID> --json"],
+    notes: ["Cloud ID/公式リンクから接続先を自動判定します。宛先未指定の一覧・作成は--connection cloudを使います。--host/--remote-transport/--context-threadやDesktop UIへの自動フォールバックは拒否します。",
+      "公式CLI 0.157.1+とChatGPTログインが必要です。認証は公式App Serverからメモリ内で取得し、認証ファイルの直接解析・トークンの保存/表示は行いません。",
+      "通常sendは実行中の親ターンを指定し、中断して同じタスクの後続ターンを開始します。停止中の再開はユーザーが許可した場合だけ--new-turnを使います。親IDとユーザー入力の鮮度を再確認しますが、サーバー側の原子的な固定は保証しません。",
+      "監督登録・pause/resume/stop・指摘の重複介入防止・history check・指示の置換/撤回は共通です。全監督コマンドに生成された--supervisorと--connection cloudを保持します。pauseは送信を、stopは観測と送信を拒否し、Cloud作業自体は取り消しません。",
+      "共通watch --streamは終了まで動き、既存Monitorのdigest・接続通知・復帰待ちを使います。単発watchは既定30秒、Cloud照会の既定間隔は5000msです。応答は16 MiBで上限超過を切り詰めず拒否します。",
+      "共通sendはローカルと同じ私有ジャーナルに本文を保存します。受付・保存・要求達成は別です。unknown/not_observedから自動再送せず、未解決のCloud配送は先に照合します。",
+      "checkpoint/resourceは明示したローカル入力・成果物・コマンドを扱い、Cloudファイルがマウントされたとは仮定しません。Cloud作成の未確認のモデル・タイトル・ローカル権限上書きは無視せず拒否します。",
+      "旧cloud create/read/watch/send/reconcile/status/diffは互換用です。旧cloud_v1カーソルと共通readカーソルは混ぜず、新しい監督では共通コマンドを使います。記録済み差分がない場合はdiff_available:falseであり、変更ゼロの証明ではありません。docs/cloud.mdを参照してください。"],
   },
 };
 
 export function helpData(topic = "overview") {
   const data = topics[topic];
   if (!data) throw new Error(`Unknown help topic: ${topic}. Run codexteer help.`);
-  return { version: VERSION, topic, ...data, ...(topic === "overview" ? { usage: [...data.usage, "history list|show|check|mark <THREAD> ...", "instructions list|retract <THREAD> ...", "checkpoint capture|run|attach|verify|list|show <THREAD> ...", "resource acquire|status|list|renew|release|run ...", "findings create|list|show|resolve|dismiss|reopen|evaluate|stats <THREAD> ...", "--connection shared|desktop <COMMAND> ..."] } : {}) };
+  return { version: VERSION, topic, ...data, ...(topic === "overview" ? { usage: [...data.usage, "history list|show|check|mark <THREAD> ...", "instructions list|retract <THREAD> ...", "checkpoint capture|run|attach|verify|list|show <THREAD> ...", "resource acquire|status|list|renew|release|run ...", "findings create|list|show|resolve|dismiss|reopen|evaluate|stats <THREAD> ...", "--connection shared|desktop|cloud <COMMAND> ..."] } : {}) };
 }
 
 export function renderHelp(data) {

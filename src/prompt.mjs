@@ -1,4 +1,4 @@
-import { normalizeThreadId } from "./thread-id.mjs";
+import { normalizeTaskId } from "./task-id.mjs";
 
 export const DEFAULT_SUPERVISION_POLICY = [
   "ユーザーの最新の目的・制約の範囲内で、観測に基づく必要最小限の軌道修正と、その結果の確認を委任します。委任された範囲では送信内容とタイミングを判断し、介入のたびに確認を求めません。",
@@ -18,7 +18,7 @@ export function validateSupervisionPolicy(policy) {
 
 // Shared by the generated prompt and help monitor. Keep monitoring preferences
 // in the selected policy; these sections describe mandatory mechanics only.
-export function supervisionSteps(thread = "<THREAD>", command = "codexteer", owner = "claude", observationOnly = false, { usePathCli = false } = {}) {
+export function supervisionSteps(thread = "<THREAD>", command = "codexteer", owner = "claude", observationOnly = false, { usePathCli = false, cloud = false } = {}) {
   const steps = [
     `2. 必ず守ること
 - 監視の観点・介入の判断基準・報告方法は指定された監督方針に従います。監視だけを指示されている場合は送信しません。目的・制約が不明な場合や要件自体の変更が必要な場合は確認してください。
@@ -92,20 +92,25 @@ ${command}
     steps[4] = "6. 介入の手順\n観測結果と懸念をユーザーへ報告します。操作範囲は第2節に従ってください。";
     steps[5] = "7. 結果の確認と記録\n既存の実行結果・差分を参照し、確認できた結果と未確認事項を区別して報告してください。";
   }
+  if (cloud) {
+    steps[0] += "\n- 対象はCodex Cloudです。Desktopや別アカウントへ切り替えず、同じCODEX_HOMEの公式CLI認証を使います。クラウド作業コピーはローカルにマウントされていません。checkpoint等のローカルコマンドの成功を、クラウド側のファイル検証と取り違えないでください。";
+    steps[4] += "\nCloudの通常sendは、実行中の指定ターンを中断して同じタスクの後続ターンを開始する方式です。ローカルと同じターンIDのまま進むとは仮定せず、delivery_action、親ターン、history checkと新しいreadで結果を照合してください。サーバー側で読取りと送信を原子的に固定する契約はなく、送信直前に再確認します。停止中の継続には、方針で再開が許可された場合だけ--new-turnを付けます。";
+    steps[1] = steps[1].replaceAll("対象Desktopと同じプロファイル", "公式CLIの同じChatGPTプロファイル");
+  }
   return steps;
 }
 
 export function supervisorPrompt(threadInput, command, policy, supervisor = { owner: "claude" }, { usePathCli = false } = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   validateSupervisionPolicy(policy);
   if (typeof command !== "string" || !command) throw new Error("A prepared supervision command is required.");
   return {
     thread_id: threadId,
     prompt: [
-      "1. 役割と監督方針\nあなたはCodex Desktopタスクの監督役（オーケストレーター）です。codexteerで次のタスクを継続監督してください。",
+      `1. 役割と監督方針\nあなたはCodex ${supervisor.connection === "cloud" ? "Cloud" : "Desktop"}タスクの監督役（オーケストレーター）です。codexteerで次のタスクを継続監督してください。`,
       `対象タスク: ${threadId}`,
       policy ?? (supervisor.connection === "desktop" ? "最新のユーザーの目的・制約と進捗を観測し、問題・確認できた結果・未確認事項を短く報告してください。変化のない定期報告は控え、タスク停止時に最後の差分を整理してください。" : DEFAULT_SUPERVISION_POLICY),
-      ...supervisionSteps(threadId, command, supervisor.owner, supervisor.connection === "desktop", { usePathCli }),
+      ...supervisionSteps(threadId, command, supervisor.owner, supervisor.connection === "desktop", { usePathCli, cloud: supervisor.connection === "cloud" }),
     ].join("\n\n"),
   };
 }

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { normalizeThreadId } from "./thread-id.mjs";
+import { normalizeTaskId, isCloudTask, taskConnection } from "./task-id.mjs";
+import { cloudConnection } from "./cloud-connection.mjs";
 import { discoverRuntime } from "./runtime.mjs";
 import { RpcClient, RpcFailure } from "./rpc.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
@@ -152,7 +153,13 @@ export async function readOnClient(client, threadId, options = {}) {
 }
 
 export async function observeThread(threadInput, options = {}, { discover = discoverRuntime, connect = RpcClient.connect, sleep = delay, now = () => performance.now() } = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
+  if (isCloudTask(threadId)) {
+    options = { ...options, connection: taskConnection(threadId, options.connection) };
+    const cloud = cloudConnection();
+    if (discover === discoverRuntime) discover = cloud.discover;
+    if (connect === RpcClient.connect) connect = cloud.connect;
+  }
   if (options.supervisor) await assertSupervisor(threadId, options.supervisor, { connection: options.connection });
   if (options.since) decodeCursor(options.since, threadId);
   let client;

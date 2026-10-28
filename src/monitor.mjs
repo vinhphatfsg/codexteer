@@ -1,5 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { normalizeThreadId } from "./thread-id.mjs";
+import { normalizeTaskId, isCloudTask, taskConnection } from "./task-id.mjs";
+import { cloudConnection } from "./cloud-connection.mjs";
 import { codexHome, discoverRuntime } from "./runtime.mjs";
 import { RpcClient } from "./rpc.mjs";
 import { decodeCursor, digest, readOnClient } from "./observe.mjs";
@@ -13,7 +14,13 @@ const needsReview = new Set(["STALE_CURSOR", "CURSOR_UPGRADE_REQUIRED", "OBSERVA
 // The consumer owns the watch lifetime. A flushed cursor is a transport boundary,
 // not an acknowledgement that a supervising AI has read or acted on the output.
 export async function streamThread(threadInput, options, onChange, { discover = discoverRuntime, connect = RpcClient.connect, sleep = delay, now = () => performance.now() } = {}) {
-  const threadId = normalizeThreadId(threadInput), { signal, pollMs = 1000, reconnectTimeoutMs = 60000 } = options;
+  const threadId = normalizeTaskId(threadInput), { signal, pollMs = 1000, reconnectTimeoutMs = 60000 } = options;
+  if (isCloudTask(threadId)) {
+    options = { ...options, connection: taskConnection(threadId, options.connection) };
+    const cloud = cloudConnection();
+    if (discover === discoverRuntime) discover = cloud.discover;
+    if (connect === RpcClient.connect) connect = cloud.connect;
+  }
   if (!Number.isInteger(pollMs) || pollMs < 250 || pollMs > 10000) throw new Error("--poll-ms must be between 250 and 10000.");
   if (!Number.isInteger(reconnectTimeoutMs) || reconnectTimeoutMs < 1 || reconnectTimeoutMs > 60000) throw new Error("Invalid reconnect timeout.");
   const notification = notificationOptions(options);

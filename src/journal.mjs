@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sendAppServerMessage } from "./app-server.mjs";
-import { normalizeThreadId } from "./thread-id.mjs";
+import { normalizeTaskId, isCloudTask } from "./task-id.mjs";
+import { reconcileCloudSend } from "./cloud-observe.mjs";
 import { digest, fetchThread } from "./observe.mjs";
 import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
 import { discoverRuntime } from "./runtime.mjs";
@@ -10,7 +11,7 @@ import { prepareDirective } from "./directive.mjs";
 import { assertSupervisor, withSupervisedSend } from "./supervision.mjs";
 
 export async function getMessage(threadInput, id, options = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   const entry = await readRecord("messages", id, options);
   if (!entry || entry.thread_id !== threadId || entry.id !== id || entry.schema !== 1) throw new Error("Message record not found for this task.");
   return entry;
@@ -22,7 +23,7 @@ export function messageSummary(entry, includeText = false) {
 }
 
 export async function listMessages(threadInput, { includeText = false, pending = false, ...options } = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   return (await listRecords("messages", options)).filter(e => e?.thread_id === threadId && (!pending || !["applied", "dismissed"].includes(e.response?.status)))
     .sort((a, b) => a.created_at.localeCompare(b.created_at)).map(e => messageSummary(e, includeText));
 }
@@ -39,7 +40,7 @@ export function instructionStates(entries, now = Date.now()) {
 }
 
 export async function listInstructions(threadInput, { all = false, ...options } = {}) {
-  const threadId = normalizeThreadId(threadInput), entries = instructionStates(await listMessages(threadId, { ...options, includeText: true }));
+  const threadId = normalizeTaskId(threadInput), entries = instructionStates(await listMessages(threadId, { ...options, includeText: true }));
   return { thread_id: threadId, instructions: entries.filter(e => all || e.instruction_status === "active"), pending_changes: entries.filter(e => e.instruction_status === "pending_delivery") };
 }
 
@@ -53,7 +54,7 @@ async function validateReplacement(threadId, options, storage) {
 }
 
 export async function sendTrackedMessage(threadInput, body, options = {}, { send = sendAppServerMessage, ...storage } = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   if (options.supervisor && !options.basedOn) throw Object.assign(new Error("Supervised sends require --based-on from a completed read."), { code: "SUPERVISOR_OBSERVATION_REQUIRED" });
   if (options.supervisor && !options.finding && !options.retracts) throw Object.assign(new Error("Supervised sends require --finding so pending interventions can be tracked and deduplicated."), { code: "SUPERVISOR_FINDING_REQUIRED" });
   if (options.dryRun) {
@@ -80,6 +81,7 @@ export async function sendTrackedMessage(threadInput, body, options = {}, { send
       return { ...receipt, message_id: id };
     } catch (error) {
       entry = { ...entry, sent: Object.hasOwn(error, "sent") ? error.sent : error.uncertain ? null : false, delivery_status: error.delivery_status ?? (error.uncertain ? "unknown" : "not_sent"), attempt_state: "finished", updated_at: new Date().toISOString(), error_code: error.code ?? "NOT_SENT" };
+      if (isCloudTask(threadId)) Object.assign(entry, { cloud_attempt_id: error.cloud_attempt_id, cloud_parent_turn_id: error.cloud_parent_turn_id });
       try { await writeRecord("messages", id, entry, storage); } catch { error.journal_update_required = true; }
       error.client_message_id = id; error.message_id = id;
       error.delivery_status = entry.delivery_status; error.sent = entry.sent;
@@ -89,7 +91,22 @@ export async function sendTrackedMessage(threadInput, body, options = {}, { send
 }
 
 export async function reconcileMessages(threadInput, id, options = {}, { discover = discoverRuntime, connect = RpcClient.connect } = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
+  if (isCloudTask(threadId)) {
+    const entries = id ? [await getMessage(threadId, id, options)] : await listMessages(threadId, { ...options, includeText: true });
+    const result = [];
+    for (const entry of entries) {
+      const receipt = entry.cloud_attempt_id ? await reconcileCloudSend(entry.cloud_attempt_id) : null;
+      const verification = { status: receipt?.delivery_verification === "stored" ? "stored" : "not_observed", checked_at: new Date().toISOString(),
+        matching_items: receipt?.delivery_verification === "stored" ? 1 : 0, turn_id: receipt?.user_turn_id ?? null, basis: "cloud-parent-and-prompt-digest" };
+      result.push(await withStoreLock(`message-${threadId}`, async () => {
+        const current = await getMessage(threadId, entry.id, options);
+        const updated = { ...current, verification, updated_at: verification.checked_at, ...(verification.status === "stored" ? { delivery_status: "accepted", sent: true, turn_id: verification.turn_id } : {}) };
+        await writeRecord("messages", entry.id, updated, options); return messageSummary(updated, options.includeText);
+      }, options));
+    }
+    return result;
+  }
   // Validate the local target before connecting.
   if (id) await getMessage(threadId, id, options);
   const { paths, state } = await discover();
@@ -116,7 +133,7 @@ export async function reconcileMessages(threadInput, id, options = {}, { discove
 }
 
 export async function markMessage(threadInput, id, { status, note, evidence = [], by = "local", ...options }) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   if (!["acknowledged", "applied", "dismissed"].includes(status) || !note?.trim() || !by?.trim()) throw new Error("mark requires --status acknowledged|applied|dismissed and a non-empty --note.");
   if (status === "applied" && !evidence.length) throw new Error("applied requires --evidence (a test result, diff or artifact reference).");
   return withStoreLock(`message-${threadId}`, async () => {
