@@ -137,7 +137,16 @@ const input = fs.readFileSync(0, 'utf8');
 fs.appendFileSync(process.env.FIXTURE_LOG, JSON.stringify({args,input}) + '\\n');
 if (args.includes('--help')) { console.log('Usage: codex cloud ' + args[1] + ' --env ENV --branch BRANCH --attempts N --attempt N'); }
 else if (args[1] === '--version') { console.log('codex-cli-cloud 0.157.1'); }
-else if (args[1] === 'exec') { console.log('${URL}'); }
+else if (args[1] === 'exec') {
+  const failure = process.env.FIXTURE_ERROR_MODE;
+  if (!failure || failure.startsWith('confirmed')) console.log('${URL}');
+  if (failure === 'confirmed-receipt-failure') {
+    const bucket = process.env.CODEX_HOME + '/codex-steer/cloud-creations';
+    fs.renameSync(bucket, bucket + '.saved');
+    fs.writeFileSync(bucket, 'blocked fixture', {mode:0o600});
+  }
+  if (failure) { console.error('private fixture diagnostic'); process.exitCode = 1; }
+}
 else if (args[1] === 'status') { console.log('[PENDING] fixture'); process.exitCode = 1; }
 else if (args[1] === 'diff') { process.stdout.write('+日本語\\n'); }
 else { process.exitCode = 2; }
@@ -174,6 +183,29 @@ test("Desktop-bound, remote, duplicate, and unsupported cloud options fail befor
     assert.equal(result.code, 1); assert.equal(JSON.parse(result.stdout).ok, false);
   }
   await assert.rejects(readFile(f.log), { code: "ENOENT" });
+});
+
+test("JSON and human submission errors retain recovery IDs even if the final receipt cannot be saved", async t => {
+  for (const mode of ["unknown", "confirmed", "confirmed-receipt-failure"]) for (const json of [false, true]) {
+    const f = await fakeCli(t);
+    const result = await exec(process.execPath, ["bin/codexteer.mjs", ...(json ? ["--json"] : []), "cloud", "create", "--env", "env_fixture", "--branch", "main", "hidden fixture instruction"],
+      { env: { ...f.env, FIXTURE_ERROR_MODE: mode } }).then(() => null, error => error);
+    assert.equal(result.code, 1);
+    assert(!result.stderr.includes("hidden fixture instruction")); assert(!result.stderr.includes("private fixture diagnostic"));
+    if (json) {
+      const error = JSON.parse(result.stdout).error;
+      assert.match(error.attempt_id, /^[0-9a-f-]{36}$/); assert.equal(typeof error.receipt_path, "string");
+      assert.equal(error.task_id, mode.startsWith("confirmed") ? ID : undefined);
+      assert.equal(error.receipt_update_required, mode.endsWith("receipt-failure") ? true : undefined);
+    } else {
+      assert.equal(result.stdout, ""); assert.match(result.stderr, /attempt_id: "[0-9a-f-]{36}"/);
+      assert(result.stderr.includes(`receipt_path: "${f.home}/codex-steer/cloud-creations/`));
+      if (mode.startsWith("confirmed")) { assert(result.stderr.includes(`task_id: "${ID}"`)); assert(result.stderr.includes(`url: "${URL}"`)); }
+      if (mode.endsWith("receipt-failure")) assert(result.stderr.includes("receipt_update_required: true"));
+    }
+    const calls = (await readFile(f.log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    assert.equal(calls.filter(call => call.args[1] === "exec" && !call.args.includes("--help")).length, 1);
+  }
 });
 
 test("real subprocess adapter handles UTF-8, timeout, output bounds, and missing CLI without diagnostics", async t => {

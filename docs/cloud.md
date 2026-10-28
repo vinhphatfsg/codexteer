@@ -36,6 +36,8 @@ codex cloud list --env env_example --json
 
 最終記録の保存に失敗しても、確認できたIDと受付結果を返し、`receipt_update_required: true`を付けます。記録を直す目的でタスクを作り直さないでください。
 
+送信後の失敗では、通常表示のstderrにも試行ID・記録先・作成/受付状態と、判明済みのタスクID・URLを表示します。最終記録を保存できなくても画面に出たIDから確認を続けられます。指示本文や公式CLIの生の診断は表示しません。
+
 ## 状態・差分
 
 `cloud status`と`cloud diff`は`task_...`形式のID、または`https://chatgpt.com/codex/tasks/...`を受け付けます。リンクのクエリ・フラグメントは送信せず、タスクIDだけを公式CLIへ渡します。

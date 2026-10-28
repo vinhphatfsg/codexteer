@@ -44,7 +44,17 @@ export function fail(error, json) {
     creation_status: error.creation_status, attempt_id: error.attempt_id, receipt_update_required: error.receipt_update_required,
     native_call_id: error.native_call_id,
   } }));
-  else console.error(`codexteer: ${message}`);
+  else {
+    console.error(`codexteer: ${message}`);
+    if (error.execution_environment === "cloud") {
+      // Recovery metadata must survive an uncertain submission or a stale
+      // on-disk receipt. Never print the child error, prompt, or diagnostics.
+      for (const key of ["creation_status", "submission_status", "attempt_id", "receipt_path", "task_id", "url"]) {
+        if (typeof error[key] === "string") console.error(`${key}: ${JSON.stringify(error[key])}`);
+      }
+      if (error.receipt_update_required) console.error("receipt_update_required: true");
+    }
+  }
   process.exitCode = 1;
 }
 
