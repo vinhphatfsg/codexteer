@@ -126,6 +126,15 @@ test("diff preserves bytes, selects attempts explicitly, and never applies chang
   for (const attempt of [0, 5, 1.5, "1"]) await assert.rejects(cloudTaskDiff(ID, { attempt }));
 });
 
+test("diff distinguishes a finished task without a server patch from no working-copy changes", async () => {
+  const f = fixtureRun({ exitCode: 1, stdout: "" });
+  const request = async () => ({ task: { id: ID }, current_diff_task_turn: null, current_assistant_turn: { role: "assistant", turn_status: "completed", output_items: [{ type: "message" }] } });
+  const result = await cloudTaskDiff(ID, {}, { run: f.run, request });
+  assert.equal(result.diff, null); assert.equal(result.diff_available, false); assert.equal(result.local_changes, "unknown");
+  await assert.rejects(cloudTaskDiff(ID, {}, { run: f.run, request: async () => ({ task: { id: "task_other" } }) }), { code: "CLOUD_CLI_FAILED" });
+  await assert.rejects(cloudTaskDiff(ID, { attempt: 1 }, { run: f.run, request: () => { throw new Error("must not infer another attempt"); } }), { code: "CLOUD_CLI_FAILED" });
+});
+
 async function fakeCli(t) {
   const root = await mkdtemp("/private/tmp/codexteer-cloud-test-"); t.after(() => rm(root, { recursive: true, force: true }));
   const bin = path.join(root, "bin"), home = path.join(root, "home"), log = path.join(root, "calls.jsonl");
@@ -134,7 +143,8 @@ async function fakeCli(t) {
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 const input = fs.readFileSync(0, 'utf8');
-fs.appendFileSync(process.env.FIXTURE_LOG, JSON.stringify({args,input}) + '\\n');
+fs.appendFileSync(process.env.FIXTURE_LOG, JSON.stringify({args,input,cwd:process.cwd(),startingDiff:process.env.CODEX_STARTING_DIFF}) + '\\n');
+fs.writeFileSync('error.log', 'private fixture diagnostic');
 if (args.includes('--help')) { console.log('Usage: codex cloud ' + args[1] + ' --env ENV --branch BRANCH --attempts N --attempt N'); }
 else if (args[1] === '--version') { console.log('codex-cli-cloud 0.157.1'); }
 else if (args[1] === 'exec') {
@@ -157,6 +167,7 @@ else { process.exitCode = 2; }
 
 test("CLI roundtrip uses a fake executable with isolated HOME and retrieves private receipts", async t => {
   const f = await fakeCli(t), invoke = async (args, input) => JSON.parse((await exec(process.execPath, ["bin/codexteer.mjs", "--json", ...args], { env: f.env, input })).stdout);
+  f.env.CODEX_STARTING_DIFF = "private fixture starting diff";
   const created = await invoke(["cloud", "create", "--env", "env_fixture", "--branch", "main", "-"], "日本語\n$(literal)");
   assert.equal(created.command, "cloud.create"); assert.equal(created.data.task_id, ID);
   const saved = JSON.parse(await readFile(created.data.receipt_path)); assert.equal(saved.task_id, ID); assert.equal((await stat(created.data.receipt_path)).mode & 0o777, 0o600);
@@ -167,6 +178,8 @@ test("CLI roundtrip uses a fake executable with isolated HOME and retrieves priv
   const calls = (await readFile(f.log, "utf8")).trim().split("\n").map(s => JSON.parse(s));
   assert.equal(calls.filter(c => c.args[1] === "exec" && !c.args.includes("--help")).length, 1);
   const dispatch = calls.find(c => c.args[1] === "exec" && !c.args.includes("--help"));
+  assert.notEqual(dispatch.cwd, process.cwd()); assert.equal(dispatch.startingDiff, undefined);
+  await assert.rejects(stat(dispatch.cwd), { code: "ENOENT" });
   assert.equal(dispatch.input, "日本語\n$(literal)"); assert(!JSON.stringify(dispatch.args).includes("literal"));
   const before = calls.length;
   for (const args of [["cloud", "create", "--env", "env_fixture", "--branch", "main", "--dry-run", "fixture"], ["cloud", "--help"]]) await invoke(args);

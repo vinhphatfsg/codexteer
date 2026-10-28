@@ -1,6 +1,10 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { readRecord, storePath, writeRecord } from "./store.mjs";
+import { cloudApi } from "./cloud-api.mjs";
 
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code });
 const taskPattern = /^task_[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/;
@@ -43,13 +47,19 @@ function options(settings = {}) {
 
 // No shell, authentication parsing, automatic installation, or Desktop fallback.
 // Prompt input goes through stdin, never the child argv or an on-disk prompt file.
-export function runCloudCli(args, { input = "", timeoutMs = 120000, maxBytes = 16 * 1024 * 1024 } = {}) {
-  return new Promise(resolve => {
+export async function runCloudCli(args, { input = "", timeoutMs = 120000, maxBytes = 16 * 1024 * 1024 } = {}) {
+  let directory;
+  try { directory = await mkdtemp(path.join(os.tmpdir(), "codexteer-cloud-cli-")); }
+  catch { return { started: false, launchError: "PRIVATE_DIRECTORY_UNAVAILABLE" }; }
+  // The official cloud CLI can write error.log in cwd, including backend data.
+  // Do not place it in a user's checkout or package. Remove the private cwd.
+  const environment = { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0", CLICOLOR: "0", TERM: "dumb" };
+  delete environment.CODEX_STARTING_DIFF;
+  try { return await new Promise(resolve => {
     let child, started = false, stdout = "", bytes = 0, timedOut = false, overflow = false, ioError = false, launchError, killTimer;
     const signals = ["SIGINT", "SIGTERM", "SIGHUP"], handlers = new Map();
     try {
-      child = spawn("codex", ["cloud", ...args], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
-        env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0", CLICOLOR: "0", TERM: "dumb" } });
+      child = spawn("codex", ["cloud", ...args], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true, cwd: directory, env: environment });
     } catch (error) { resolve({ started, launchError: error.code }); return; }
     child.once("spawn", () => { started = true; });
     child.once("error", error => { launchError = error.code ?? "SPAWN_ERROR"; });
@@ -70,7 +80,7 @@ export function runCloudCli(args, { input = "", timeoutMs = 120000, maxBytes = 1
       resolve({ started, stdout, exitCode, signal, timedOut, overflow, ioError, launchError });
     });
     child.stdin.end(input);
-  });
+  }); } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
 function completed(result) { return !result.launchError && !result.signal && !result.timedOut && !result.overflow && !result.ioError; }
@@ -148,19 +158,31 @@ export async function cloudTaskStatus(target, settings = {}, { run = runCloudCli
   return { backend: "codex-cli", execution_environment: "cloud", task_id: taskId, url: taskUrl(taskId), status: match[1].toLowerCase(), output: result.stdout };
 }
 
-export async function cloudTaskDiff(target, settings = {}, { run = runCloudCli } = {}) {
+export async function cloudTaskDiff(target, settings = {}, { run = runCloudCli, request = cloudApi } = {}) {
   const taskId = cloudTaskId(target), limits = options(settings);
   if (settings.attempt !== undefined && (!Number.isInteger(settings.attempt) || settings.attempt < 1 || settings.attempt > 4)) throw failure("--attempt must be 1..4.");
   await preflight("diff", run);
   const result = await run(["diff", taskId, ...(settings.attempt === undefined ? [] : ["--attempt", String(settings.attempt)])], limits);
+  if (completed(result) && result.exitCode === 1 && settings.attempt === undefined) {
+    // A finished task may have commands/files but no recorded patch. Verify
+    // this through the same task's API; never turn stderr into a diff or infer
+    // that no files changed from the absence of a server-provided patch.
+    const details = await request(`tasks/${taskId}`, limits);
+    const current = details.current_assistant_turn;
+    if (details.task?.id === taskId && current?.role === "assistant" && ["completed", "failed", "cancelled"].includes(current.turn_status)
+      && details.current_diff_task_turn == null && Array.isArray(current.output_items) && !current.output_items.some(item => ["output_diff", "pr"].includes(item?.type))) {
+      return { backend: "codex-api", execution_environment: "cloud", task_id: taskId, url: taskUrl(taskId), attempt: null,
+        attempt_selection: "official-cli-default", diff: null, diff_available: false, reason: "no-server-recorded-patch", local_changes: "unknown" };
+    }
+  }
   if (!completed(result) || result.exitCode !== 0) throw cliFailure(result);
   return { backend: "codex-cli", execution_environment: "cloud", task_id: taskId, url: taskUrl(taskId), attempt: settings.attempt ?? null,
-    attempt_selection: settings.attempt === undefined ? "official-cli-default" : "explicit", diff: result.stdout };
+    attempt_selection: settings.attempt === undefined ? "official-cli-default" : "explicit", diff: result.stdout, diff_available: true };
 }
 
 export async function cloudCreationReceipt(attemptId) {
   if (typeof attemptId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(attemptId)) throw failure("A cloud creation attempt UUID is required.");
-  const receipt = await readRecord("cloud-creations", attemptId);
+  const receipt = await readRecord("cloud-creations", attemptId) ?? await readRecord("cloud-messages", attemptId);
   if (!receipt) throw failure("Cloud creation receipt was not found.", "CLOUD_RECEIPT_NOT_FOUND");
   return receipt;
 }

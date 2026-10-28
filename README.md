@@ -46,7 +46,7 @@ npx -y codexteer@0.17.0 supervise <thread-id>
 
 ### Codex Cloudを使う
 
-Codex Cloudへの作成は`cloud create --env <ENV_ID> --branch <BRANCH> <MESSAGE>`を使います。返されたタスクIDで`cloud status`・`cloud diff`を実行できます。PATH上の公式Codex CLIとクラウドのログイン・環境設定が必要で、Desktopの起動は不要です。[クラウド操作と制限](docs/cloud.md)
+`cloud environments list --json`で従来型Cloudタスク用環境のID・名前・リポジトリ・既定ブランチを確認し、`cloud create --env <ENV_ID> --branch <BRANCH> <MESSAGE>`で作成します。同じタスクIDで`cloud read`・`cloud watch`・`cloud status`・`cloud diff`を使えます。完了ターンへの継続指示は`cloud send --turn <TURN_ID> --based-on <CURSOR>`、配送照合は`cloud reconcile <ATTEMPT_ID>`です。PATH上の公式Codex CLIとChatGPTログインが必要で、Desktopの起動は不要です。[クラウド操作と制限](docs/cloud.md)
 
 ### ソースから導入する
 
