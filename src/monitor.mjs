@@ -35,7 +35,7 @@ export async function streamThread(threadInput, options, onChange, { discover = 
     last_observed_at: lastObservedAt, observed_at: new Date().toISOString(), reconnect_attempts: attempts, ...extra,
   });
   const expired = () => Object.assign(new Error("Watch could not restore observation within the reconnect deadline. Check doctor before restarting from a reviewed cursor."), {
-    code: "WATCH_RECONNECT_TIMEOUT", cause_code: lastFailure?.code,
+    code: "WATCH_RECONNECT_TIMEOUT", cause_code: lastFailure?.cause_code ?? lastFailure?.code,
   });
   const cancel = () => { attempt?.abort(new Error("Watch cancelled.")); client?.close(); };
   signal?.addEventListener("abort", cancel, { once: true });
@@ -86,9 +86,11 @@ export async function streamThread(threadInput, options, onChange, { discover = 
         if (outageStarted === null) {
           outageStarted = now(); attempts = 0; backoff = 1000;
           await flush("reconnecting");
-          await onChange(connection("reconnecting", { cause_code: error.code, retry_timeout_ms: reconnectTimeoutMs }));
+          await onChange(connection("reconnecting", { cause_code: error.cause_code ?? error.code, retry_timeout_ms: reconnectTimeoutMs,
+            ...(error.retry_after_ms === undefined ? {} : { retry_after_ms: error.retry_after_ms }) }));
         }
-        await sleep(Math.max(0, Math.min(backoff, reconnectTimeoutMs - (now() - outageStarted))), undefined, { signal });
+        const retryAfter = Number.isSafeInteger(error.retry_after_ms) && error.retry_after_ms > 0 ? error.retry_after_ms : 0;
+        await sleep(Math.max(0, Math.min(Math.max(backoff, retryAfter), reconnectTimeoutMs - (now() - outageStarted))), undefined, { signal });
         if (now() - outageStarted >= reconnectTimeoutMs) throw expired();
         backoff = Math.min(backoff * 2, 10000); attempts++;
         continue;

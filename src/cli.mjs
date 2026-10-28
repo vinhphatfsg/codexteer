@@ -37,6 +37,7 @@ export function fail(error, json) {
       execution_environment: error.execution_environment, task_id: error.task_id, url: error.url,
       submission_status: error.submission_status, uncertain: error.uncertain,
       cli_exit_code: error.cli_exit_code, cli_signal: error.cli_signal,
+      http_status: error.http_status, retry_after_ms: error.retry_after_ms,
     } : {}),
     sent: error.sent, thread_id: error.thread_id, rpc_code: error.rpc_code ?? error.rpcCode,
     message_id: error.message_id, client_message_id: error.client_message_id, journal_update_required: error.journal_update_required,
@@ -57,6 +58,7 @@ export function fail(error, json) {
       }
       if (error.receipt_update_required) console.error("receipt_update_required: true");
       if (error.reservation_cleanup_required) console.error("reservation_cleanup_required: true");
+      if (Number.isSafeInteger(error.retry_after_ms)) console.error(`retry_after_ms: ${error.retry_after_ms}`);
     }
   }
   process.exitCode = 1;

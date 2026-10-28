@@ -46,6 +46,7 @@ export function project(item, turnId) {
     event.attachments = (item.content ?? []).filter(x => x.type !== "text").map(x => ({ type: x.type, path: x.path ?? null, url: x.url ?? null }));
   } else if (item.type === "agentMessage" || item.type === "plan") {
     event.text = item.text; event.phase = item.phase ?? null;
+    if (typeof item.status === "string") event.status = item.status;
     if (item.questions) event.questions = item.questions;
   } else if (item.type === "commandExecution") {
     Object.assign(event, { command: item.command, cwd: item.cwd, status: item.status, exit_code: item.exitCode ?? null, output: item.aggregatedOutput ?? "" });

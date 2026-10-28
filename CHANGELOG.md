@@ -2,6 +2,8 @@
 
 ## 0.17.0 — 未公開
 
+- 共通Cloud観測で公開commentaryの途中経過を保持し、途中経過だけの更新でもMonitorへ通知します。reasoning等の非公開内容は除外し、`--backend app-server`を宛先より前に置く場合のCloud振り分けも修正しました。
+
 - Cloudタスクも共通の`supervise`・`read/watch`・`send`・`history/instructions/findings`で扱えます。監督の登録・pause/resume/stop・保存済みCLI・Monitorのdigestと復帰待ちを既存基盤へ接続し、実行中の指定ターンの中断と同一タスク内での継続、配送照合を追加しました。旧Desktop CLIとの記録互換性を保つCloud専用監督名前空間を使います。
 
 - 公式Codex CLIを使う独立した`cloud create/status/diff`を追加しました。環境とGitブランチを明示して新規タスクを作成し、ID・URL・状態・差分を取得できます。`cloud receipt`で作成記録を確認でき、結果不明時は自動再送しません。これら旧サブコマンドは互換用に維持し、差分をローカルへ適用しません。

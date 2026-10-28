@@ -18,7 +18,7 @@ import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, ve
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code, execution_environment: "cloud" });
-const values = new Set("--connection --supervisor --require-node-version --host --remote-transport --context-thread --thread --source --kind --evidence --based-on --finding --expires-at --supersedes --checkpoint --limit --max-chars --since --poll-ms --timeout-ms --until --notify --settle-ms --max-hold-ms --owner --key --condition --note --rating --reason --root --path --exclude --command --cwd --artifact --status --by --token --ttl-ms --agent --project --env --branch --title --model --thinking --cursor".split(" "));
+const values = new Set("--connection --supervisor --require-node-version --host --remote-transport --context-thread --thread --backend --source --kind --evidence --based-on --finding --expires-at --supersedes --checkpoint --limit --max-chars --since --poll-ms --timeout-ms --until --notify --settle-ms --max-hold-ms --owner --key --condition --note --rating --reason --root --path --exclude --command --cwd --artifact --status --by --token --ttl-ms --agent --project --env --branch --title --model --thinking --cursor".split(" "));
 function option(args, name, fallback) {
   const index = args.indexOf(name), stop = args.indexOf("--");
   if (index < 0 || (stop >= 0 && index > stop)) return fallback;

@@ -84,6 +84,13 @@ export async function cloudApi(route, { timeoutMs = 120000, credentials = cloudC
     });
     if (!response.ok) {
       await response.body?.cancel();
+      if (response.status === 429) {
+        const header = response.headers.get("retry-after"), seconds = header != null && /^\d+(?:\.\d+)?$/.test(header) ? Number(header) : null;
+        const after = seconds !== null ? Math.min(Number.MAX_SAFE_INTEGER, seconds * 1000) : header == null ? NaN : Date.parse(header) - Date.now();
+        throw Object.assign(failure("CLOUD_RATE_LIMITED", "Cloud requests are rate limited. Respect retry_after_ms before another read; no request was retried."), {
+          http_status: 429, retry_after_ms: Number.isFinite(after) ? Math.max(1000, Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(after))) : 15000,
+        });
+      }
       throw failure(response.status === 401 ? "CLOUD_LOGIN_REQUIRED" : response.status === 403 ? "CLOUD_ACCESS_DENIED" : "CLOUD_HTTP_FAILED", `Cloud request failed (HTTP ${response.status}). No response body or credentials were disclosed.`);
     }
     let bytes = 0; const chunks = [];

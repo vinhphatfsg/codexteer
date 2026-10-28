@@ -12,10 +12,12 @@ export function cloudThread(snapshot) {
   const turns = snapshot.turns.map(turn => ({ id: turn.turn_id, status: turn.role === "user" ? "completed" : status(turn.status), items: [
     ...turn.commands.map(command => ({ id: command.id, type: "commandExecution", command: command.command, cwd: null,
       status: status(command.status === "inProgress" ? "in_progress" : command.status), exitCode: command.exit_code, aggregatedOutput: command.output ?? "" })),
+    ...(turn.progress ?? []).map((message, index) => ({ id: `${turn.turn_id}:progress:${message.id === undefined ? `index:${index}` : `id:${message.id}`}`, type: "agentMessage",
+      phase: "commentary", status: status(turn.status), text: message.text })),
     ...turn.messages.map((message, index) => turn.role === "user"
       ? { id: `${turn.turn_id}:message:${index}`, type: "userMessage", clientId: null, cloudParentTurnId: turn.parent_turn_id,
         content: [{ type: "text", text: message.text }] }
-      : { id: `${turn.turn_id}:message:${index}`, type: "agentMessage", text: message.text }),
+      : { id: `${turn.turn_id}:message:${index}`, type: "agentMessage", phase: "final_answer", status: status(turn.status), text: message.text }),
   ] }));
   const active = turns.filter(turn => turn.status === "inProgress");
   return { id: taskId, name: snapshot.title ?? null, cwd: null, historyMode: "aggregate", canAcceptDirectInput: true,
@@ -39,8 +41,9 @@ export class CloudReadClient {
       if (params.includeTurns) this.cached = null;
       return { thread };
     } catch (error) {
-      const mapped = { CLOUD_CONNECTION_FAILED: "CONNECTION_FAILED", CLOUD_TIMEOUT: "TIMEOUT", CLOUD_AUTH_TIMEOUT: "TIMEOUT", CLOUD_STATE_CHANGED: "OBSERVATION_CHANGED", CLOUD_CANCELLED: "CANCELLED" }[error.code];
-      if (mapped) throw Object.assign(new Error(error.message), { code: mapped, cause_code: error.code });
+      const mapped = { CLOUD_CONNECTION_FAILED: "CONNECTION_FAILED", CLOUD_RATE_LIMITED: "CONNECTION_FAILED", CLOUD_TIMEOUT: "TIMEOUT", CLOUD_AUTH_TIMEOUT: "TIMEOUT", CLOUD_STATE_CHANGED: "OBSERVATION_CHANGED", CLOUD_CANCELLED: "CANCELLED" }[error.code];
+      if (mapped) throw Object.assign(new Error(error.message), { code: mapped, cause_code: error.code,
+        ...(error.retry_after_ms === undefined ? {} : { retry_after_ms: error.retry_after_ms }) });
       throw error;
     }
   }

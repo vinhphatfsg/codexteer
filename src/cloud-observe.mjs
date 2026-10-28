@@ -10,12 +10,38 @@ const validCursor = value => typeof value === "string" && /^cloud_v1:[a-f0-9]{64
 const validTurn = (task, value) => typeof value === "string" && value.startsWith(`${task}~`) && /^(?:usertrn|assttrn)_[A-Za-z0-9_-]{1,200}$/.test(value.slice(task.length + 1));
 export const cloudUserRevision = snapshot => digest(snapshot.turns.filter(turn => turn.role === "user").map(turn => ({ id: turn.turn_id, parent: turn.parent_turn_id, messages: turn.messages })));
 
-function texts(items, progress = false) {
-  return (Array.isArray(items) ? items : []).filter(item => item?.type === "message" || (progress && item && Array.isArray(item.content))).map(item => ({
+function texts(items) {
+  return (Array.isArray(items) ? items : []).filter(item => item?.type === "message").map(item => ({
     role: typeof item.role === "string" ? item.role : null,
     text: (Array.isArray(item.content) ? item.content : []).flatMap(part => typeof part === "string" ? [part]
       : part?.content_type === "text" && typeof part.text === "string" ? [part.text] : []).join("\n"),
   })).filter(item => item.text);
+}
+
+function publicProgress(items) {
+  return (Array.isArray(items) ? items : []).flatMap(item => {
+    const role = item?.role ?? item?.author?.role;
+    if (role !== "assistant" || ![undefined, null, "commentary"].includes(item.channel)
+      || item.type === "reasoning" || (item.recipient != null && item.recipient !== "all") || item.metadata?.is_visually_hidden_from_conversation === true
+      || (item.metadata?.reasoning_status != null && item.metadata?.is_thinking_preamble_message !== true)) return [];
+    let text;
+    if (Array.isArray(item.content)) text = texts([{ ...item, type: "message" }])[0]?.text;
+    else if (["text", "multimodal_text"].includes(item.content?.content_type) && Array.isArray(item.content.parts)) text = item.content.parts.filter(part => typeof part === "string").join("");
+    if (!text) return [];
+    return [{ ...(typeof item.id === "string" && item.id.length <= 512 && !/[\x00-\x1f]/u.test(item.id) ? { id: item.id } : {}), role: "assistant", text }];
+  });
+}
+
+function progress(turn) {
+  const items = publicProgress(turn.worklog?.messages), seen = new Set(items.flatMap(item => item.id === undefined ? [] : [item.id]));
+  const latest = new Map();
+  for (const event of [...(turn.thread_events?.events ?? []), ...(turn.app_server_events?.events ?? [])]) {
+    const item = event?.params?.item;
+    if (!["item/started", "item/completed"].includes(event?.method) || item?.type !== "agentMessage" || item.phase !== "commentary"
+      || typeof item.id !== "string" || !item.id || item.id.length > 512 || /[\x00-\x1f]/u.test(item.id) || typeof item.text !== "string" || !item.text) continue;
+    latest.set(item.id, { id: item.id, role: "assistant", text: item.text });
+  }
+  return [...items, ...[...latest.values()].filter(item => !seen.has(item.id))];
 }
 
 function commands(turn) {
@@ -50,7 +76,7 @@ export async function readCloudTask(target, settings = {}, { request = cloudApi 
   const turns = nodes.map(([id, node]) => ({ turn_id: id, parent_turn_id: node.parent ?? null,
     role: node.turn.role, status: node.turn.turn_status ?? null, created_at: node.turn.created_at ?? null,
     messages: texts(node.turn.input_items ?? node.turn.output_items),
-    progress: texts(node.turn.worklog?.messages, true),
+    progress: progress(node.turn),
     commands: commands(node.turn),
   })).sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.turn_id.localeCompare(b.turn_id));
   const snapshot = { task_id: taskId, turn_id: current.id, current_turn_id: history.current_turn_id, status: current.turn_status ?? "unknown",

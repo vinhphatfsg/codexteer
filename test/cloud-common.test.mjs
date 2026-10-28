@@ -9,14 +9,55 @@ import { cloudThread, CloudReadClient, cloudConnection } from "../src/cloud-conn
 import { sendCloudInput } from "../src/cloud-send.mjs";
 import { listCloudTasks } from "../src/cloud.mjs";
 import { streamThread } from "../src/monitor.mjs";
+import { readSnapshot } from "../src/observe.mjs";
 
 const task = "task_fixture_common", first = `${task}~assttrn_fixture_1`, user = `${task}~usertrn_fixture_1`;
 
 test("cloud dispatch selects the actual target and cannot reinterpret message text or weaken Desktop ID validation", () => {
-  for (const args of [["read",task],["send",task,"text"],["--supervisor","fixture","findings","create","--key","fixture",task],["supervise","prompt",task],["--connection","cloud","threads","list"],["doctor","--thread",task]]) assert.equal(cloudInvocation(args),true);
+  for (const args of [["read",task],["send",task,"text"],["send","--backend","app-server",task,"hello","--dry-run"],["doctor","--backend","app-server","--thread",task],["--supervisor","fixture","findings","create","--key","fixture",task],["supervise","prompt",task],["--connection","cloud","threads","list"],["doctor","--thread",task]]) assert.equal(cloudInvocation(args),true);
   for (const args of [["send","aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",task],["help","send"],["cloud","read",task],["supervise","aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","--",task]]) assert.equal(cloudInvocation(args),false);
   assert.equal(normalizeTaskId(`https://chatgpt.com/codex/tasks/${task}`),task);
   assert.throws(()=>normalizeThreadId(task));
+});
+
+test("common Cloud progress retains stable identities across commands, updates and final answers", () => {
+  const snapshot = { task_id: task, status: "in_progress", turns: [{ turn_id: first, role: "assistant", status: "in_progress", messages: [], commands: [], progress: [{ id: "fixture_progress", text: "Starting" }] }] };
+  let read = readSnapshot(cloudThread(snapshot)), cursor = read.cursor;
+  const id = read.events.find(e => e.type === "agentMessage").id;
+  snapshot.turns[0].commands.push({ id: "fixture_command", command: "printf ok", status: "completed", output: "ok", exit_code: 0 });
+  snapshot.turns[0].progress[0].text = "Checking";
+  snapshot.turns[0].progress.push({ id: "fixture_next", text: "Almost finished" });
+  read = readSnapshot(cloudThread(snapshot), { since: cursor }); cursor = read.cursor;
+  assert.equal(read.events.find(e => e.id === id).text, "Checking");
+  assert(read.events.some(e => e.id === "fixture_command"));
+  assert(read.events.some(e => e.text === "Almost finished"));
+  snapshot.status = "completed"; snapshot.turns[0].status = "completed"; snapshot.turns[0].messages.push({ text: "Done" });
+  read = readSnapshot(cloudThread(snapshot), { since: cursor });
+  assert(read.events.some(e => e.text === "Done" && e.phase === "final_answer"));
+  assert.equal(readSnapshot(cloudThread(snapshot), { since: read.cursor }).changed, false);
+});
+
+test("Cloud Monitor reports a progress-only update without waiting for commands or a final answer", async () => {
+  const stop = new AbortController(); let reads = 0; const output = [];
+  const snapshot = { task_id: task, status: "in_progress", turns: [{ turn_id: first, role: "assistant", status: "in_progress", messages: [], commands: [], progress: [] }] };
+  await streamThread(task, { connection: "cloud", notify: "all", signal: stop.signal }, async data => {
+    output.push(data);
+    if (data.events?.some(e => e.text === "Public progress")) stop.abort();
+  }, { ...cloudConnection({ read: async () => {
+    if (++reads === 2) snapshot.turns[0].progress.push({ id: "fixture_progress", text: "Public progress" });
+    if (reads > 3) assert.fail("progress-only updates must wake the monitor");
+    return structuredClone(snapshot);
+  } }), sleep: async () => {} });
+  const event = output.flatMap(data => data.events ?? []).find(e => e.text === "Public progress");
+  assert.equal(event.type, "agentMessage"); assert.equal(event.phase, "commentary");
+});
+
+test("backend options before Cloud targets use the Cloud path and dry runs remain offline", async t => {
+  const f = await fixture(t);
+  const preview = await f.invoke(["send", "--backend", "app-server", task, "preview", "--dry-run"]);
+  assert.equal(preview.execution_environment, "cloud"); assert.equal(preview.sent, false);
+  assert.equal(JSON.parse(await readFile(f.state)).posts, 0);
+  await assert.rejects(f.invoke(["send", "--backend", "ui", task, "preview", "--dry-run"]), e => e.result?.error.code === "CLOUD_TARGET_CONFLICT");
 });
 
 test("cloud history adaptation keeps command positions stable when the final answer arrives", () => {
@@ -64,6 +105,28 @@ test("Cloud Monitor reconnects transient failures and cancellation aborts the ba
   let signal; const client = new CloudReadClient({ read: async (id, options) => { signal = options.signal; return new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(Object.assign(new Error("cancelled"), { code: "CLOUD_CANCELLED" })))); } });
   const reading = client.request("thread/read", { threadId: task }); client.close();
   await assert.rejects(reading, { code: "CANCELLED" }); assert.equal(signal.aborted, true);
+});
+
+test("Cloud Monitor respects the server rate-limit delay and stops rather than retrying early past its budget", async () => {
+  for (const retryAfter of [15000,120000]) {
+    const stop = new AbortController(), waits = [], states = []; let reads = 0, clock = 0;
+    const snapshot = { task_id: task, status: "completed", turns: [] };
+    const observed = streamThread(task, { connection: "cloud", notify: "all", signal: stop.signal }, async data => {
+      if (data.type === "connection") states.push(data);
+      if (data.state === "recovered") stop.abort();
+    }, { ...cloudConnection({ read: async () => {
+      if (++reads === 2) throw Object.assign(new Error("rate limited"), { code: "CLOUD_RATE_LIMITED", retry_after_ms: retryAfter });
+      return snapshot;
+    } }), now: () => clock, sleep: async ms => { waits.push(ms);clock += ms; } });
+    if (retryAfter > 60000) {
+      await assert.rejects(observed, e => e.code === "WATCH_RECONNECT_TIMEOUT" && e.cause_code === "CLOUD_RATE_LIMITED");
+      assert.equal(reads, 2); assert.deepEqual(waits, [1000,60000]);
+    } else {
+      await observed; assert.equal(reads, 3); assert.deepEqual(waits, [1000,15000]);
+      assert.equal(states.at(-1).state, "recovered");
+    }
+    assert.equal(states[1].cause_code, "CLOUD_RATE_LIMITED"); assert.equal(states[1].retry_after_ms, retryAfter);
+  }
 });
 
 async function fixture(t) {

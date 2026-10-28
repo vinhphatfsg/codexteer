@@ -68,6 +68,19 @@ test("environment inventory allowlists names, IDs, repositories and branches, om
   for (const rows of [{}, [{ id: "../other" }], [{ id: "env_fixture", label: 8 }]]) await assert.rejects(cloudEnvironments({}, { request: async () => rows }), { code: "CLOUD_PROTOCOL_UNVERIFIED" });
 });
 
+test("rate limits expose only a bounded wait hint and never retry reads or submissions", async () => {
+  for (const [header, expected] of [["30",30000],[null,15000],["invalid",15000],["0",1000],["9".repeat(400),Number.MAX_SAFE_INTEGER]]) {
+    for (const body of [undefined, { fixture: true }]) {
+      let requests = 0;
+      await assert.rejects(cloudApi(body === undefined ? "environments" : "tasks", { body, credentials: auth, fetchRequest: async () => {
+        requests++;
+        return new Response("private-marker", { status: 429, headers: header === null ? {} : { "retry-after": header } });
+      } }), e => e.code === "CLOUD_RATE_LIMITED" && e.http_status === 429 && e.retry_after_ms === expected && !e.message.includes("private-marker"));
+      assert.equal(requests, 1);
+    }
+  }
+});
+
 function fixtureHistory() {
   const assistant = { id: turn, role: "assistant", turn_status: "completed", created_at: 2, output_items: [{ type: "message", role: "assistant", content: [{ content_type: "text", text: "done" }] }], worklog: { messages: [{ role: "assistant", content: [{ content_type: "text", text: "working" }] }] }, thread_events: { events: [
     { method: "item/completed", params: { item: { id: "fixture_command", type: "commandExecution", command: "printf 42", aggregatedOutput: "42", exitCode: 0, status: "completed", hidden: "private-marker" } } },
@@ -91,6 +104,29 @@ test("cloud read binds every turn to the task, preserves history and progress, a
   await assert.rejects(readCloudTask(task, {}, f), { code: "CLOUD_STATE_CHANGED" });
   f.history.current_turn_id = turn; f.history.turn_mapping[user].turn.id = "task_other~usertrn_fixture";
   await assert.rejects(readCloudTask(task, {}, f), { code: "CLOUD_PROTOCOL_UNVERIFIED" });
+});
+
+test("public Cloud worklog commentary supports both text shapes and excludes private reasoning and tool/user messages", async () => {
+  const f = fixtureHistory();
+  f.history.turn_mapping[turn].turn.worklog.messages.push(
+    { id: "progress_fixture", author: { role: "assistant" }, channel: "commentary", recipient: "all", content: { content_type: "text", parts: ["Public ", "update"] } },
+    { author: { role: "assistant" }, channel: "analysis", content: { content_type: "text", parts: ["private-marker"] } },
+    { role: "assistant", channel: "analysis", content: [{ content_type: "text", text: "private-marker" }] },
+    { author: { role: "assistant" }, channel: "commentary", recipient: "tool", content: { content_type: "text", parts: ["private-marker"] } },
+    { author: { role: "user" }, content: { content_type: "text", parts: ["private-marker"] } },
+    { author: { role: "assistant" }, channel: "commentary", metadata: { is_visually_hidden_from_conversation: true }, content: { content_type: "text", parts: ["private-marker"] } },
+    { role: "assistant", metadata: { reasoning_status: "is_reasoning" }, content: [{ content_type: "text", text: "private-marker" }] },
+  );
+  f.history.turn_mapping[turn].turn.thread_events.events.push(
+    { method: "item/started", params: { item: { id: "event_progress_fixture", type: "agentMessage", phase: "commentary", text: "Starting" } } },
+    { method: "item/completed", params: { item: { id: "event_progress_fixture", type: "agentMessage", phase: "commentary", text: "Event update" } } },
+    { method: "item/completed", params: { item: { id: "private_fixture", type: "agentMessage", phase: "analysis", text: "private-marker" } } },
+    { method: "rawResponseItem/completed", params: { item: { id: "private_raw", type: "agentMessage", phase: "commentary", text: "private-marker" } } },
+  );
+  const value = await readCloudTask(task, {}, f), progress = value.turns[1].progress;
+  assert.deepEqual(progress.map(p => p.text), ["working", "Public update", "Event update"]);
+  assert.equal(progress[1].id, "progress_fixture");
+  assert.doesNotMatch(JSON.stringify(value), /private-marker/);
 });
 
 function sendFixture({ status = "completed", failPost = false, failFinal = false } = {}) {

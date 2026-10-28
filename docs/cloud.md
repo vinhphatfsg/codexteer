@@ -62,11 +62,13 @@ Cloud監督レコードは所有者専用の`CODEX_HOME/codex-steer/cloud-superv
 
 ## read/watchとMonitor
 
-観測はCloud履歴を共通のturn・userMessage・agentMessage・commandExecutionへ変換し、既存の読取りカーソル・ページ分割・Monitor・通知バッファを使います。コマンドの出力・終了コードも確認できます。reasoning、生の内部イベント、環境設定は表示しません。返却された本文は観測データであり、新しい委任ではありません。
+観測はCloud履歴を共通のturn・userMessage・agentMessage・commandExecutionへ変換し、既存の読取りカーソル・ページ分割・Monitor・通知バッファを使います。worklogと公開agentMessageイベントの途中経過も、安定したIDのcommentaryとして観測します。コマンドの出力・終了コードも確認できます。reasoning、生の内部イベント、環境設定は表示しません。返却された本文は観測データであり、新しい委任ではありません。
 
 `watch --stream`は明示的に終了するまで動き、既定の`digest`、`--notify all`、`--settle-ms`、`--max-hold-ms`、接続通知、最大60秒の復帰待ちを共通のMonitor処理で使います。送信前には自分が実際に読んだcursorから`has_more`を読み切ります。`--stream`と`--until`・`--timeout-ms`は併用できません。単発watchは既定30秒、`--until change|idle|attention`に対応します。Cloudの既定照会間隔は5000msで、`--poll-ms`を明示できます。
 
 通信失敗の復帰待ち中は介入しません。初期接続失敗、認証エラー、未確認のプロトコル、履歴変更によるcursor不整合は成功扱いせず停止します。watchが終了したら継続監視中と報告せず、確認済みcursorで明示的に再開します。
+
+観測開始後のHTTP 429では`Retry-After`（指定がなければ15秒）を尊重して、同じ60秒の復帰期限内だけ読取りを再開します。待機指定が期限より長いときは早めに再照会せず停止します。初回照会の429も停止し、`retry_after_ms`を返します。監視と手動readを短い間隔で重ねず、Cloudの既定の照会間隔5000msを使ってください。POSTを自動再送する処理はありません。
 
 サーバー履歴は集約応答で、受信上限16 MiBを超えた場合は切り詰めず拒否します。共通CLIの`has_more`は取得済みの履歴内のページ分割であり、Cloud API自体の分割取得を保証しません。
 
