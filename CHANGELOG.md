@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `thread repair <THREAD>`で古いターンの終了記録欠落を検出します。明示的な`--apply`はCodexの完全終了・検証済みバージョンを必須とし、バックアップ後に対象IDの中断記録だけを追記・照合します。既存の会話やDBは書き換えず、最新の未完了ターンは修復しません。
+- macOS向けに`desktop update`と`desktop update-status`を追加しました。独立したworkerが公式更新UI（英語・日本語）を操作し、新ビルドと再起動を確認してから共有wrapperを再適用・検証します。外部NodeとターミナルのAccessibility・Automation権限が必要です。
+
 - native/control/pairedのリモート経路、専用端末鍵の登録・ペアリング、ホストを保持する観測・監督に対応しました。
 - リモートのプロジェクト・タスク一覧、指定ターンへの送信、Desktopによる作成・new-turn、checkpoint/resource実行とorchestrationを追加しました。
 - 配送・実行結果が不明な場合は自動再送せず、pause/stopと指摘の重複防止を維持します。full-accessのthread-shellは明示選択が必要です。

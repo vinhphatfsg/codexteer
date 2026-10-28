@@ -204,6 +204,8 @@ test("refused generic command execution never invokes the full-access shell", ()
 test("paired host-specific operations fail explicitly before any local fallback or connection", () => {
   for (const [args, code] of [
     [["desktop", "start"], "REMOTE_HOST_OPERATION_UNSUPPORTED"],
+    [["desktop", "update", "--dry-run"], "REMOTE_HOST_OPERATION_UNSUPPORTED"],
+    [["desktop", "update-status"], "REMOTE_HOST_OPERATION_UNSUPPORTED"],
     [["thread", "repair", ID], "REMOTE_REPAIR_UNSUPPORTED"],
     [["send", ID, "fixture", "--backend", "ui"], "REMOTE_UI_UNSUPPORTED"],
   ]) {

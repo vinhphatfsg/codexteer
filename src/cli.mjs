@@ -4,6 +4,7 @@ import { normalizeThreadId, threadDeepLink, parseThreadTarget } from "./thread-i
 import { targetHost, targetContext, withTarget, validateHostId, hostFields, remoteReadOnly, remoteTransport, validateRemoteTransport, isControlTransport } from "./target.mjs";
 import { listLocalThreads } from "./thread-store.mjs";
 import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, listInstructions } from "./journal.mjs";
+import { launchDesktopUpdate, desktopUpdateStatus } from "./update.mjs";
 import { appServerDoctor, startDesktop } from "./launcher.mjs";
 import { VERSION, helpData, renderHelp } from "./help.mjs";
 import { observeThread, printObservation } from "./observe.mjs";
@@ -17,6 +18,7 @@ import { prepareOrchestrationPrompt, orchestrateAgent } from "./orchestrate.mjs"
 import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
 import { connectionMode, observationConnection, desktopReadOnly } from "./connection.mjs";
+import { repairTurns } from "./turn-repair.mjs";
 import { listProjects, registeredRemoteProjects } from "./projects.mjs";
 import { createProjectThread } from "./thread-create.mjs";
 import { verifyProjectThread } from "./thread-verify.mjs";
@@ -41,7 +43,8 @@ function fail(error, json) {
     message_id: error.message_id, client_message_id: error.client_message_id, journal_update_required: error.journal_update_required,
     existing_message_id: error.existing_message_id,
     supervision_update_required: error.supervision_update_required,
-    receipt_path: error.receipt_path,
+    history_changed: error.history_changed, backup_path: error.backup_path, receipt_path: error.receipt_path,
+    repair_stat: error.repair_stat,
     creation_status: error.creation_status, attempt_id: error.attempt_id, receipt_update_required: error.receipt_update_required,
     native_call_id: error.native_call_id,
     uncertain: error.uncertain, resource: error.resource, lease_retained: error.lease_retained, remote_execution_status: error.remote_execution_status,
@@ -472,7 +475,24 @@ async function mainOnTarget(argv) {
 
     if (command === "desktop") {
       const action = args.shift();
-      if (action !== "start") throw new Error("Expected: codexteer desktop start");
+      if (action === "update-status") {
+        if (args.length) throw new Error(`Unexpected argument: ${args[0]}`);
+        const data = await desktopUpdateStatus();
+        success("desktop.update-status", data, json);
+        if (!json) console.log(JSON.stringify(data, null, 2));
+        return;
+      }
+      if (action === "update") {
+        if (supervisor) throw Object.assign(new Error("A supervisor cannot update or restart Desktop. Run this command from the user's terminal without --supervisor."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        const dryRun = takeFlag(args, "--dry-run");
+        const timeoutMs = Number(takeOption(args, "--timeout-ms", "600000"));
+        if (args.length) throw new Error(`Unexpected argument: ${args[0]}`);
+        const data = await launchDesktopUpdate({ dryRun, timeoutMs });
+        success("desktop.update", data, json);
+        if (!json) console.log(dryRun ? "Dry run: official update, relaunch, normal quit, wrapper startup, and verification." : `Update worker started (${data.worker_pid}). Check: ${data.status_command}`);
+        return;
+      }
+      if (action !== "start") throw new Error("Expected: codexteer desktop start|update|update-status");
       const dryRun = takeFlag(args, "--dry-run");
       if (args.length) throw new Error(`Unexpected argument: ${args[0]}`);
       const data = await startDesktop({ dryRun });
@@ -543,7 +563,17 @@ async function mainOnTarget(argv) {
         if (!json) console.log(options.dryRun ? `Dry run: ${data.project_name} (${data.cwd}), ${data.message_characters} characters.` : `Created ${data.deep_link} in ${data.project_name}; initial instruction accepted${data.turn_id ? ` (turn ${data.turn_id})` : ""}.`);
         return;
       }
-      if (action !== "resolve") throw new Error("Expected: codexteer thread create|verify|resolve. See help thread.");
+      if (action === "repair") {
+        const apply = takeFlag(args, "--apply"), dryRun = takeFlag(args, "--dry-run");
+        if (args.length !== 1 || args[0].startsWith("--") || (apply && dryRun)) throw new Error("Expected: thread repair <THREAD> [--dry-run | --apply].");
+        if (connection === "desktop") throw desktopReadOnly();
+        if (supervisor) throw Object.assign(new Error("A supervisor cannot repair task history. Run this command from the user's terminal without --supervisor."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        const data = await repairTurns(args[0], { apply });
+        success("thread.repair", data, json);
+        if (!json) console.log(JSON.stringify(data, null, 2));
+        return;
+      }
+      if (action !== "resolve") throw new Error("Expected: codexteer thread create|verify|resolve|repair. See help thread.");
       if (args.length !== 1) throw new Error("thread resolve requires exactly one thread ID or URL.");
       const threadId = normalizeThreadId(args[0]);
       const data = { thread_id: threadId, deep_link: threadDeepLink(threadId) };

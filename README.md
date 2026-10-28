@@ -200,6 +200,28 @@ codexteer supervise prompt <thread-id> "セキュリティの問題だけを私�
 
 IDのコピーを省く場合は、Claudeに`codexteer threads list --desktop-only --json`で候補を表示してもらい、対象を選ぶこともできます。同じプロジェクトに複数のタスクがある場合、Claudeの起動場所だけでは監視対象を特定できません。
 
+### 古いターンの実行中状態が残る場合
+
+送信だけが止まる場合は、修正版の通常の`send`を使ってください。下記のオフライン修復は送信の前提条件ではありません。
+
+`supervise stop`は監督の停止であり、Codexのターン履歴を修復しません。古いターンの終了記録が欠けている場合は、次のコマンドで検出できます。既定は読み取り専用です。
+
+```bash
+codexteer thread repair <thread-id> --json
+```
+
+後続ターンが始まっているのに終了記録がない古いターンを`candidates`へ表示します。APIが停止中に`interrupted`を返していても、保存済みの状態が修復されたとは限らないため、ローカル履歴を検査します。最新の未完了ターンや未終了の入れ子ターンは自動修復しません。
+
+適用する場合は、作業とバックグラウンド処理を適切に停止し、**Codex/ChatGPTと全Codex CLI・app-serverを完全終了した後、外部ターミナル**で実行してください。完了までCodexを起動しないでください。
+
+```bash
+codexteer thread repair <thread-id> --apply --json
+```
+
+履歴全体を所有者専用のバックアップへ保存・照合してから、対象IDの中断記録だけを末尾へ追記します。既存の会話・ordinal・DBの直接書き換え、プロセス終了、ターン再開、メッセージ送信は行いません。実際の停止時刻は不明なので、完了日時や所要時間を推定しません。履歴が変わった場合や、稼働プロセスを確認できない場合は拒否します。
+
+現在の適用対象は、隔離したCodexで再読込みを検証したCLI **0.162.0-alpha.17.2 / 0.164.0-alpha.11.1**、macOS、連続ordinalを持つpaginated履歴です。別バージョンは検証なしに適用しません。バックアップ分の空き容量を確保してください。`repaired`は保存履歴の追記とSHA256照合が成功した状態で、Codexの画面確認とは区別します。再起動後は状態を再確認し、read/watchのcursorを新しく取得してください。バックアップと修復記録は`CODEX_HOME/codex-steer/turn-repairs/`に残ります。失敗時は`history_changed`と`backup_path`/`receipt_path`を確認し、原本への上書きや再実行を盲目的に行わないでください。
+
 ### 監督状態の確認・一時停止・停止
 
 ユーザーの端末から、生成元と同じ`CODEX_HOME`で実行します。
@@ -715,3 +737,21 @@ codexteer debug-ui <thread-id> --wait-ms 1500
 ```
 
 UI方式は画面フォーカスに依存し、サイドチャットが開いている場合の宛先保証はありません。結果の`submitted_unverified`はキー入力の実行を表し、対象タスクへの配送確認ではありません。
+
+### Desktopを更新してwrapperを再適用する（macOS）
+
+作業を終えてから、アプリ外のNodeを使うターミナルで実行します。
+
+```bash
+codexteer desktop update --dry-run --json
+codexteer desktop update
+codexteer desktop update-status --json
+```
+
+`update`は独立したバックグラウンドプロセスを起動し、Codexアプリの「更新を確認…」メニューと既知の更新ボタン名を照合して操作します。アプリ内の全ウィンドウを調べるため、Sparkle固有のウィンドウ識別を保証するものではありません。更新以外のダイアログは閉じてから実行してください。英語・日本語のUIに対応し、ターミナルへのAccessibility・Automation権限が必要です。OSの権限ダイアログには自動応答しません。Codexは起動済みである必要があります。アプリ同梱Nodeと`--supervisor`付きの呼出しでは実行できません。
+
+更新によるビルド番号の変更と新しいアプリプロセスを確認してから、Codexを正常終了し、保存済みcodexteerの`desktop start`でwrapper付きで再起動します。公式更新とwrapper再適用で複数回再起動する場合があります。進行中のタスクの自動再開は行いません。
+
+起動受付は更新成功ではありません。`update-status`の`phase: complete`と`wrapper_verified: true`が完了条件です。更新不要の場合は`up_to_date`で終了し、再起動しません。状態は`CODEX_HOME/codex-steer/desktop-update/status.json`に保存されます。既定の更新待機時間は10分で、`--timeout-ms`で10秒〜1時間に変更できます。正常終了の待機には別途最大30秒、wrapper起動と診断にも時間がかかります。
+
+既知のラベルに一致しない画面や、更新失敗・再起動未完了では停止またはタイムアウトします。アプリを強制終了したり別の更新元へ切り替えたりはしません。`failed`の場合は記録された理由と公式更新画面を確認してください。更新が完了してから正常終了し、`codexteer desktop start`と`codexteer doctor --json`で復旧できます。workerが異常終了してlockが残った場合は自動で奪いません。workerと更新処理が停止したことを確認してからエラーに表示された空のlockディレクトリを手動で除去します。

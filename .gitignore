@@ -9,6 +9,7 @@ node_modules/
 auth.json
 .codex-global-state.json
 .codex-reports/
+.local-private/
 *.pem
 *.key
 *.log
