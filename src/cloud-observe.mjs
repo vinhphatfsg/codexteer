@@ -104,7 +104,8 @@ export async function sendCloudTask(target, expectedTurn, prompt, settings = {},
         : "A new turn requires a finished cloud turn. Nothing was sent.");
     }
     const previous = await load("cloud-send-heads", taskId);
-    if (previous && (previous.submission_status !== "accepted" || previous.parent_turn_id === expectedTurn)) throw Object.assign(failure("CLOUD_DUPLICATE_SEND", "An accepted or uncertain send needs inspection before another send. Use cloud reconcile; do not resend."), { attempt_id: previous.attempt_id, receipt_path: previous.receipt_path });
+    const safelyUnsent = previous?.submission_status === "not_sent" && previous.dispatch_started === false;
+    if (previous && !safelyUnsent && (previous.submission_status !== "accepted" || previous.parent_turn_id === expectedTurn)) throw Object.assign(failure("CLOUD_DUPLICATE_SEND", "An accepted or uncertain send needs inspection before another send. Use cloud reconcile; do not resend."), { attempt_id: previous.attempt_id, receipt_path: previous.receipt_path });
     const attemptId = randomUUID();
     const receipt = { execution_environment: "cloud", backend: "codex-api", task_id: taskId, parent_turn_id: expectedTurn,
       attempt_id: attemptId, receipt_path: storePath("cloud-messages", attemptId), based_on: settings.basedOn,
@@ -112,10 +113,21 @@ export async function sendCloudTask(target, expectedTurn, prompt, settings = {},
       delivery_action: active ? "interrupt-and-follow-up" : "new-turn", parent_status: observation.status, submission_status: "not_sent", dry_run: !!settings.dryRun };
     await settings.beforeSend?.(observation);
     if (settings.dryRun) return receipt;
-    await write("cloud-messages", attemptId, receipt);
     const dispatched = { ...receipt, submission_status: "dispatching" };
-    await write("cloud-send-heads", taskId, dispatched);
-    await write("cloud-messages", attemptId, dispatched);
+    try {
+      await write("cloud-messages", attemptId, receipt);
+      // Finish receipt persistence before reserving the head. There must be no
+      // fallible persistence between the reservation and the single POST.
+      await write("cloud-messages", attemptId, dispatched);
+      await write("cloud-send-heads", taskId, dispatched);
+    } catch {
+      const unsent = { ...receipt, dispatch_started: false, error_code: "CLOUD_PERSISTENCE_FAILED" };
+      try { await write("cloud-send-heads", taskId, previous ?? unsent); }
+      catch { unsent.reservation_cleanup_required = true; unsent.receipt_update_required = true; }
+      try { await write("cloud-messages", attemptId, unsent); }
+      catch { unsent.receipt_update_required = true; }
+      throw Object.assign(failure("CLOUD_PERSISTENCE_FAILED", "Cloud send records could not be prepared. No request was sent. Inspect the receipt and reservation before an explicit retry."), unsent, { uncertain: false });
+    }
     let response;
     try {
       response = await api("tasks", { timeoutMs: settings.timeoutMs, body: {
@@ -141,6 +153,10 @@ export async function reconcileCloudSend(attemptId, { read = readCloudTask, load
   if (!receipt) throw failure("CLOUD_RECEIPT_NOT_FOUND", "Cloud send receipt was not found.");
   const taskId = cloudTaskId(receipt.task_id);
   return lock(`cloud-send-${taskId}`, async () => {
+    if (receipt.submission_status === "not_sent" && receipt.dispatch_started === false) {
+      if ((await load("cloud-send-heads", taskId))?.attempt_id === attemptId) await write("cloud-send-heads", taskId, receipt);
+      return { ...receipt, delivery_verification: "not_sent", retry_safe: true, reservation_cleanup_required: false };
+    }
     const snapshot = await read(taskId);
     const matches = snapshot.turns.filter(turn => turn.role === "user" && turn.parent_turn_id === receipt.parent_turn_id
       && turn.messages.some(message => (receipt.prompt_hash_encoding === "utf8" ? createHash("sha256").update(message.text).digest("hex") : digest(message.text)) === receipt.prompt_sha256));

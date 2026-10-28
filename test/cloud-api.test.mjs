@@ -130,6 +130,46 @@ test("unknown follow-up is never retried, blocks another send and retains privat
   assert.equal(final.submission_status, "accepted"); assert.equal(final.receipt_update_required, true);
 });
 
+test("pre-dispatch persistence failures submit nothing and restore a safely retryable reservation", async () => {
+  for (const failureAt of [1, 2, 3]) {
+    for (const prior of [null, { submission_status: "accepted", parent_turn_id: "older-turn", attempt_id: attempt }]) {
+      const f = sendFixture(), persist = f.write; let writes = 0;
+      if (prior) f.records.set(`cloud-send-heads/${task}`, prior);
+      f.write = async (...args) => {
+        if (++writes === failureAt) {
+          if (failureAt === 3) await persist(...args); // Failure after atomic replacement.
+          throw new Error("private-marker");
+        }
+        return persist(...args);
+      };
+      await assert.rejects(sendCloudTask(task, turn, "fixture", { basedOn: cursor }, f), e => e.code === "CLOUD_PERSISTENCE_FAILED" && e.uncertain === false && e.submission_status === "not_sent" && !e.message.includes("private-marker"));
+      assert.equal(f.calls.length, 0);
+      if (prior) assert.deepEqual(f.records.get(`cloud-send-heads/${task}`), prior);
+      assert.equal((await sendCloudTask(task, turn, "explicit retry", { basedOn: cursor }, f)).submission_status, "accepted");
+      assert.equal(f.calls.length, 1);
+    }
+  }
+});
+
+test("a failed reservation rollback stays blocked and reports recovery instead of guessing it was cleared", async () => {
+  const f = sendFixture(), persist = f.write; let writes = 0;
+  f.write = async (...args) => {
+    writes++;
+    if (writes === 3) { await persist(...args); throw new Error("private-marker"); }
+    if (writes === 4) throw new Error("private-marker");
+    return persist(...args);
+  };
+  await assert.rejects(sendCloudTask(task, turn, "fixture", { basedOn: cursor }, f), e => e.code === "CLOUD_PERSISTENCE_FAILED" && e.uncertain === false && e.reservation_cleanup_required && e.receipt_update_required);
+  assert.equal(f.calls.length, 0);
+  await assert.rejects(sendCloudTask(task, turn, "retry", { basedOn: cursor }, f), { code: "CLOUD_DUPLICATE_SEND" });
+  assert.equal(f.calls.length, 0);
+  const unsent = [...f.records.values()].find(value => value.dispatch_started === false);
+  const restored = await reconcileCloudSend(unsent.attempt_id, { ...f, read: async () => assert.fail("persisted pre-dispatch proof requires no history guess") });
+  assert.equal(restored.delivery_verification, "not_sent"); assert.equal(restored.retry_safe, true);
+  assert.equal((await sendCloudTask(task, turn, "explicit retry", { basedOn: cursor }, f)).submission_status, "accepted");
+  assert.equal(f.calls.length, 1);
+});
+
 test("reconciliation matches parent and prompt digest, and not_observed never means safe to resend", async () => {
   const f = sendFixture();
   f.records.set(`cloud-messages/${attempt}`, { task_id: task, attempt_id: attempt, parent_turn_id: turn, submission_status: "unknown", prompt_hash_encoding: "utf8", prompt_sha256: hash("follow-up") });

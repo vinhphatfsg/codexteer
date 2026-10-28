@@ -44,6 +44,7 @@ export function fail(error, json) {
     supervision_update_required: error.supervision_update_required,
     receipt_path: error.receipt_path,
     creation_status: error.creation_status, attempt_id: error.attempt_id, receipt_update_required: error.receipt_update_required,
+    reservation_cleanup_required: error.reservation_cleanup_required,
     native_call_id: error.native_call_id,
   } }));
   else {
@@ -55,6 +56,7 @@ export function fail(error, json) {
         if (typeof error[key] === "string") console.error(`${key}: ${JSON.stringify(error[key])}`);
       }
       if (error.receipt_update_required) console.error("receipt_update_required: true");
+      if (error.reservation_cleanup_required) console.error("reservation_cleanup_required: true");
     }
   }
   process.exitCode = 1;
