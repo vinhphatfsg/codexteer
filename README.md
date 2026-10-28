@@ -1,5 +1,7 @@
 # codexteer
 
+Codex Cloudへの作成は`cloud create --env <ENV_ID> --branch <BRANCH> <MESSAGE>`を使います。返されたタスクIDで`cloud status`・`cloud diff`を実行できます。PATH上の公式Codex CLIとクラウドのログイン・環境設定が必要で、Desktopの起動は不要です。[クラウド操作と制限](docs/cloud.md)
+
 登録済みプロジェクトへの初回指示付きチャット作成は、`projects list`と`thread create --project`で行えます。プロジェクト名と指示だけで使え、既存チャットや中継AIは不要です。Desktopのnative RPCで所属を登録し、複数フォルダや重複フォルダを持つ「サンプル」も、所属・全フォルダ・初回指示を照合します。[使い方と実機検証](docs/thread-create.md)
 
 ```bash
@@ -12,7 +14,7 @@ codexteer thread create --project 'サンプル' \
 
 ## 導入
 
-macOS、Node.js 20以降とnpm、`/Applications/ChatGPT.app`にインストールされたCodex Desktopが必要です。監督役に使うClaude CodeまたはCodex CLIを、PATH上の`claude`または`codex`で起動できる状態にします。
+Desktop操作にはmacOS、Node.js 20以降とnpm、`/Applications/ChatGPT.app`にインストールされたCodex Desktopが必要です。監督役に使うClaude CodeまたはCodex CLIを、PATH上の`claude`または`codex`で起動できる状態にします。クラウド操作はDesktopが不要で、上記の公式Codex CLIを別途使用します。
 
 ### npxで使う
 

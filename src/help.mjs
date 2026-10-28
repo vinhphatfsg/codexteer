@@ -17,6 +17,20 @@ const supervisionExecutionNotes = [
 ];
 
 export const topics = {
+  cloud: {
+    title: "環境を指定してCodex Cloudタスクを作成・確認する",
+    when: "Desktopと独立したクラウド環境で新規タスクを実行し、ID・状態・差分を取得するとき。",
+    usage: ["cloud create --env ENV_ID --branch BRANCH [--timeout-ms N] [--dry-run] <MESSAGE...>|-", "cloud status <TASK_ID|URL> [--timeout-ms N]", "cloud diff <TASK_ID|URL> [--attempt N] [--timeout-ms N]", "cloud receipt <ATTEMPT_ID>"],
+    returns: "createはtask_id・url・attempt_id・receipt_pathと作成/受付状態。statusはpending/ready/applied/error。diffは適用せずunified diffだけを返します。receiptはローカルの作成記録です。",
+    examples: ["codexteer cloud create --env env_example --branch main 'テストを追加してください' --json", "codexteer cloud create --env env_example --branch main --dry-run '調査してください' --json", "codexteer cloud status task_example --json", "codexteer cloud diff task_example --attempt 1 --json", "codexteer cloud receipt <ATTEMPT_ID> --json"],
+    notes: ["PATH上の公式Codex CLI 0.157.1以降と、そのCLIのクラウド利用権限・ログイン設定が必要です。Desktopの起動や既存チャットは不要。codexteerは認証ファイルを読み取らず、CLIを自動導入しません。",
+      "--envは環境IDを推奨し、公式CLIが一意に解決できる単純なラベルも指定できます。--branchは必須で、ローカルの現在ブランチを暗黙に送りません。初回指示はクラウドへ送信され、CLIにはstdinで渡します。",
+      "dry-runは入力検証だけで、CLI起動・認証・環境照合・チャット作成・receipt保存を行いません。通常時は送信前にCLIのhelpを確認します。--timeout-msは各操作の期限で既定120000、1000〜600000。",
+      "作成試行はCODEX_HOME/codex-steer/cloud-creationsへ所有者専用で保存します。本文は保存せずSHA256と文字数だけを記録。unknown/dispatchingは未作成の証明ではなく、自動再作成しません。receiptと公式codex cloud list --env ENV_ID --jsonで既存タスクを確認してください。",
+      "CLIのstatusはready以外で終了コード1になるため、既知の状態出力を照合して問い合わせ成功とタスク結果を区別します。未知の形式・認証エラー・切断は成功扱いしません。",
+      "diffの--attemptは1〜4、省略時は公式CLIの選択に従います。データはJSONではdata.diff、通常出力では差分本文。CLI出力は最大16 MiBで、超過時は切り詰めた成功を返しません。",
+      "クラウドIDはDesktopのUUID/hostIdリンクと別体系です。継続指示・監督・差分適用・環境作成/一覧は未対応。--host/--remote-transport/--context-thread、--supervisor、観測専用--connection desktopとの併用は拒否します。docs/cloud.mdを参照してください。"],
+  },
   supervise: {
     title: "指定したCodexタスクの監督役としてClaudeまたはCodex CLIを起動する",
     when: "対象タスクのIDを指定して、Claude CodeまたはCodex CLIを監督役の対話セッションとして起動するとき。",
@@ -119,6 +133,7 @@ export const topics = {
       { need: "指摘と解決条件・評価を追跡", command: "help findings" },
       { need: "通常起動Desktopの観測接続", command: "help connection" },
       { need: "プロジェクトへ初回指示付きチャットを作成", command: "help projects / help thread" },
+      { need: "クラウド環境で新規タスクを作成・確認", command: "help cloud" },
       { need: "今の状態・前回からの変化を確認", command: "help read / help status" },
       { need: "Claude CodeのMonitorから使う", command: "help monitor" },
       { need: "根拠や仮説を付けて指示する", command: "help send" },

@@ -36,7 +36,7 @@ try {
   const { stdout } = await exec("npm", ["pack", "--offline", "--ignore-scripts", "--json", "--pack-destination", root], { cwd: repo, env });
   const [artifact] = JSON.parse(stdout);
   assert.equal(artifact.name, source.manifest.package);
-  const required = new Set([...source.manifest.files.map(f => f.path), "README.md", "CHANGELOG.md", "docs/distribution.md", "docs/thread-create.md"]);
+  const required = new Set([...source.manifest.files.map(f => f.path), "README.md", "CHANGELOG.md", "docs/distribution.md", "docs/thread-create.md", "docs/cloud.md"]);
   for (const file of artifact.files) {
     assert.ok(required.delete(file.path), `Unexpected or duplicate packed file: ${file.path}`);
     if (file.path.startsWith("bin/")) assert.ok(file.mode & 0o100, "packed executable lost its mode");
@@ -47,7 +47,8 @@ try {
   // keep this check separate from real publication, even on a logged-in machine.
   const preview = await exec("npm", ["publish", "--dry-run", "--offline", "--ignore-scripts", "--json", "--access", "public", "--registry", "http://127.0.0.1:9/"], { cwd: repo, env, timeout: 20000 });
   assert.doesNotMatch(preview.stderr, /auto-corrected|errors corrected|invalid and removed/i, "Publish must not repair or remove release metadata");
-  const publishArtifact = JSON.parse(preview.stdout);
+  const publishPreview = JSON.parse(preview.stdout);
+  const publishArtifact = publishPreview[sourcePackage.name] ?? publishPreview;
   assert.equal(publishArtifact.name, sourcePackage.name);
   assert.equal(publishArtifact.version, sourcePackage.version);
   assert.equal(publishArtifact.shasum, artifact.shasum, "Publish preparation must pack the tested artifact");
@@ -232,6 +233,25 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   assert.equal(pkg.license, "MIT"); assert.equal(Object.hasOwn(pkg, "private"), false);
   assert.deepEqual(pkg.bin, { "codexteer": "bin/codexteer.mjs" });
   for (const hook of ["preinstall", "install", "postinstall", "prepare", "prepack"]) assert.equal(pkg.scripts[hook], undefined);
+  // Cloud must also work from the saved tarball with no real codex on PATH.
+  const cloudBin = path.join(root, "cloud-bin"); await mkdir(cloudBin);
+  await writeFile(path.join(cloudBin, "codex"), `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const input = fs.readFileSync(0, 'utf8');
+if (args.includes('--help')) console.log('Usage: codex cloud ' + args[1] + ' --env ENV --branch BRANCH --attempts N --attempt N');
+else if (args[1] === '--version') console.log('codex-cli-cloud 0.157.1');
+else if (args[1] === 'exec' && input === 'synthetic cloud instruction') console.log('https://chatgpt.com/codex/tasks/task_package_fixture');
+else if (args[1] === 'status') console.log('[READY] synthetic cloud task');
+else if (args[1] === 'diff') process.stdout.write('+packaged cloud fixture\\n');
+else process.exitCode = 2;
+`, { mode: 0o700 });
+  const cloudCli = async args => JSON.parse((await exec(process.execPath, [cliPath, "cloud", ...args, "--json"], { cwd: root, env: { ...env, PATH: cloudBin }, timeout: 10000 })).stdout).data;
+  const cloudCreated = await cloudCli(["create", "--env", "env_package_fixture", "--branch", "main", "synthetic cloud instruction"]);
+  assert.equal(cloudCreated.task_id, "task_package_fixture");
+  assert.equal((await cloudCli(["receipt", cloudCreated.attempt_id])).task_id, cloudCreated.task_id);
+  assert.equal((await cloudCli(["status", cloudCreated.task_id])).status, "ready");
+  assert.equal((await cloudCli(["diff", cloudCreated.task_id])).diff, "+packaged cloud fixture\n");
   console.log(JSON.stringify({ suite: "package", result: "PASS", package: PACKAGE_NAME, version: VERSION, packed_files: artifact.files.length, publish_dry_run: true, offline_install: true, npm_exec: true, npx_supervision: true, copied_prompt: true, cache_update: true, cache_removal: true, mixed_versions: true, feature_isolation: true, real_desktop_validated: false }));
 } finally {
   for (const socket of ws?.clients ?? []) socket.terminate();

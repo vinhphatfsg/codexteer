@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
-import { main } from "../src/cli.mjs";
+import { main, fail } from "../src/cli.mjs";
+import { cloudRoutingError } from "../src/cloud.mjs";
 
-await main(process.argv.slice(2));
+const args = process.argv.slice(2), error = cloudRoutingError(args);
+if (error) fail(error, args.slice(0, args.includes("--") ? args.indexOf("--") : args.length).includes("--json"));
+else await main(args);
