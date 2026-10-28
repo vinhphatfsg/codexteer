@@ -61,7 +61,12 @@ export async function cloudApi(route, { timeoutMs = 120000, credentials = cloudC
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) throw failure("CLOUD_OPTIONS_INVALID", "Invalid cloud request deadline.");
   if (!(body === undefined ? /^(?:environments|tasks\/task_[A-Za-z0-9_-]{1,200}(?:\/turns)?)$/.test(route) : route === "tasks")) throw failure("CLOUD_OPTIONS_INVALID", "Unsupported cloud API route.");
   const started = Date.now();
-  const auth = await credentials({ timeoutMs: Math.min(timeoutMs, 15000) });
+  let auth;
+  try { auth = await credentials({ timeoutMs: Math.min(timeoutMs, 15000) }); }
+  catch (error) {
+    if (error.code === "CLOUD_AUTH_TIMEOUT" && Date.now() - started >= timeoutMs) throw failure("CLOUD_TIMEOUT", "Cloud authentication exceeded the request deadline.");
+    throw error;
+  }
   const remaining = timeoutMs - (Date.now() - started);
   if (remaining <= 0) throw failure("CLOUD_TIMEOUT", "Cloud authentication exceeded the request deadline.");
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), remaining);
@@ -83,7 +88,7 @@ export async function cloudApi(route, { timeoutMs = 120000, credentials = cloudC
     try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
     catch { throw failure("CLOUD_PROTOCOL_UNVERIFIED", "Cloud returned an unrecognized response. No raw payload was disclosed."); }
   } catch (error) {
-    if (error.code?.startsWith("CLOUD_")) throw error;
+    if (typeof error.code === "string" && error.code.startsWith("CLOUD_")) throw error;
     throw failure(controller.signal.aborted ? "CLOUD_TIMEOUT" : "CLOUD_CONNECTION_FAILED", "Cloud request did not complete. No credentials or raw diagnostics were disclosed.");
   } finally { clearTimeout(timer); }
 }

@@ -52,6 +52,10 @@ test("cloud HTTP fixes the official origin, rejects redirects, bounds input and 
   await assert.rejects(cloudApi("environments", { timeoutMs: NaN, credentials: () => { throw new Error("must not load"); } }), { code: "CLOUD_OPTIONS_INVALID" });
   await assert.rejects(cloudApi("environments", { credentials: auth, fetchRequest: async () => new Response("private-marker", { status: 403 }) }), error => error.code === "CLOUD_ACCESS_DENIED" && !error.message.includes("private-marker"));
   await assert.rejects(cloudApi("environments", { credentials: auth, fetchRequest: async () => { throw new Error("private-marker"); } }), error => error.code === "CLOUD_CONNECTION_FAILED" && !error.message.includes("private-marker"));
+  await assert.rejects(cloudApi("environments", { credentials: auth, fetchRequest: async () => { throw Object.assign(new Error("private-marker"), { code: 20 }); } }), { code: "CLOUD_CONNECTION_FAILED" });
+  await assert.rejects(cloudApi("environments", { timeoutMs: 5, credentials: auth, fetchRequest: async (url, { signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener("abort", () => reject(new DOMException("private-marker", "AbortError")), { once: true });
+  }) }), { code: "CLOUD_TIMEOUT" });
   await assert.rejects(cloudApi("environments", { credentials: auth, fetchRequest: async () => new Response("x".repeat(16 * 1024 * 1024 + 1)) }), { code: "CLOUD_OUTPUT_LIMIT" });
 });
 
