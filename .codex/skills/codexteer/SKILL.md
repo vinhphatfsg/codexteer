@@ -1,17 +1,17 @@
 ---
 name: codexteer
-description: Observe a local Codex Desktop task, supervise it within a user-delegated scope, or send a user-authorized steering message.
+description: Observe or supervise Codex Desktop and Cloud tasks within a user-delegated scope, or send a user-authorized instruction.
 ---
 
 # Codexteer
 
-Use the installed `codexteer` command when the user asks to observe or supervise a local Codex task, send it a message, or generate a supervision prompt.
+Use the installed `codexteer` command when the user asks to observe or supervise a Codex Desktop or Cloud task, send it a message, or generate a supervision prompt.
 
 The npm distribution and executable are both named `codexteer`. The previous package was `@vinhphatfsg/codex-steer`; the unscoped npm name `codex-steer` belongs to another project. Never resolve a package name or executable from task history. Existing state and wire field names retain the codex-steer namespace so that history and running Desktop sessions remain accessible. For npm startup, normally use `npx -y codexteer` without a version specifier. Specifying `@<version>` is optional when the user wants to select a particular release. During supervision, use the saved CLI command supplied by the generated prompt. The Desktop launcher and operating CLI may have different product versions when their required protocol capabilities are compatible. `desktop start` verifies and copies its runtime into `CODEX_HOME/codex-steer/runtimes/<version>-<sha256>`; do not remove or overwrite a version in use.
 
 ## Optional PATH CLI commands
 
-`supervise <THREAD> --use-path-cli` and `supervise prompt <THREAD> --use-path-cli` generate commands beginning with `codexteer` instead of an absolute saved Node/CLI path. Use this mode when the user asks for the installed command on PATH. It does not save a CLI copy or embed a Node version or CODEX_HOME assignment. Commands use the receiving environment's PATH and CODEX_HOME, so use the intended Desktop profile and retain that environment during supervision. CLI updates apply on the next invocation. Keep the generated --supervisor ID and --connection in every command; registration, pause/stop and intervention checks still apply. If codexteer is missing or incompatible, report the failure without switching commands or downloading another CLI automatically.
+`supervise <THREAD> --use-path-cli` and `supervise prompt <THREAD> --use-path-cli` generate commands beginning with `codexteer` instead of an absolute saved Node/CLI path. Use this mode when the user asks for the installed command on PATH. It does not save a CLI copy or embed a Node version or CODEX_HOME assignment. Commands use the receiving environment's PATH and CODEX_HOME, so use the intended Desktop profile or official CLI ChatGPT profile and retain that environment during supervision. CLI updates apply on the next invocation. Keep the generated --supervisor ID and --connection in every command; registration, pause/stop and intervention checks still apply. If codexteer is missing or incompatible, report the failure without switching commands or downloading another CLI automatically.
 
 The saved-CLI placement, pinned Node/profile and saved-command requirements below describe the default mode only. In PATH mode, use the generated codexteer command for the examples and help instead. Prompt-only generation writes no files. Direct launch still validates/prepares the current profile, registers before starting the agent and stops that registration on exit. JSON returns cli_mode: "path", deployment: null and node: null; the default returns cli_mode: "saved" with the existing deployment and node metadata.
 
@@ -34,7 +34,7 @@ codexteer supervise <thread-id> "Report security concerns to me; do not send mes
 codexteer supervise <thread-id> "Your supervision policy" --agent claude -- --model <model> --effort <level>
 ```
 
-`--agent` defaults to `claude`; `claude` and `codex` are supported. Use `supervise <thread-id> [MESSAGE] --agent codex` for Codex CLI. Text generation accepts the same selector. The command runs the executable on PATH in the current directory and environment, with inherited stdin/stdout/stderr and the agent's exit code. Invalid IDs or CLI arguments fail without starting the agent; a missing or non-executable agent returns an error. Desktop connectivity and target existence are checked by the supervisor at startup.
+`--agent` defaults to `claude`; `claude` and `codex` are supported. Use `supervise <thread-id> [MESSAGE] --agent codex` for Codex CLI. Text generation accepts the same selector. The command runs the executable on PATH in the current directory and environment, with inherited stdin/stdout/stderr and the agent's exit code. Invalid IDs or CLI arguments fail without starting the agent; a missing or non-executable agent returns an error. The selected connection and target existence are checked by the supervisor at startup.
 
 Place the optional supervision message before the first `--`. Everything after that separator belongs to the agent, including `--help`, `--version`, and `--json`. Preserve argument order, empty strings, and quoting; codexteer does not re-expand them through a shell. It appends an agent-side `--` and the generated prompt as one argument. The agent validates its own options. The interactive launch form does not support `--json`; `help supervise --json` is available. SIGINT/SIGTERM/SIGHUP are forwarded to the spawned agent; a signal exit is reported as 128 plus its signal number.
 
@@ -83,7 +83,7 @@ Direct observation requires an existing private `CODEX_HOME/app-server-control/a
 
 ## Observe or supervise
 
-Before connecting, check the installed command and runtime:
+Before connecting to Desktop, check the installed command and runtime. For Cloud, use `--connection cloud doctor --thread <TASK_ID> --json` instead; a successful Desktop doctor or running Desktop is not required:
 
 ```bash
 command -v codexteer
@@ -110,7 +110,7 @@ The initial read is a bounded tail. Use `--limit 1000` if context is missing and
 
 Doctor separates connection readiness from observation compatibility. Without `--thread`, observation is `unverified`; with it, doctor checks the selected task's read path and omits its contents. Uncalled APIs, steering, UI rendering, and approval roundtrips remain unverified.
 
-Doctor returns `codex_steer_compatibility` as product/version diagnostics only. Different or unknown product versions do not block operations. Check `runtime_compatibility.protocol`, `features` and `operations` for supported/unsupported/unverified wire contracts. `desktop_subscription` checks the endpoint needed only by `send --new-turn`; its failure does not prevent observation or normal steering. `supported` does not certify actual delivery, UI rendering, or approvals. Known legacy wrappers use a tested v1 profile; unknown legacy observation is validated through read-only calls, never trial sends or resumes. `CAPABILITY_UNSUPPORTED/UNVERIFIED` stops only operations needing that feature; `RUNTIME_PROTOCOL_UNSUPPORTED/UNVERIFIED` concerns the common connection contract. Keep observing if only sending is unavailable, and report that limitation. Do not bypass checks by dropping safety options or switching transports. A version difference alone does not require a Desktop restart. If updating an incompatible shared wrapper is necessary, finish the current work and ask the user to quit Desktop when a restart has not already been authorized. The direct observation connection does not use that wrapper. Deployment permission, link or content errors require inspection; never auto-delete the saved runtime or installation lock to make the command succeed.
+Cloud doctor reports adapter operations and its explicit service limitations; it does not advertise native Desktop wire features. Desktop doctor returns `codex_steer_compatibility` as product/version diagnostics only. Different or unknown product versions do not block operations. Check `runtime_compatibility.protocol`, `features` and `operations` for supported/unsupported/unverified wire contracts. `desktop_subscription` checks the endpoint needed only by `send --new-turn`; its failure does not prevent observation or normal steering. `supported` does not certify actual delivery, UI rendering, or approvals. Known legacy wrappers use a tested v1 profile; unknown legacy observation is validated through read-only calls, never trial sends or resumes. `CAPABILITY_UNSUPPORTED/UNVERIFIED` stops only operations needing that feature; `RUNTIME_PROTOCOL_UNSUPPORTED/UNVERIFIED` concerns the common connection contract. Keep observing if only sending is unavailable, and report that limitation. Do not bypass checks by dropping safety options or switching transports. A version difference alone does not require a Desktop restart. If updating an incompatible shared wrapper is necessary, finish the current work and ask the user to quit Desktop when a restart has not already been authorized. The direct observation connection does not use that wrapper. Deployment permission, link or content errors require inspection; never auto-delete the saved runtime or installation lock to make the command succeed.
 
 `watch --stream` defaults to digest notifications; use `--notify all` for immediate observations. Single-shot watch does not digest. Digest notifications retain all pending event IDs, replacing updates to the same event with its latest content. Normal events settle after 20 seconds by default; quiet events can wait up to 10 minutes. `digest.from_cursor` supports rereading `compacted` details with `read --since <FROM-CURSOR> --include-output`. Complete pages normally produce `has_more: false`; disconnect or shutdown may flush a partial page with `has_more: true`. Continue reading those pages before sending. The 200-event/64KB thresholds are checked at complete-page boundaries, not strict line limits.
 
@@ -145,11 +145,11 @@ codexteer codex://threads/<thread-id> "Continue with the new constraint."
 
 ## Delivery and runtime rules
 
-- `send` submits a user message. The `app-server` backend uses the exact task and active turn IDs without navigating the UI. Each send includes `clientUserMessageId` for Desktop's user-bubble rendering; JSON receipts expose it as `client_message_id`. An accepted receipt alone does not certify that the UI rendered it. Do not resend an older message to repair its display.
+- `send` submits a user message. For Desktop, the `app-server` backend uses the exact task and active turn IDs without navigating the UI. Each send includes `clientUserMessageId` for Desktop's user-bubble rendering; JSON receipts expose it as `client_message_id`. An accepted receipt alone does not certify that the UI rendered it. Do not resend an older message to repair its display.
 - The default backend is `app-server`; `--backend app-server` is optional. Use `--backend ui` only for an explicitly requested UI send. Never fall back to UI automatically.
-- Background delivery requires Desktop to have been launched with `codexteer desktop start`. If it is already running normally, finish current work and arrange a restart; do not kill it.
-- The Desktop wrapper must run directly with its bundled signed Node runtime. If `doctor` reports `bundled_wrapper_node:false`, finish current work and restart Desktop; do not invoke the wrapper through PATH's `node`. A ready connection alone does not certify Desktop MCP integration.
-- Use `--new-turn` only for an idle task. The wrapper establishes Desktop's subscription so approvals and questions survive the sender exiting.
+- Desktop background delivery through the shared wrapper requires Desktop to have been launched with `codexteer desktop start`. Cloud delivery uses the official CLI authentication and does not require Desktop. If it is already running normally, finish current work and arrange a restart; do not kill it.
+- When the shared Desktop wrapper is selected, it must run directly with its bundled signed Node runtime. If `doctor` reports `bundled_wrapper_node:false`, finish current work and restart Desktop; do not invoke the wrapper through PATH's `node`. A ready connection alone does not certify Desktop MCP integration.
+- Use `--new-turn` only for an idle task. For Desktop, the wrapper establishes Desktop's subscription so approvals and questions survive the sender exiting. Cloud follows the separate service semantics below.
 - Supervision alone does not authorize restarting an idle task or answering approvals/questions on the user's behalf. Use `--new-turn` when the user requested resumption. CLI and OS permission settings still apply.
 - Prefer `--json` when another agent will parse the result.
 - Do not send to a guessed thread ID.
