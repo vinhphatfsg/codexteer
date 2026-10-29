@@ -32,6 +32,8 @@ codexteer --supervisor <SESSION_ID> --connection cloud history check task_exampl
 
 監督プロンプトが返した実際のSESSION_ID・保存済みCLI・Node・CODEX_HOMEをそのまま使います。PATHモードも共通です。監督エージェントの起動前に登録し、終了時にその登録を停止します。自分の状態を解除したり、IDを外して介入したりしないでください。
 
+監督AIのsandboxがCLIのランチャー照会等を拒否する場合は、利用者が選んだ通常のコマンド承認レビューに、同じ固定CLIコマンドと必要理由を提示します。審査で拒否されたら停止し、許可範囲や書込み先を広げません。公式Codex CLI 0.157.1の`--approve-for-me`はworkspace-writeを選んで自動審査へ送るため、`--sandbox`と同時指定しません。監督CLIの終了コードだけを成功の証拠にせず、doctor・read・watch等の実行結果を確認します。
+
 ユーザーは通常の制御を使えます。
 
 ```bash
