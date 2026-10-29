@@ -64,7 +64,7 @@ test("environment inventory allowlists names, IDs, repositories and branches, om
     repo_map: { fixture: { repository_full_name: "fixture/example", default_branch: "main", clone_url: "private-marker" } } }] });
   assert.equal(value.environments[0].repositories[0].default_branch, "main");
   assert.doesNotMatch(JSON.stringify(value), /private-marker|secrets|env_vars|clone_url/);
-  assert.match(value.source, /legacy/);
+  assert.equal(value.source, "accessible-task-environments");
   for (const rows of [{}, [{ id: "../other" }], [{ id: "env_fixture", label: 8 }]]) await assert.rejects(cloudEnvironments({}, { request: async () => rows }), { code: "CLOUD_PROTOCOL_UNVERIFIED" });
 });
 
