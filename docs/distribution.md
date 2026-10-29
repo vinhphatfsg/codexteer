@@ -1,11 +1,11 @@
 # 配布と永続実行
 
 パッケージ名は `codexteer`、CLI名は `codexteer`、ライセンスはMITです。
-旧npmパッケージは`@vinhphatfsg/codex-steer`です。`codexteer@0.17.0`は公開済みで、このブランチはリモート操作・Cloud対応などをまとめたマイナー更新`0.18.0`を準備します。GitHubのPR作成・マージはnpm公開を行う操作ではありません。公開時は`npm whoami`でnpm側のユーザーを確認してください。
+旧npmパッケージは`@vinhphatfsg/codex-steer`です。リモート操作・Cloud対応・Desktop更新・オフライン履歴修復を含む[`codexteer@0.18.0`](https://www.npmjs.com/package/codexteer/v/0.18.0)は2026-10-29にnpmへ公開済みです。GitHubのPR作成・マージはnpm公開を行う操作ではありません。次の版を公開する際も`npm whoami`でnpm側のユーザーを確認してください。
 `package.json` は `private` を持たず、`publishConfig` でnpm公式レジストリへのpublic公開を指定しています。公開可能な設定であることと、実際に公開済みであることは別です。
 
 公開後の基本的な実行形式は次のとおりです。通常はバージョン指定なしで使えます。監督開始後は保存したCLIを使い続けるため、監督中の一貫性を保つために版を明示する必要はありません。起動側と操作側の製品バージョンも、必要な通信仕様が対応していれば異なっていても使えます。
-以下の監督機能は公開済みの0.15.0から利用できます。0.16.0では通知集約と監督プロンプトを改善しました。0.18.0のチャット作成機能は公開準備中のため、公開前はこのブランチをソースから導入してください。`-y` はnpmの取得確認を省略します。
+以下の監督機能は公開済みの0.15.0から利用できます。0.16.0では通知集約と監督プロンプトを改善し、0.17.0でDesktopのチャット作成、0.18.0でリモート操作・Cloud対応などを追加しました。いずれもnpmから利用できます。`-y` はnpmの取得確認を省略します。
 
 ```text
 npx -y codexteer desktop start
@@ -179,7 +179,7 @@ npxから模擬Claudeと模擬Codexを起動して保存したCLIへの参照を
 
 レビュー・検証を終えた版を、npm側の公開権限を持つアカウントで公開します。手動公開には2FAを有効にしたアカウントを使ってください。
 
-公開済みのパッケージ名とバージョンの組み合わせは再公開できません。既存の`codexteer@0.17.0`は変更せず、今回の配布物は`codexteer@0.18.0`として準備します。公開は別途実行します。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
+公開済みのパッケージ名とバージョンの組み合わせは再公開できません。`codexteer@0.18.0`は公開済みのため、次の変更をnpmへ配布する際は新しい版番号を使います。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
 
 ```bash
 npm login
@@ -188,7 +188,7 @@ npm run test:package
 npm publish --access public
 ```
 
-公開後は、公開した版と起動コマンドの登録を確認します。次は0.18.0を公開した場合の例です。
+公開後は、公開した版と起動コマンドの登録を確認します。公開済みの0.18.0は次のコマンドで確認できます。
 
 ```bash
 npm view codexteer@0.18.0 version bin --json
@@ -218,10 +218,10 @@ npx -y codexteer@0.18.0 --version
 
 開発用の`npm run test:connection`は、Desktop同梱CLIを一時プロファイルのUnixソケットで起動し、ローカル偽モデルで作った合成履歴の読み取りを確認します。実Desktopへの接続・設定変更や外部モデル利用は行いません。`npm run test:protocol`は既存wrapper・偽Desktopとの送信と承認経路、`npm run test:package`は実tarball・オフラインnpx・偽Claude/Codexの起動と、別CODEX_HOME・キャッシュ削除後の観測/送信・pause/resume・重複拒否を確認します。これらの隔離検証から実Desktopの表示や直接接続での承認往復まで保証するものではありません。
 
-## 0.18.0の公開候補
+## 0.18.0の公開結果
 
-`package.json`と`package-lock.json`の版を0.18.0に揃えています。0.17.0はnpm registryで公開済みであることを確認し、同じ版への上書き公開は行いません。`projects list`と`thread create --project`、Desktopの所属登録、全フォルダと初回指示の照合を追加します。既存のruntime protocolとcapability契約はv1を維持します。
+`package.json`と`package-lock.json`の版は0.18.0です。npm registryの`latest`も0.18.0で、公開tarballが事前検証したファイルと同一であることを確認しました。0.18.0にはリモート操作・Cloud対応・Desktop更新・オフライン履歴修復を含みます。`projects list`と`thread create --project`によるDesktopのチャット作成は0.17.0から利用できます。既存のruntime protocolとcapability契約はv1を維持します。
 
-公開前に構文・全回帰・tarballとoffline install・npm/npx・publish dry-runを確認します。公開するファイルを固定する場合は、検証済みtarballのSHA-256を照合してから同じtarballを公開してください。PRのReady化やバージョン更新だけではnpmへ公開されません。
+公開前に構文・全回帰・tarballとoffline install・npm/npx・publish dry-runを検証しました。公開対象119ファイルの内部情報・シークレット検査と依存脆弱性監査で検出は0件でした。公開後はregistryから取得したtarballのSHA-256一致と、隔離キャッシュからのCLI起動を確認しました。次の版でも検証済みtarballを固定して公開してください。PRのReady化やバージョン更新だけではnpmへ公開されません。
 
 検証結果の要約は`remote-cli-validation.json`を参照してください。実環境のホスト・プロジェクト・チャット識別子、ローカルパス、診断ログは公開用の配布物へ含めません。npm公開・Gitタグ作成はPR更新とは別の操作です。
