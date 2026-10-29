@@ -48,6 +48,7 @@ export function cloudInvocation(argv) {
   if (connection >= 0 && own[connection + 1] === "cloud") return true;
   const thread = own.indexOf("--thread");
   if (["doctor", "resource"].includes(command) && thread >= 0) return isCloudTask(own[thread + 1]);
+  if (command === "thread" && action === "create") return false;
   const nested = ["history", "instructions", "findings", "checkpoint", "thread"].includes(command)
     || (command === "supervise" && ["prompt", "register", "status", "pause", "resume", "stop", "list"].includes(action));
   return isCloudTask(isCloudTask(command) ? command : positional[nested ? 2 : 1]);
@@ -203,11 +204,11 @@ export async function mainCloud(argv) {
   }
   if (command === "thread" && args[0] === "create") {
     args.shift(); if (supervisor) throw failure("A bound supervisor cannot create another task.", "SUPERVISOR_CONTROL_FORBIDDEN");
-    const project = option(args, "--project"), environment = option(args, "--env"), requestedBranch = option(args, "--branch"), dryRun = flag(args, "--dry-run");
-    if ((project === undefined) === (environment === undefined)) throw failure("Specify exactly one --project or --env cloud selector.");
+    const project = option(args, "--project"), requestedBranch = option(args, "--branch"), dryRun = flag(args, "--dry-run");
+    if (project === undefined) throw failure("Cloud creation requires --project with an environment ID or exact name.");
     const end = args.includes("--") ? args.indexOf("--") : args.length; if (args.slice(0, end).some(arg => arg.startsWith("--"))) throw failure("Unknown cloud creation option; explicit model/title/permission overrides are not implemented yet.");
     const body = message(args); if (!body.trim()) throw failure("A non-empty initial instruction is required.");
-    const rows = (await cloudEnvironments()).environments, selector = project ?? environment, matches = rows.filter(e => e.id === selector || e.name === selector);
+    const rows = (await cloudEnvironments()).environments, selector = project, matches = rows.filter(e => e.id === selector || e.name === selector);
     if (matches.length !== 1) throw failure("The cloud environment selector must match one accessible ID or exact name.");
     const selected = matches[0], branch = requestedBranch ?? (selected.repositories.length === 1 ? selected.repositories[0].default_branch : null);
     if (!branch) throw failure("Specify --branch: this environment does not identify one repository default branch.");

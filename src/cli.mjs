@@ -39,6 +39,7 @@ export function fail(error, json) {
     sent: error.sent, thread_id: error.thread_id, rpc_code: error.rpc_code ?? error.rpcCode,
     message_id: error.message_id, client_message_id: error.client_message_id, journal_update_required: error.journal_update_required,
     existing_message_id: error.existing_message_id,
+    existing_attempt_id: error.existing_attempt_id, existing_receipt_path: error.existing_receipt_path,
     supervision_update_required: error.supervision_update_required,
     receipt_path: error.receipt_path,
     creation_status: error.creation_status, attempt_id: error.attempt_id, receipt_update_required: error.receipt_update_required,
@@ -50,7 +51,7 @@ export function fail(error, json) {
     if (error.execution_environment === "cloud") {
       // Recovery metadata must survive an uncertain submission or a stale
       // on-disk receipt. Never print the child error, prompt, or diagnostics.
-      for (const key of ["creation_status", "submission_status", "attempt_id", "receipt_path", "task_id", "url"]) {
+      for (const key of ["creation_status", "submission_status", "attempt_id", "receipt_path", "existing_attempt_id", "existing_receipt_path", "task_id", "url"]) {
         if (typeof error[key] === "string") console.error(`${key}: ${JSON.stringify(error[key])}`);
       }
       if (error.receipt_update_required) console.error("receipt_update_required: true");

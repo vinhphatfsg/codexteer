@@ -104,7 +104,7 @@ export async function sendCloudTask(target, expectedTurn, prompt, settings = {},
     }
     const previous = await load("cloud-send-heads", taskId);
     const safelyUnsent = previous?.submission_status === "not_sent" && previous.dispatch_started === false;
-    if (previous && !safelyUnsent && (previous.submission_status !== "accepted" || previous.parent_turn_id === expectedTurn)) throw Object.assign(failure("CLOUD_DUPLICATE_SEND", "An accepted or uncertain send needs inspection before another send. Use history check <TASK> --attempt <ATTEMPT_ID>; do not resend."), { attempt_id: previous.attempt_id, receipt_path: previous.receipt_path });
+    if (previous && !safelyUnsent && (previous.submission_status !== "accepted" || previous.parent_turn_id === expectedTurn)) throw Object.assign(failure("CLOUD_DUPLICATE_SEND", "An accepted or uncertain send needs inspection before another send. Use history check <TASK> --attempt <ATTEMPT_ID>; do not resend."), { existing_attempt_id: previous.attempt_id, existing_receipt_path: previous.receipt_path });
     const attemptId = randomUUID();
     const receipt = { execution_environment: "cloud", backend: "codex-api", task_id: taskId, parent_turn_id: expectedTurn,
       attempt_id: attemptId, receipt_path: storePath("cloud-messages", attemptId), user_revision: settings.expectedUserRevision,
@@ -154,9 +154,13 @@ export async function cloudSendReceipt(attemptId, { load = readRecord, taskId } 
   return receipt;
 }
 
-export async function reconcileCloudSend(attemptId, { read = readCloudTask, load = readRecord, write = writeRecord, lock = withStoreLock, taskId: expectedTask } = {}) {
+export async function reconcileCloudSend(attemptId, { read = readCloudTask, load = readRecord, write = writeRecord, lock = withStoreLock, taskId: expectedTask, expectedPromptSha256, expectedParentTurnId } = {}) {
   const receipt = await cloudSendReceipt(attemptId, { load, taskId: expectedTask });
   const taskId = cloudTaskId(receipt.task_id);
+  if ((expectedPromptSha256 !== undefined && receipt.prompt_sha256 !== expectedPromptSha256)
+    || (expectedParentTurnId !== undefined && receipt.parent_turn_id !== expectedParentTurnId)) {
+    return { ...receipt, delivery_verification: "conflict", retry_safe: false };
+  }
   return lock(`cloud-send-${taskId}`, async () => {
     if (receipt.submission_status === "not_sent" && receipt.dispatch_started === false) {
       if ((await load("cloud-send-heads", taskId))?.attempt_id === attemptId) await write("cloud-send-heads", taskId, receipt);

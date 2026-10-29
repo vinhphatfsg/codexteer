@@ -14,7 +14,7 @@ codexteer supervise task_example --agent codex -- exec
 codexteer supervise prompt task_example --use-path-cli --json
 ```
 
-IDはすべて架空の例です。`--project`は環境IDまたは一意の正確な名前です。`--branch`を省略したときは、一つのリポジトリの既定ブランチを環境が明示している場合だけ使い、`branch_source: environment-default`を返します。不明・複数リポジトリの場合は明示指定が必要です。ローカルの現在ブランチや未コミット差分を暗黙に送信しません。
+IDはすべて架空の例です。作成時の環境指定は`--project`に統一し、環境IDまたは一意の正確な名前を指定します。`--branch`を省略したときは、一つのリポジトリの既定ブランチを環境が明示している場合だけ使い、`branch_source: environment-default`を返します。不明・複数リポジトリの場合は明示指定が必要です。ローカルの現在ブランチや未コミット差分を暗黙に送信しません。
 
 Node.js 20以降、PATH上の公式Codex CLI 0.157.1以降、ChatGPTログインとCloud利用権限が必要です。Desktopの起動は不要です。対象は従来型Cloudタスク用環境であり、新世代Cloud環境設定や別サービスを含む一覧ではありません。環境一覧にはID・名前・リポジトリ名・既定ブランチだけを返し、環境変数・secrets・セットアップ内容は出しません。掲載は実行成功の保証ではありません。タスク一覧は最大500件を公式CLIのページに分けて取得し、続きのcursorを返します。
 
@@ -56,6 +56,7 @@ Cloud監督レコードは所有者専用の`CODEX_HOME/codex-steer/cloud-superv
 - タスク・親ターン・ユーザー入力の鮮度を確認しますが、Cloud APIには読取りと送信を原子的に固定することを確認した契約がなく、`freshness_atomic: false`を返します。別の最新ターンを推測して宛先を変更しません。
 - `accepted`は受付です。新しいターンIDは即時に推測せず、`read`と`history check`で親ターン・本文SHA256を照合します。`stored`も要求の達成の証明ではありません。
 - 結果不明時は`unknown`を維持し、自動再送しません。未解決の配送予約は次のCloud送信も止めます。`not_observed`は未配送の証明ではなく、再送を許可しません。
+- 前回の配送が次の送信を拒否した場合は、`existing_attempt_id`・`existing_receipt_path`を回復用に返します。これは今回の配送試行ではありません。拒否した指示は`not_sent`のままとし、前回の受付や保存を根拠に有効化しません。
 - POST前の保存失敗では未送信を記録して予約を戻します。予約の復元も失敗した場合は`reservation_cleanup_required: true`で止め、`history check <TASK> --attempt <ATTEMPT_ID>`は保存済みの明示的な未送信証拠がある場合だけ予約を修復できます。履歴に見えないだけの送信を安全と推測せず、自動再送もしません。
 
 共通`send --dry-run`はローカルと同様に入力・指摘・根拠・監督状態を確認するだけで、ネットワーク・配送記録・送信を行いません。鮮度は未確認です。初回指示と送信にはstdinの`-`も使えます。空本文・NUL・1 MiB超の指示は拒否します。先頭が`--`の本文には区切りの`--`を使います。
@@ -105,6 +106,6 @@ codexteer history check task_example --attempt <ATTEMPT_ID> --json
 
 `thread receipt`は作成時のローカル試行記録を表示します。タスクIDを取得できなかった結果不明の場合も、エラーの`attempt_id`で確認できます。作成や配送を再実行せず、外部照会もしません。作成記録に送信済み本文は保存せずダイジェストを持ち、受付後に記録更新だけ失敗した場合は確認できた実IDと`receipt_update_required: true`を保持します。監督ID付きでは他の作成試行の閲覧を拒否します。
 
-通常の送信は`history show/check <TASK> <MESSAGE_ID>`を使います。ジャーナル更新も失敗した場合は、エラーや送信結果の`attempt_id`/`cloud_attempt_id`を`--attempt`に指定します。`history show --attempt`はローカル配送記録、`history check --attempt`は親ターンと本文SHA256の照合および明示的な未送信記録による予約回復です。どちらも指定タスクとの一致と監督の有効状態を確認し、別タスクへの記録アクセスを拒否します。MESSAGE_IDと--attemptは併用しません。照合は再送せず、`not_observed`から未配送を推測しません。
+通常の送信は`history show/check <TASK> <MESSAGE_ID>`を使います。ジャーナル更新も失敗した場合は、エラーや送信結果の`attempt_id`/`cloud_attempt_id`を`--attempt`に指定します。`history show --attempt`はローカル配送記録、`history check --attempt`は親ターンと本文SHA256の照合および明示的な未送信記録による予約回復です。通常の`history check <TASK> <MESSAGE_ID>`は試行記録と今回の送信本文SHA256・親ターンの一致も検査し、不一致は`conflict`のまま配送済みへ更新しません。どちらの--attempt操作も指定タスクとの一致と監督の有効状態を確認し、別タスクへの記録アクセスを拒否します。MESSAGE_IDと--attemptは併用しません。照合は再送せず、`not_observed`から未配送を推測しません。
 
 一次資料: [公式CLIリファレンス](https://developers.openai.com/codex/cli/reference)、[公式Cloud CLI実装](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/cloud-tasks/src/lib.rs)。実機検証は専用タスクに限定し、実ID・環境名・認証情報・生ログを公開資料に含めません。

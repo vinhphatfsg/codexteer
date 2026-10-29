@@ -2,6 +2,8 @@
 
 ## 0.17.0 — 未公開
 
+- Cloudの重複拒否で前回の試行IDを今回の配送履歴へ結び付けないよう修正しました。回復用IDを分離し、history checkは今回の本文・親ターンも照合して、拒否した指示の誤有効化を防ぎます。未公開の作成用--env別名も削除し、環境指定は--projectに統一しました。新規作成の本文がCloud ID/URLで始まっても、それを宛先と誤判定しません。
+
 - 共通Cloud観測で公開commentaryの途中経過を保持し、途中経過だけの更新でもMonitorへ通知します。reasoning等の非公開内容は除外し、`--backend app-server`を宛先より前に置く場合のCloud振り分けも修正しました。
 
 - Cloudタスクも共通の`supervise`・`read/watch`・`send`・`history/instructions/findings`で扱えます。監督の登録・pause/resume/stop・保存済みCLI・Monitorのdigestと復帰待ちを既存基盤へ接続し、実行中の指定ターンの中断と同一タスク内での継続、配送照合を追加しました。旧Desktop CLIとの記録互換性を保つCloud専用監督名前空間を使います。

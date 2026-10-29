@@ -224,3 +224,16 @@ test("attempt recovery validates its explicit task before reads or writes", asyn
   await assert.rejects(reconcileCloudSend(attempt, { ...f, taskId: "task_other" }), { code: "CLOUD_TARGET_CONFLICT" });
   assert.equal(f.calls.length, 0);
 });
+
+test("journal receipt conflicts are detected before history reads or reservation writes", async () => {
+  const f = sendFixture();
+  const receipt = { task_id: task, attempt_id: attempt, parent_turn_id: turn, submission_status: "unknown", prompt_sha256: hash("first fixture") };
+  f.records.set(`cloud-messages/${attempt}`, receipt);
+  f.read = async () => assert.fail("a conflicting receipt must not query history");
+  f.write = async () => assert.fail("a conflicting receipt must not change reservations");
+  for (const expected of [{ expectedPromptSha256: hash("different fixture") }, { expectedParentTurnId: `${task}~assttrn_other` }]) {
+    const result = await reconcileCloudSend(attempt, { ...f, taskId: task, ...expected });
+    assert.equal(result.delivery_verification, "conflict"); assert.equal(result.retry_safe, false);
+    assert.deepEqual(f.records.get(`cloud-messages/${attempt}`), receipt);
+  }
+});

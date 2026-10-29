@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import path from "node:path";
-import { cloudTaskId, createCloudTask, cloudTaskDiff, runCloudCli } from "../src/cloud.mjs";
+import { cloudTaskId } from "../src/cloud-id.mjs";
+import { createCloudTask, cloudTaskDiff, runCloudCli } from "../src/cloud.mjs";
 
 function exec(file, args, { input = "", ...settings } = {}) {
   return new Promise((resolve, reject) => {
@@ -154,7 +155,7 @@ else { process.exitCode = 2; }
 test("CLI roundtrip uses a fake executable with isolated HOME and retrieves private receipts", async t => {
   const f = await fakeCli(t), invoke = async (args, input) => JSON.parse((await exec(process.execPath, ["bin/codexteer.mjs", "--json", ...args], { env: f.env, input })).stdout);
   f.env.CODEX_STARTING_DIFF = "private fixture starting diff";
-  const created = await invoke(["--connection", "cloud", "thread", "create", "--env", "env_fixture", "--branch", "main", "-"], "日本語\n$(literal)");
+  const created = await invoke(["--connection", "cloud", "thread", "create", "--project", "env_fixture", "--branch", "main", "-"], "日本語\n$(literal)");
   assert.equal(created.command, "thread.create"); assert.equal(created.data.task_id, ID);
   const saved = JSON.parse(await readFile(created.data.receipt_path)); assert.equal(saved.task_id, ID); assert.equal((await stat(created.data.receipt_path)).mode & 0o777, 0o600);
   assert.equal((await stat(path.dirname(created.data.receipt_path))).mode & 0o777, 0o700);
@@ -168,7 +169,7 @@ test("CLI roundtrip uses a fake executable with isolated HOME and retrieves priv
   assert.equal(dispatch.input, "日本語\n$(literal)"); assert(!JSON.stringify(dispatch.args).includes("literal"));
   await invoke(["help", "cloud"]);
   assert.equal((await readFile(f.log, "utf8")).trim().split("\n").length, calls.length);
-  const dry = await invoke(["--connection", "cloud", "thread", "create", "--env", "env_fixture", "--branch", "main", "--dry-run", "fixture"]);
+  const dry = await invoke(["--connection", "cloud", "thread", "create", "--project", "env_fixture", "--branch", "main", "--dry-run", "fixture"]);
   assert.equal(dry.data.creation_status, "not_created");
   assert.equal((await readFile(f.log, "utf8")).trim().split("\n").length, calls.length);
 });
@@ -179,7 +180,9 @@ test("removed cloud namespace and invalid common options fail before subprocess 
   for (const args of [...removed.map(action => ["cloud", action, ID]),
     ["--connection", "cloud", "cloud", "read", ID],
     ["--connection", "desktop", "read", ID], ["read", ID, "--host", "local"],
-    ["--connection", "cloud", "thread", "create", "--env", "env_fixture", "--env", "other", "--branch", "main", "fixture"],
+    ["--connection", "cloud", "thread", "create", "--project", "env_fixture", "--project", "other", "--branch", "main", "fixture"],
+    ["--connection", "cloud", "thread", "create", "--env", "env_fixture", "fixture"],
+    ["--connection", "cloud", "thread", "create", "--project", "env_fixture", "--env", "env_fixture", "fixture"],
     ["diff", ID, "--attempt", "0"], ["diff", ID, "--attempt", "5"],
     ["send", ID, "fixture", "--turn", "obsolete", "--dry-run"]]) {
     const result = await exec(process.execPath, ["bin/codexteer.mjs", "--json", ...args], { env: f.env }).then(() => null, e => e);
@@ -191,7 +194,7 @@ test("removed cloud namespace and invalid common options fail before subprocess 
 test("JSON and human submission errors retain recovery IDs even if the final receipt cannot be saved", async t => {
   for (const mode of ["unknown", "confirmed", "confirmed-receipt-failure"]) for (const json of [false, true]) {
     const f = await fakeCli(t);
-    const result = await exec(process.execPath, ["bin/codexteer.mjs", ...(json ? ["--json"] : []), "--connection", "cloud", "thread", "create", "--env", "env_fixture", "--branch", "main", "hidden fixture instruction"],
+    const result = await exec(process.execPath, ["bin/codexteer.mjs", ...(json ? ["--json"] : []), "--connection", "cloud", "thread", "create", "--project", "env_fixture", "--branch", "main", "hidden fixture instruction"],
       { env: { ...f.env, FIXTURE_ERROR_MODE: mode } }).then(() => null, error => error);
     assert.equal(result.code, 1);
     assert(!result.stderr.includes("hidden fixture instruction")); assert(!result.stderr.includes("private fixture diagnostic"));

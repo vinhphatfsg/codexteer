@@ -253,7 +253,7 @@ else process.exitCode = 2;
 }
 `, { mode: 0o700 });
   const cloudCli = async args => JSON.parse((await exec(process.execPath, ["--import", cloudPreload, cliPath, ...args, "--json"], { cwd: root, env: { ...env, PATH: cloudBin }, timeout: 10000 })).stdout).data;
-  const cloudCreated = await cloudCli(["--connection", "cloud", "thread", "create", "--env", "env_package_fixture", "--branch", "main", "synthetic cloud instruction"]);
+  const cloudCreated = await cloudCli(["--connection", "cloud", "thread", "create", "--project", "env_package_fixture", "--branch", "main", "synthetic cloud instruction"]);
   assert.equal(cloudCreated.task_id, "task_package_fixture");
   assert.equal((await cloudCli(["--connection", "cloud", "thread", "receipt", cloudCreated.attempt_id])).task_id, cloudCreated.task_id);
   assert.equal((await cloudCli(["diff", cloudCreated.task_id, "--attempt", "2"])).diff, "+packaged cloud fixture\n");

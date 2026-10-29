@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { sendAppServerMessage } from "./app-server.mjs";
 import { normalizeTaskId, isCloudTask } from "./task-id.mjs";
 import { reconcileCloudSend } from "./cloud-observe.mjs";
@@ -81,7 +81,7 @@ export async function sendTrackedMessage(threadInput, body, options = {}, { send
       return { ...receipt, message_id: id };
     } catch (error) {
       entry = { ...entry, sent: Object.hasOwn(error, "sent") ? error.sent : error.uncertain ? null : false, delivery_status: error.delivery_status ?? (error.uncertain ? "unknown" : "not_sent"), attempt_state: "finished", updated_at: new Date().toISOString(), error_code: error.code ?? "NOT_SENT" };
-      if (isCloudTask(threadId)) Object.assign(entry, { cloud_attempt_id: error.cloud_attempt_id, cloud_parent_turn_id: error.cloud_parent_turn_id });
+      if (isCloudTask(threadId)) Object.assign(entry, { cloud_attempt_id: error.cloud_attempt_id, cloud_parent_turn_id: error.cloud_parent_turn_id, existing_attempt_id: error.existing_attempt_id, existing_receipt_path: error.existing_receipt_path });
       try { await writeRecord("messages", id, entry, storage); } catch { error.journal_update_required = true; }
       error.client_message_id = id; error.message_id = id;
       error.delivery_status = entry.delivery_status; error.sent = entry.sent;
@@ -96,8 +96,10 @@ export async function reconcileMessages(threadInput, id, options = {}, { discove
     const entries = id ? [await getMessage(threadId, id, options)] : await listMessages(threadId, { ...options, includeText: true });
     const result = [];
     for (const entry of entries) {
-      const receipt = entry.cloud_attempt_id ? await reconcileCloudSend(entry.cloud_attempt_id, { taskId: threadId }) : null;
-      const verification = { status: receipt?.delivery_verification === "stored" ? "stored" : "not_observed", checked_at: new Date().toISOString(),
+      const receipt = entry.cloud_attempt_id && entry.delivery_status !== "not_sent" ? await reconcileCloudSend(entry.cloud_attempt_id, {
+        taskId: threadId, expectedPromptSha256: createHash("sha256").update(entry.wire_text).digest("hex"), expectedParentTurnId: entry.cloud_parent_turn_id,
+      }) : null;
+      const verification = { status: receipt?.delivery_verification === "stored" ? "stored" : receipt?.delivery_verification === "conflict" ? "conflict" : "not_observed", checked_at: new Date().toISOString(),
         matching_items: receipt?.delivery_verification === "stored" ? 1 : 0, turn_id: receipt?.user_turn_id ?? null, basis: "cloud-parent-and-prompt-digest" };
       result.push(await withStoreLock(`message-${threadId}`, async () => {
         const current = await getMessage(threadId, entry.id, options);
