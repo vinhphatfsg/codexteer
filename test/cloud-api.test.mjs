@@ -4,11 +4,11 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { createHash } from "node:crypto";
 import { cloudCredentials, cloudApi, cloudEnvironments } from "../src/cloud-api.mjs";
-import { readCloudTask, watchCloudTask, sendCloudTask, reconcileCloudSend } from "../src/cloud-observe.mjs";
+import { readCloudTask, sendCloudTask, reconcileCloudSend, cloudUserRevision, cloudSendReceipt } from "../src/cloud-observe.mjs";
 
 const task = "task_fixture_cloud", turn = `${task}~assttrn_fixture_1`, user = `${task}~usertrn_fixture_1`;
-const cursor = `cloud_v1:${"a".repeat(64)}`, attempt = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const observation = { task_id: task, turn_id: turn, cursor, status: "completed", turns: [] };
+const revision = cloudUserRevision({ turns: [] }), attempt = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const observation = { task_id: task, turn_id: turn, status: "completed", turns: [] };
 const hash = text => createHash("sha256").update(text).digest("hex");
 const auth = async () => ({ token: "fixture-only-token", accountId: "fixture-account" });
 const ok = value => new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -99,7 +99,7 @@ test("cloud read binds every turn to the task, preserves history and progress, a
   assert.equal(value.turns.length, 2); assert.equal(value.turns[1].progress[0].text, "working");
   assert.equal(value.turns[1].commands[0].output, "42"); assert.equal(value.turns[1].commands[0].exit_code, 0);
   assert.doesNotMatch(JSON.stringify(value), /private-marker|"environment":|"secrets":/);
-  assert.equal((await readCloudTask(task, { since: value.cursor }, f)).changed, false);
+  assert.equal(value.cursor, undefined);
   f.history.current_turn_id = user;
   await assert.rejects(readCloudTask(task, {}, f), { code: "CLOUD_STATE_CHANGED" });
   f.history.current_turn_id = turn; f.history.turn_mapping[user].turn.id = "task_other~usertrn_fixture";
@@ -137,32 +137,32 @@ function sendFixture({ status = "completed", failPost = false, failFinal = false
   };
 }
 
-test("follow-up is one POST bound to observed task, exact parent turn, cursor and stdin text", async () => {
+test("follow-up is one POST bound to observed task, exact parent turn, user revision and stdin text", async () => {
   const f = sendFixture(), prompt = "日本語\n$(no-shell)";
-  const value = await sendCloudTask(task, turn, prompt, { basedOn: cursor }, f);
+  const value = await sendCloudTask(task, turn, prompt, { expectedUserRevision: revision, deliveryMode: "new-turn" }, f);
   assert.equal(value.submission_status, "accepted"); assert.equal(f.calls.length, 1);
   assert.deepEqual(f.calls[0].settings.body.follow_up, { task_id: task, turn_id: turn, environment_mode: "code" });
   assert.equal(f.calls[0].settings.body.input_items[0].content[0].text, prompt);
   assert.doesNotMatch(JSON.stringify([...f.records.values()]), /日本語|no-shell/);
-  await assert.rejects(sendCloudTask(task, turn, prompt, { basedOn: cursor }, f), { code: "CLOUD_DUPLICATE_SEND" });
+  await assert.rejects(sendCloudTask(task, turn, prompt, { expectedUserRevision: revision, deliveryMode: "new-turn" }, f), { code: "CLOUD_DUPLICATE_SEND" });
   assert.equal(f.calls.length, 1);
 });
 
-test("stale cursor, cross-task turn, busy task and dry run never submit follow-up", async () => {
+test("stale user revision, cross-task turn, busy task and dry run never submit follow-up", async () => {
   const f = sendFixture();
-  await assert.rejects(sendCloudTask(task, "task_other~assttrn_fixture", "test", { basedOn: cursor }, f), { code: "CLOUD_OPTIONS_INVALID" });
-  await assert.rejects(sendCloudTask(task, turn, "test", { basedOn: `cloud_v1:${"b".repeat(64)}` }, f), { code: "CLOUD_STATE_CHANGED" });
-  await assert.rejects(sendCloudTask(task, turn, "test", { basedOn: cursor }, sendFixture({ status: "in_progress" })), { code: "CLOUD_TASK_BUSY" });
-  assert.equal((await sendCloudTask(task, turn, "test", { basedOn: cursor, dryRun: true }, f)).submission_status, "not_sent");
+  await assert.rejects(sendCloudTask(task, "task_other~assttrn_fixture", "test", { expectedUserRevision: revision, deliveryMode: "new-turn" }, f), { code: "CLOUD_OPTIONS_INVALID" });
+  await assert.rejects(sendCloudTask(task, turn, "test", { expectedUserRevision: "b".repeat(64), deliveryMode: "new-turn" }, f), { code: "CLOUD_STATE_CHANGED" });
+  await assert.rejects(sendCloudTask(task, turn, "test", { expectedUserRevision: revision, deliveryMode: "new-turn" }, sendFixture({ status: "in_progress" })), { code: "CLOUD_TASK_BUSY" });
+  assert.equal((await sendCloudTask(task, turn, "test", { expectedUserRevision: revision, deliveryMode: "new-turn", dryRun: true }, f)).submission_status, "not_sent");
   assert.equal(f.calls.length, 0); assert.equal(f.records.size, 0);
 });
 
 test("unknown follow-up is never retried, blocks another send and retains private recovery receipt", async () => {
   const f = sendFixture({ failPost: true });
-  await assert.rejects(sendCloudTask(task, turn, "test", { basedOn: cursor }, f), e => e.uncertain && e.submission_status === "unknown" && e.attempt_id && !e.message.includes("private-marker"));
+  await assert.rejects(sendCloudTask(task, turn, "test", { expectedUserRevision: revision, deliveryMode: "new-turn" }, f), e => e.uncertain && e.submission_status === "unknown" && e.attempt_id && !e.message.includes("private-marker"));
   assert.equal(f.calls.length, 1);
-  await assert.rejects(sendCloudTask(task, turn, "test", { basedOn: cursor }, f), { code: "CLOUD_DUPLICATE_SEND" });
-  const final = await sendCloudTask(task, turn, "test", { basedOn: cursor }, sendFixture({ failFinal: true }));
+  await assert.rejects(sendCloudTask(task, turn, "test", { expectedUserRevision: revision, deliveryMode: "new-turn" }, f), { code: "CLOUD_DUPLICATE_SEND" });
+  const final = await sendCloudTask(task, turn, "test", { expectedUserRevision: revision, deliveryMode: "new-turn" }, sendFixture({ failFinal: true }));
   assert.equal(final.submission_status, "accepted"); assert.equal(final.receipt_update_required, true);
 });
 
@@ -178,10 +178,10 @@ test("pre-dispatch persistence failures submit nothing and restore a safely retr
         }
         return persist(...args);
       };
-      await assert.rejects(sendCloudTask(task, turn, "fixture", { basedOn: cursor }, f), e => e.code === "CLOUD_PERSISTENCE_FAILED" && e.uncertain === false && e.submission_status === "not_sent" && !e.message.includes("private-marker"));
+      await assert.rejects(sendCloudTask(task, turn, "fixture", { expectedUserRevision: revision, deliveryMode: "new-turn" }, f), e => e.code === "CLOUD_PERSISTENCE_FAILED" && e.uncertain === false && e.submission_status === "not_sent" && !e.message.includes("private-marker"));
       assert.equal(f.calls.length, 0);
       if (prior) assert.deepEqual(f.records.get(`cloud-send-heads/${task}`), prior);
-      assert.equal((await sendCloudTask(task, turn, "explicit retry", { basedOn: cursor }, f)).submission_status, "accepted");
+      assert.equal((await sendCloudTask(task, turn, "explicit retry", { expectedUserRevision: revision, deliveryMode: "new-turn" }, f)).submission_status, "accepted");
       assert.equal(f.calls.length, 1);
     }
   }
@@ -195,14 +195,14 @@ test("a failed reservation rollback stays blocked and reports recovery instead o
     if (writes === 4) throw new Error("private-marker");
     return persist(...args);
   };
-  await assert.rejects(sendCloudTask(task, turn, "fixture", { basedOn: cursor }, f), e => e.code === "CLOUD_PERSISTENCE_FAILED" && e.uncertain === false && e.reservation_cleanup_required && e.receipt_update_required);
+  await assert.rejects(sendCloudTask(task, turn, "fixture", { expectedUserRevision: revision, deliveryMode: "new-turn" }, f), e => e.code === "CLOUD_PERSISTENCE_FAILED" && e.uncertain === false && e.reservation_cleanup_required && e.receipt_update_required);
   assert.equal(f.calls.length, 0);
-  await assert.rejects(sendCloudTask(task, turn, "retry", { basedOn: cursor }, f), { code: "CLOUD_DUPLICATE_SEND" });
+  await assert.rejects(sendCloudTask(task, turn, "retry", { expectedUserRevision: revision, deliveryMode: "new-turn" }, f), { code: "CLOUD_DUPLICATE_SEND" });
   assert.equal(f.calls.length, 0);
   const unsent = [...f.records.values()].find(value => value.dispatch_started === false);
   const restored = await reconcileCloudSend(unsent.attempt_id, { ...f, read: async () => assert.fail("persisted pre-dispatch proof requires no history guess") });
   assert.equal(restored.delivery_verification, "not_sent"); assert.equal(restored.retry_safe, true);
-  assert.equal((await sendCloudTask(task, turn, "explicit retry", { basedOn: cursor }, f)).submission_status, "accepted");
+  assert.equal((await sendCloudTask(task, turn, "explicit retry", { expectedUserRevision: revision, deliveryMode: "new-turn" }, f)).submission_status, "accepted");
   assert.equal(f.calls.length, 1);
 });
 
@@ -216,39 +216,11 @@ test("reconciliation matches parent and prompt digest, and not_observed never me
   assert.equal(result.delivery_verification, "stored"); assert.equal(result.submission_status, "accepted");
 });
 
-test("cloud watch emits changes, polls without sending, and ends at its deadline", async () => {
-  let clock = 0, reads = 0; const events = [];
-  const dependencies = { now: () => clock, sleep: async n => { clock += n; }, read: async (id, s) => { reads++;return { ...observation, changed: reads === 2, cursor: s.since }; }, emit: e => events.push(e) };
-  const value = await watchCloudTask(task, { timeoutMs: 3000, intervalMs: 1000, since: cursor }, dependencies);
-  assert.equal(value.timed_out, false); assert.equal(reads, 2); assert.equal(events.length, 1);
-  reads = 0; clock = 0; events.length = 0;
-  const end = await watchCloudTask(task, { timeoutMs: 3000, intervalMs: 1000, since: cursor, stream: true }, dependencies);
-  assert.equal(end.timed_out, true); assert.equal(events.length, 1);
-});
-
-test("CLI environment/read/send and non-JSON watch stream work offline with isolated official-process and HTTP fixtures", async t => {
-  const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
-  const { execFile } = await import("node:child_process");
-  const root = await mkdtemp("/private/tmp/codexteer-cloud-api-cli-");
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const home = `${root}/home`, bin = `${root}/bin`, preload = `${root}/fixture.mjs`;
-  await mkdir(home, { mode: 0o700 }); await mkdir(bin, { mode: 0o700 });
-  const token = `fixture.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "fixture-account" } })).toString("base64url")}.fixture`;
-  await writeFile(`${bin}/codex`, `#!${process.execPath}
-let pending='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>{pending+=s;let i;while((i=pending.indexOf('\\n'))>=0){const m=JSON.parse(pending.slice(0,i));pending=pending.slice(i+1);if(m.id)console.log(JSON.stringify({id:m.id,result:m.method==='initialize'?{}:{authMethod:'chatgpt',authToken:${JSON.stringify(token)}}}));}});`, { mode: 0o700 });
-  const f = fixtureHistory();
-  await writeFile(preload, `const details=${JSON.stringify(f.details)},history=${JSON.stringify(f.history)};
-globalThis.fetch=async(url,options)=>{if(!url.startsWith('https://chatgpt.com/backend-api/wham/'))throw new Error('unexpected endpoint');const value=options.method==='POST'?{task:{id:${JSON.stringify(task)}}}:url.endsWith('/environments')?[{id:'env_fixture',label:'fixture/example'}]:url.endsWith('/turns')?history:details;return new Response(JSON.stringify(value),{status:200});};`);
-  const invoke = args => new Promise((resolve, reject) => execFile(process.execPath, ["--import", preload, "bin/codexteer.mjs", ...args], {
-    env: { ...process.env, PATH: bin, HOME: home, CODEX_HOME: home }, timeout: 15000,
-  }, (error, stdout, stderr) => error ? reject(Object.assign(error, { stdout, stderr })) : resolve(stdout)));
-  const environments = JSON.parse(await invoke(["cloud", "environments", "list", "--json"]));
-  assert.equal(environments.data.environments[0].id, "env_fixture");
-  const read = JSON.parse(await invoke(["cloud", "read", task, "--json"])).data;
-  const sent = JSON.parse(await invoke(["cloud", "send", task, "--turn", read.turn_id, "--based-on", read.cursor, "fixture follow-up", "--json"])).data;
-  assert.equal(sent.submission_status, "accepted");
-  assert.equal(JSON.parse(await invoke(["cloud", "receipt", sent.attempt_id, "--json"])).data.task_id, task);
-  const stream = await invoke(["cloud", "watch", task, "--stream", "--timeout-ms", "2000", "--interval-ms", "1000"]);
-  const rows = stream.trim().split("\n").map(line => JSON.parse(line));
-  assert.equal(rows.length, 2); assert.equal(rows[0].data.changed, true); assert.equal(rows.at(-1).data.timed_out, true);
+test("attempt recovery validates its explicit task before reads or writes", async () => {
+  const f = sendFixture();
+  f.records.set(`cloud-messages/${attempt}`, { task_id: task, attempt_id: attempt, submission_status: "unknown" });
+  f.read = async () => assert.fail("must not read another task");
+  await assert.rejects(cloudSendReceipt(attempt, { ...f, taskId: "task_other" }), { code: "CLOUD_TARGET_CONFLICT" });
+  await assert.rejects(reconcileCloudSend(attempt, { ...f, taskId: "task_other" }), { code: "CLOUD_TARGET_CONFLICT" });
+  assert.equal(f.calls.length, 0);
 });

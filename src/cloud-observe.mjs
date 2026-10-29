@@ -1,12 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { setTimeout as delay } from "node:timers/promises";
 import { cloudApi, cloudCredentials } from "./cloud-api.mjs";
-import { cloudTaskId } from "./cloud.mjs";
+import { cloudTaskId } from "./cloud-id.mjs";
 import { readRecord, storePath, withStoreLock, writeRecord } from "./store.mjs";
 
 const failure = (code, message) => Object.assign(new Error(message), { code, execution_environment: "cloud" });
 const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-const validCursor = value => typeof value === "string" && /^cloud_v1:[a-f0-9]{64}$/.test(value);
 const validTurn = (task, value) => typeof value === "string" && value.startsWith(`${task}~`) && /^(?:usertrn|assttrn)_[A-Za-z0-9_-]{1,200}$/.test(value.slice(task.length + 1));
 export const cloudUserRevision = snapshot => digest(snapshot.turns.filter(turn => turn.role === "user").map(turn => ({ id: turn.turn_id, parent: turn.parent_turn_id, messages: turn.messages })));
 
@@ -59,7 +57,6 @@ function commands(turn) {
 export async function readCloudTask(target, settings = {}, { request = cloudApi } = {}) {
   const taskId = cloudTaskId(target);
   if (settings.timeoutMs !== undefined && (!Number.isSafeInteger(settings.timeoutMs) || settings.timeoutMs < 1000 || settings.timeoutMs > 600000)) throw failure("CLOUD_OPTIONS_INVALID", "--timeout-ms must be 1000..600000.");
-  if (settings.since !== undefined && !validCursor(settings.since)) throw failure("CLOUD_OPTIONS_INVALID", "--since requires a cloud read cursor.");
   const timeoutMs = settings.timeoutMs ?? 120000, deadline = Date.now() + timeoutMs;
   const details = await request(`tasks/${taskId}`, { timeoutMs, ...(settings.signal ? { signal: settings.signal } : {}) });
   if (deadline - Date.now() < 1) throw failure("CLOUD_TIMEOUT", "Cloud history deadline expired.");
@@ -81,38 +78,14 @@ export async function readCloudTask(target, settings = {}, { request = cloudApi 
   })).sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.turn_id.localeCompare(b.turn_id));
   const snapshot = { task_id: taskId, turn_id: current.id, current_turn_id: history.current_turn_id, status: current.turn_status ?? "unknown",
     title: typeof details.task.title === "string" && details.task.title.length <= 2000 ? details.task.title : null, turns };
-  const cursor = `cloud_v1:${digest(snapshot)}`;
-  return { backend: "codex-api", execution_environment: "cloud", ...snapshot, cursor,
-    changed: settings.since === undefined || settings.since !== cursor, has_more: false,
+  return { backend: "codex-api", execution_environment: "cloud", ...snapshot,
     history_scope: "all-returned-turns", url: `https://chatgpt.com/codex/tasks/${taskId}` };
-}
-
-export async function watchCloudTask(target, settings = {}, { read = readCloudTask, sleep = delay, now = Date.now, emit } = {}) {
-  const taskId = cloudTaskId(target), timeoutMs = settings.timeoutMs ?? 30000, intervalMs = settings.intervalMs ?? 5000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 600000 || !Number.isSafeInteger(intervalMs) || intervalMs < 1000 || intervalMs > 60000) throw failure("CLOUD_OPTIONS_INVALID", "Watch timeout must be 1000..600000 ms and interval 1000..60000 ms.");
-  if (settings.since !== undefined && !validCursor(settings.since)) throw failure("CLOUD_OPTIONS_INVALID", "--since requires a cloud read cursor.");
-  let since = settings.since, last; const deadline = now() + timeoutMs;
-  do {
-    const remaining = deadline - now(); if (remaining < 1000) break;
-    try { last = await read(taskId, { timeoutMs: remaining, since }); }
-    catch (error) {
-      if (error.code === "CLOUD_TIMEOUT" && now() >= deadline) break;
-      if (error.code !== "CLOUD_STATE_CHANGED") throw error;
-      await sleep(Math.min(intervalMs, Math.max(0, deadline - now()))); continue;
-    }
-    if (last.changed) {
-      emit?.(last); since = last.cursor;
-      if (!settings.stream) return { ...last, timed_out: false };
-    }
-    const wait = Math.min(intervalMs, deadline - now()); if (wait > 0) await sleep(wait);
-  } while (now() < deadline);
-  return { ...last, task_id: taskId, changed: false, timed_out: true, cursor: last?.cursor ?? since ?? null };
 }
 
 export async function sendCloudTask(target, expectedTurn, prompt, settings = {}, dependencies = {}) {
   const taskId = cloudTaskId(target);
   if (settings.timeoutMs !== undefined && (!Number.isSafeInteger(settings.timeoutMs) || settings.timeoutMs < 1000 || settings.timeoutMs > 600000)) throw failure("CLOUD_OPTIONS_INVALID", "--timeout-ms must be 1000..600000.");
-  if (!validTurn(taskId, expectedTurn) || !validCursor(settings.basedOn)) throw failure("CLOUD_OPTIONS_INVALID", "Cloud send requires --turn from the same task and --based-on from cloud read.");
+  if (!validTurn(taskId, expectedTurn) || typeof settings.expectedUserRevision !== "string" || !/^[a-f0-9]{64}$/.test(settings.expectedUserRevision) || !["steer", "new-turn"].includes(settings.deliveryMode)) throw failure("CLOUD_OPTIONS_INVALID", "Cloud delivery requires the exact parent turn, user-input revision and delivery mode.");
   if (typeof prompt !== "string" || !prompt.trim() || prompt.includes("\0") || Buffer.byteLength(prompt) > 1024 * 1024) throw failure("CLOUD_OPTIONS_INVALID", "A non-empty instruction of at most 1 MiB is required.");
   const request = dependencies.request ?? cloudApi, read = dependencies.read ?? readCloudTask;
   const write = dependencies.write ?? writeRecord, load = dependencies.load ?? readRecord, lock = dependencies.lock ?? withStoreLock;
@@ -122,7 +95,7 @@ export async function sendCloudTask(target, expectedTurn, prompt, settings = {},
   const api = (route, options = {}) => request(route, { ...options, ...(auth ? { credentials: async () => auth } : {}) });
   try { return await lock(`cloud-send-${taskId}`, async () => {
     const observation = await read(taskId, { timeoutMs: settings.timeoutMs }, { request: api });
-    if (observation.turn_id !== expectedTurn || (settings.expectedUserRevision === undefined ? observation.cursor !== settings.basedOn : cloudUserRevision(observation) !== settings.expectedUserRevision)) throw failure("CLOUD_STATE_CHANGED", "Cloud task or user input changed after observation. Read again; no message was sent.");
+    if (observation.turn_id !== expectedTurn || cloudUserRevision(observation) !== settings.expectedUserRevision) throw failure("CLOUD_STATE_CHANGED", "Cloud task or user input changed after observation. Read again; no message was sent.");
     const active = ["in_progress", "pending", "queued", "running"].includes(observation.status);
     if (settings.deliveryMode === "steer" ? !active : !["completed", "failed", "cancelled"].includes(observation.status)) {
       throw failure(active ? "CLOUD_TASK_BUSY" : "CLOUD_TASK_IDLE", settings.deliveryMode === "steer"
@@ -131,10 +104,10 @@ export async function sendCloudTask(target, expectedTurn, prompt, settings = {},
     }
     const previous = await load("cloud-send-heads", taskId);
     const safelyUnsent = previous?.submission_status === "not_sent" && previous.dispatch_started === false;
-    if (previous && !safelyUnsent && (previous.submission_status !== "accepted" || previous.parent_turn_id === expectedTurn)) throw Object.assign(failure("CLOUD_DUPLICATE_SEND", "An accepted or uncertain send needs inspection before another send. Use cloud reconcile; do not resend."), { attempt_id: previous.attempt_id, receipt_path: previous.receipt_path });
+    if (previous && !safelyUnsent && (previous.submission_status !== "accepted" || previous.parent_turn_id === expectedTurn)) throw Object.assign(failure("CLOUD_DUPLICATE_SEND", "An accepted or uncertain send needs inspection before another send. Use history check <TASK> --attempt <ATTEMPT_ID>; do not resend."), { attempt_id: previous.attempt_id, receipt_path: previous.receipt_path });
     const attemptId = randomUUID();
     const receipt = { execution_environment: "cloud", backend: "codex-api", task_id: taskId, parent_turn_id: expectedTurn,
-      attempt_id: attemptId, receipt_path: storePath("cloud-messages", attemptId), based_on: settings.basedOn,
+      attempt_id: attemptId, receipt_path: storePath("cloud-messages", attemptId), user_revision: settings.expectedUserRevision,
       prompt_sha256: createHash("sha256").update(prompt).digest("hex"), prompt_hash_encoding: "utf8", message_characters: [...prompt].length,
       delivery_action: active ? "interrupt-and-follow-up" : "new-turn", parent_status: observation.status, submission_status: "not_sent", dry_run: !!settings.dryRun };
     await settings.beforeSend?.(observation);
@@ -173,10 +146,16 @@ export async function sendCloudTask(target, expectedTurn, prompt, settings = {},
   }); } finally { if (auth) auth.token = ""; }
 }
 
-export async function reconcileCloudSend(attemptId, { read = readCloudTask, load = readRecord, write = writeRecord, lock = withStoreLock } = {}) {
+export async function cloudSendReceipt(attemptId, { load = readRecord, taskId } = {}) {
   if (typeof attemptId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(attemptId)) throw failure("CLOUD_OPTIONS_INVALID", "A cloud send attempt UUID is required.");
   const receipt = await load("cloud-messages", attemptId);
   if (!receipt) throw failure("CLOUD_RECEIPT_NOT_FOUND", "Cloud send receipt was not found.");
+  if (taskId !== undefined && cloudTaskId(receipt.task_id) !== cloudTaskId(taskId)) throw failure("CLOUD_TARGET_CONFLICT", "The send attempt belongs to another cloud task.");
+  return receipt;
+}
+
+export async function reconcileCloudSend(attemptId, { read = readCloudTask, load = readRecord, write = writeRecord, lock = withStoreLock, taskId: expectedTask } = {}) {
+  const receipt = await cloudSendReceipt(attemptId, { load, taskId: expectedTask });
   const taskId = cloudTaskId(receipt.task_id);
   return lock(`cloud-send-${taskId}`, async () => {
     if (receipt.submission_status === "not_sent" && receipt.dispatch_started === false) {
@@ -185,7 +164,7 @@ export async function reconcileCloudSend(attemptId, { read = readCloudTask, load
     }
     const snapshot = await read(taskId);
     const matches = snapshot.turns.filter(turn => turn.role === "user" && turn.parent_turn_id === receipt.parent_turn_id
-      && turn.messages.some(message => (receipt.prompt_hash_encoding === "utf8" ? createHash("sha256").update(message.text).digest("hex") : digest(message.text)) === receipt.prompt_sha256));
+      && turn.messages.some(message => createHash("sha256").update(message.text).digest("hex") === receipt.prompt_sha256));
     if (matches.length !== 1) return { ...receipt, delivery_verification: "not_observed", retry_safe: false };
     Object.assign(receipt, { submission_status: "accepted", delivery_verification: "stored", user_turn_id: matches[0].turn_id });
     await write("cloud-messages", attemptId, receipt);

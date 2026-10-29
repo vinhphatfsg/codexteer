@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import { helpData, renderHelp } from "../src/help.mjs";
 import { cloudInvocation } from "../src/cloud-cli.mjs";
 import { normalizeTaskId } from "../src/task-id.mjs";
 import { normalizeThreadId } from "../src/thread-id.mjs";
@@ -183,4 +184,49 @@ const fs=require('node:fs');const prompt=process.argv.at(-1);const record=JSON.p
     assert.equal(result.registered,true);assert.equal(result.cloud,true);assert.equal(result.saved,!pathMode);assert.equal(result.task,task);
     const status=await f.invoke(['supervise','status',task]);assert.equal(status.state,'stopped');
   }
+});
+
+test("common attempt recovery survives a missing journal and enforces task and supervisor boundaries", async t => {
+  const f = await fixture(t), run = f.invoke;
+  const sent = await run(["send", task, "recover fixture", "--new-turn"]);
+  const attempt = sent.cloud_attempt_id;
+  assert.match(attempt, /^[0-9a-f-]{36}$/);
+  await rm(`${f.home}/codex-steer/messages/${sent.message_id}.json`);
+  const receipt = await run(["history", "show", task, "--attempt", attempt]);
+  assert.equal(receipt.task_id, task); assert.equal(receipt.submission_status, "accepted");
+  await assert.rejects(run(["history", "show", "task_other", "--attempt", attempt]), e => e.result?.error.code === "CLOUD_TARGET_CONFLICT");
+  await assert.rejects(run(["history", "check", "task_other", "--attempt", attempt]), e => e.result?.error.code === "CLOUD_TARGET_CONFLICT");
+  await assert.rejects(run(["history", "check", task, sent.message_id, "--attempt", attempt]), e => e.result?.error.code === "CLOUD_OPTIONS_INVALID");
+  const proof = await run(["history", "check", task, "--attempt", attempt]);
+  assert.equal(proof.delivery_verification, "stored");
+  assert.equal(JSON.parse(await readFile(f.state)).posts, 1);
+
+  const prompt = await run(["supervise", "prompt", task, "--use-path-cli"]), sid = prompt.supervisor.session_id;
+  const managed = (...args) => run(["--supervisor", sid, "--connection", "cloud", ...args]);
+  await managed("supervise", "register", task);
+  await run(["supervise", "pause", task]);
+  assert.equal((await managed("history", "check", task, "--attempt", attempt)).delivery_verification, "stored");
+  await assert.rejects(managed("thread", "receipt", attempt), e => e.result?.error.code === "SUPERVISOR_CONTROL_FORBIDDEN");
+  await run(["supervise", "stop", task]);
+  await assert.rejects(managed("history", "check", task, "--attempt", attempt), e => e.result?.error.code === "SUPERVISOR_STOPPED");
+  await assert.rejects(managed("history", "show", task, "--attempt", attempt), e => e.result?.error.code === "SUPERVISOR_STOPPED");
+
+  const unsent = { ...receipt, submission_status: "not_sent", dispatch_started: false };
+  await writeFile(receipt.receipt_path, JSON.stringify(unsent), { mode: 0o600 });
+  await writeFile(`${f.home}/codex-steer/cloud-send-heads/${task}.json`, JSON.stringify({ ...unsent, submission_status: "dispatching" }), { mode: 0o600 });
+  const recovered = await run(["history", "check", task, "--attempt", attempt]);
+  assert.equal(recovered.delivery_verification, "not_sent"); assert.equal(recovered.retry_safe, true);
+  assert.equal(JSON.parse(await readFile(f.state)).posts, 1);
+});
+
+
+test("Cloud help documents one common command surface and its recovery operations", () => {
+  for (const topic of ["cloud", "history", "thread", "projects", "threads", "diff"]) {
+    const data = helpData(topic);
+    assert.doesNotMatch(renderHelp(data), /旧cloud|cloud_v1|codexteer cloud (?:create|read|watch|send|reconcile|receipt|status|diff)/);
+    for (const usage of data.usage) assert.doesNotMatch(usage, /^cloud /);
+  }
+  assert.match(renderHelp(helpData("thread")), /--connection cloud thread receipt/);
+  assert.match(renderHelp(helpData("history")), /--attempt <ATTEMPT_ID>/);
+  assert.match(renderHelp(helpData("diff")), /--attempt 1\.\.4/);
 });

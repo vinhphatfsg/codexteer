@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import path from "node:path";
-import { cloudRoutingError, cloudTaskId, createCloudTask, cloudTaskStatus, cloudTaskDiff, runCloudCli } from "../src/cloud.mjs";
+import { cloudTaskId, createCloudTask, cloudTaskDiff, runCloudCli } from "../src/cloud.mjs";
 
 function exec(file, args, { input = "", ...settings } = {}) {
   return new Promise((resolve, reject) => {
@@ -16,15 +16,6 @@ function exec(file, args, { input = "", ...settings } = {}) {
 const ID = "task_fixture_001", URL = `https://chatgpt.com/codex/tasks/${ID}`;
 const help = action => `Usage: codex cloud ${action} --env ENV_ID --branch BRANCH --attempts N --attempt N`;
 
-test("cloud routing rejects Desktop host options before they can be consumed", () => {
-  for (const prefix of [[], ["--json"], ["--connection", "shared"]]) {
-    assert.equal(cloudRoutingError([...prefix, "--host", "local", "cloud", "status", ID]).code, "CLOUD_TARGET_CONFLICT");
-    assert.equal(cloudRoutingError([...prefix, "cloud", "status", ID, "--remote-transport", "native"]).code, "CLOUD_TARGET_CONFLICT");
-    assert.equal(cloudRoutingError([...prefix, "--context-thread", "fixture", "cloud", "create"]).code, "CLOUD_TARGET_CONFLICT");
-  }
-  assert.equal(cloudRoutingError(["--host", "remote-control:env_fixture", "send", "fixture", "cloud"]), null);
-  assert.equal(cloudRoutingError(["cloud", "create", "--", "--host"]), null);
-});
 function fixtureRun(result) {
   const calls = [], run = async (args, options) => {
     calls.push({ args, options });
@@ -105,17 +96,6 @@ test("a failed launch after preflight is not-created and accepted receipts survi
   assert.equal(receipt.creation_status, "created"); assert.equal(receipt.task_id, ID); assert.equal(receipt.receipt_update_required, true); assert.equal(g.calls.length, 3);
 });
 
-test("status distinguishes a successful query from pending, applied, and failed tasks", async () => {
-  for (const state of ["PENDING", "READY", "APPLIED", "ERROR"]) {
-    const f = fixtureRun({ stdout: `[${state}] fixture\n+1/-0 • 1 file\n`, exitCode: state === "READY" ? 0 : 1 });
-    const data = await cloudTaskStatus(URL, {}, { run: f.run });
-    assert.equal(data.status, state.toLowerCase()); assert.equal(data.task_id, ID); assert.deepEqual(f.calls[2].args, ["status", ID]);
-  }
-  for (const result of [{ stdout: "Error: private diagnostic", exitCode: 1 }, { stdout: "[READY] fixture", exitCode: 1 }, { stdout: "[PENDING] fixture", exitCode: 0 }, { stdout: "[NEW_STATE] fixture", exitCode: 0 }]) {
-    const f = fixtureRun(result); await assert.rejects(cloudTaskStatus(ID, {}, { run: f.run }), { code: "CLOUD_PROTOCOL_UNVERIFIED" });
-  }
-});
-
 test("diff preserves bytes, selects attempts explicitly, and never applies changes", async () => {
   const diff = "diff --git a/fixture.txt b/fixture.txt\n--- a/fixture.txt\n+++ b/fixture.txt\n@@ -0,0 +1 @@\n+日本語\n";
   for (const attempt of [undefined, 1, 4]) {
@@ -142,6 +122,9 @@ async function fakeCli(t) {
   const script = `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
+if (args[0] === 'app-server') {
+  let pending='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>{pending+=s;let i;while((i=pending.indexOf('\\n'))>=0){const m=JSON.parse(pending.slice(0,i));pending=pending.slice(i+1);if(m.id)console.log(JSON.stringify({id:m.id,result:m.method==='initialize'?{}:{authMethod:'chatgpt',authToken:'fixture.'+Buffer.from(JSON.stringify({'https://api.openai.com/auth':{chatgpt_account_id:'fixture'}})).toString('base64url')+'.fixture'}}));}});
+} else {
 const input = fs.readFileSync(0, 'utf8');
 fs.appendFileSync(process.env.FIXTURE_LOG, JSON.stringify({args,input,cwd:process.cwd(),startingDiff:process.env.CODEX_STARTING_DIFF}) + '\\n');
 fs.writeFileSync('error.log', 'private fixture diagnostic');
@@ -160,40 +143,47 @@ else if (args[1] === 'exec') {
 else if (args[1] === 'status') { console.log('[PENDING] fixture'); process.exitCode = 1; }
 else if (args[1] === 'diff') { process.stdout.write('+日本語\\n'); }
 else { process.exitCode = 2; }
+}
 `;
   await writeFile(path.join(bin, "codex"), script, { mode: 0o700 });
-  return { root, home, log, env: { ...process.env, PATH: bin, HOME: home, CODEX_HOME: home, FIXTURE_LOG: log } };
+  const preload = path.join(root, "fixture.mjs");
+  await writeFile(preload, `globalThis.fetch=async(url,options)=>{if(options.method!=='GET'||url!=='https://chatgpt.com/backend-api/wham/environments')throw new Error('Unexpected request');return new Response(JSON.stringify([{id:'env_fixture',label:'fixture/example',repo_map:{fixture:{repository_full_name:'fixture/example',default_branch:'main'}}}]),{status:200});};`);
+  return { root, home, log, env: { ...process.env, PATH: bin, HOME: home, CODEX_HOME: home, FIXTURE_LOG: log, NODE_OPTIONS: '--import=' + preload } };
 }
 
 test("CLI roundtrip uses a fake executable with isolated HOME and retrieves private receipts", async t => {
   const f = await fakeCli(t), invoke = async (args, input) => JSON.parse((await exec(process.execPath, ["bin/codexteer.mjs", "--json", ...args], { env: f.env, input })).stdout);
   f.env.CODEX_STARTING_DIFF = "private fixture starting diff";
-  const created = await invoke(["cloud", "create", "--env", "env_fixture", "--branch", "main", "-"], "日本語\n$(literal)");
-  assert.equal(created.command, "cloud.create"); assert.equal(created.data.task_id, ID);
+  const created = await invoke(["--connection", "cloud", "thread", "create", "--env", "env_fixture", "--branch", "main", "-"], "日本語\n$(literal)");
+  assert.equal(created.command, "thread.create"); assert.equal(created.data.task_id, ID);
   const saved = JSON.parse(await readFile(created.data.receipt_path)); assert.equal(saved.task_id, ID); assert.equal((await stat(created.data.receipt_path)).mode & 0o777, 0o600);
   assert.equal((await stat(path.dirname(created.data.receipt_path))).mode & 0o777, 0o700);
-  assert.equal((await invoke(["cloud", "receipt", created.data.attempt_id])).data.task_id, ID);
-  assert.equal((await invoke(["cloud", "status", URL])).data.status, "pending");
-  assert.equal((await invoke(["cloud", "diff", ID, "--attempt", "2"])).data.diff, "+日本語\n");
+  assert.equal((await invoke(["--connection", "cloud", "thread", "receipt", created.data.attempt_id])).data.task_id, ID);
+  assert.equal((await invoke(["diff", ID, "--attempt", "2"])).data.diff, "+日本語\n");
   const calls = (await readFile(f.log, "utf8")).trim().split("\n").map(s => JSON.parse(s));
   assert.equal(calls.filter(c => c.args[1] === "exec" && !c.args.includes("--help")).length, 1);
   const dispatch = calls.find(c => c.args[1] === "exec" && !c.args.includes("--help"));
   assert.notEqual(dispatch.cwd, process.cwd()); assert.equal(dispatch.startingDiff, undefined);
   await assert.rejects(stat(dispatch.cwd), { code: "ENOENT" });
   assert.equal(dispatch.input, "日本語\n$(literal)"); assert(!JSON.stringify(dispatch.args).includes("literal"));
-  const before = calls.length;
-  for (const args of [["cloud", "create", "--env", "env_fixture", "--branch", "main", "--dry-run", "fixture"], ["cloud", "--help"]]) await invoke(args);
-  assert.equal((await readFile(f.log, "utf8")).trim().split("\n").length, before);
+  await invoke(["help", "cloud"]);
+  assert.equal((await readFile(f.log, "utf8")).trim().split("\n").length, calls.length);
+  const dry = await invoke(["--connection", "cloud", "thread", "create", "--env", "env_fixture", "--branch", "main", "--dry-run", "fixture"]);
+  assert.equal(dry.data.creation_status, "not_created");
+  assert.equal((await readFile(f.log, "utf8")).trim().split("\n").length, calls.length);
 });
 
-test("Desktop-bound, remote, duplicate, and unsupported cloud options fail before subprocess access", async t => {
+test("removed cloud namespace and invalid common options fail before subprocess access", async t => {
   const f = await fakeCli(t);
-  for (const args of [["--supervisor", "aaaaaaaa-aaaa-4aaa-8aaa-000000000001", "cloud", "status", ID], ["--connection", "desktop", "cloud", "status", ID],
-    ["--host", "remote-control:env_fixture", "cloud", "status", ID], ["--host", "local", "cloud", "status", ID], ["cloud", "status", ID, "--host", "local"], ["cloud", "apply", ID],
-    ["cloud", "create", "--env", "env_fixture", "--env", "other", "--branch", "main", "fixture"], ["cloud", "create", "--env", "env_fixture", "fixture"],
-    ["cloud", "diff", ID, "--attempt", "0"], ["cloud", "status", "aaaaaaaa-aaaa-4aaa-8aaa-000000000001"]]) {
+  const removed = ["create", "environments", "read", "watch", "send", "receipt", "reconcile", "status", "diff"];
+  for (const args of [...removed.map(action => ["cloud", action, ID]),
+    ["--connection", "cloud", "cloud", "read", ID],
+    ["--connection", "desktop", "read", ID], ["read", ID, "--host", "local"],
+    ["--connection", "cloud", "thread", "create", "--env", "env_fixture", "--env", "other", "--branch", "main", "fixture"],
+    ["diff", ID, "--attempt", "0"], ["diff", ID, "--attempt", "5"],
+    ["send", ID, "fixture", "--turn", "obsolete", "--dry-run"]]) {
     const result = await exec(process.execPath, ["bin/codexteer.mjs", "--json", ...args], { env: f.env }).then(() => null, e => e);
-    assert.equal(result.code, 1); assert.equal(JSON.parse(result.stdout).ok, false);
+    assert.equal(result?.code, 1, JSON.stringify(args)); assert.equal(JSON.parse(result.stdout).ok, false);
   }
   await assert.rejects(readFile(f.log), { code: "ENOENT" });
 });
@@ -201,7 +191,7 @@ test("Desktop-bound, remote, duplicate, and unsupported cloud options fail befor
 test("JSON and human submission errors retain recovery IDs even if the final receipt cannot be saved", async t => {
   for (const mode of ["unknown", "confirmed", "confirmed-receipt-failure"]) for (const json of [false, true]) {
     const f = await fakeCli(t);
-    const result = await exec(process.execPath, ["bin/codexteer.mjs", ...(json ? ["--json"] : []), "cloud", "create", "--env", "env_fixture", "--branch", "main", "hidden fixture instruction"],
+    const result = await exec(process.execPath, ["bin/codexteer.mjs", ...(json ? ["--json"] : []), "--connection", "cloud", "thread", "create", "--env", "env_fixture", "--branch", "main", "hidden fixture instruction"],
       { env: { ...f.env, FIXTURE_ERROR_MODE: mode } }).then(() => null, error => error);
     assert.equal(result.code, 1);
     assert(!result.stderr.includes("hidden fixture instruction")); assert(!result.stderr.includes("private fixture diagnostic"));

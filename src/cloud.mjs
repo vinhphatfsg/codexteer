@@ -11,24 +11,6 @@ export { cloudTaskId } from "./cloud-id.mjs";
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code });
 const taskUrl = id => `https://chatgpt.com/codex/tasks/${id}`;
 
-// Inspect original argv before a Desktop router can consume its host flags.
-// This remains independent of any local/remote Desktop routing implementation.
-export function cloudRoutingError(argv) {
-  const prefixValues = new Set(["--host", "--remote-transport", "--context-thread", "--connection", "--supervisor", "--require-node-version"]);
-  let index = 0;
-  while (index < argv.length) {
-    if (argv[index] === "--json") index++;
-    else if (prefixValues.has(argv[index])) index += 2;
-    else break;
-  }
-  if (argv[index] !== "cloud") return null;
-  const end = argv.includes("--") ? argv.indexOf("--") : argv.length;
-  if (argv.slice(0, end).some(arg => ["--host", "--remote-transport", "--context-thread"].includes(arg))) {
-    return failure("Cloud commands use the official CLI directly. --host, --remote-transport, and --context-thread are Desktop options and cannot select a cloud destination.", "CLOUD_TARGET_CONFLICT");
-  }
-  return null;
-}
-
 function options(settings = {}) {
   const timeoutMs = settings.timeoutMs ?? 120000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 600000) throw failure("--timeout-ms must be 1000..600000.");
@@ -138,16 +120,6 @@ export async function createCloudTask(environment, branch, prompt, settings = {}
   }
 }
 
-export async function cloudTaskStatus(target, settings = {}, { run = runCloudCli } = {}) {
-  const taskId = cloudTaskId(target), limits = options(settings);
-  await preflight("status", run);
-  const result = await run(["status", taskId], limits);
-  if (!completed(result) || ![0, 1].includes(result.exitCode)) throw cliFailure(result);
-  const match = result.stdout?.match(/^\[(PENDING|READY|APPLIED|ERROR)\] ([^\r\n]*)/u);
-  if (!match || result.exitCode !== (match[1] === "READY" ? 0 : 1)) throw failure("Unrecognized cloud status output. No task state was inferred.", "CLOUD_PROTOCOL_UNVERIFIED");
-  return { backend: "codex-cli", execution_environment: "cloud", task_id: taskId, url: taskUrl(taskId), status: match[1].toLowerCase(), output: result.stdout };
-}
-
 export async function cloudTaskDiff(target, settings = {}, { run = runCloudCli, request = cloudApi } = {}) {
   const taskId = cloudTaskId(target), limits = options(settings);
   if (settings.attempt !== undefined && (!Number.isInteger(settings.attempt) || settings.attempt < 1 || settings.attempt > 4)) throw failure("--attempt must be 1..4.");
@@ -172,7 +144,7 @@ export async function cloudTaskDiff(target, settings = {}, { run = runCloudCli, 
 
 export async function cloudCreationReceipt(attemptId) {
   if (typeof attemptId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(attemptId)) throw failure("A cloud creation attempt UUID is required.");
-  const receipt = await readRecord("cloud-creations", attemptId) ?? await readRecord("cloud-messages", attemptId);
+  const receipt = await readRecord("cloud-creations", attemptId);
   if (!receipt) throw failure("Cloud creation receipt was not found.", "CLOUD_RECEIPT_NOT_FOUND");
   return receipt;
 }

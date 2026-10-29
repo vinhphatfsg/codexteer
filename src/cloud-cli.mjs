@@ -8,7 +8,8 @@ import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
 import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
 import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, listInstructions } from "./journal.mjs";
-import { createCloudTask, cloudTaskDiff, listCloudTasks } from "./cloud.mjs";
+import { createCloudTask, cloudTaskDiff, listCloudTasks, cloudCreationReceipt } from "./cloud.mjs";
+import { cloudSendReceipt, reconcileCloudSend } from "./cloud-observe.mjs";
 import { cloudEnvironments } from "./cloud-api.mjs";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -18,7 +19,7 @@ import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, ve
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code, execution_environment: "cloud" });
-const values = new Set("--connection --supervisor --require-node-version --host --remote-transport --context-thread --thread --backend --source --kind --evidence --based-on --finding --expires-at --supersedes --checkpoint --limit --max-chars --since --poll-ms --timeout-ms --until --notify --settle-ms --max-hold-ms --owner --key --condition --note --rating --reason --root --path --exclude --command --cwd --artifact --status --by --token --ttl-ms --agent --project --env --branch --title --model --thinking --cursor".split(" "));
+const values = new Set("--connection --supervisor --require-node-version --host --remote-transport --context-thread --thread --backend --source --kind --evidence --based-on --finding --expires-at --supersedes --checkpoint --limit --max-chars --since --poll-ms --timeout-ms --until --notify --settle-ms --max-hold-ms --owner --key --condition --note --rating --reason --root --path --exclude --command --cwd --artifact --status --by --token --ttl-ms --agent --project --env --branch --title --model --thinking --cursor --attempt".split(" "));
 function option(args, name, fallback) {
   const index = args.indexOf(name), stop = args.indexOf("--");
   if (index < 0 || (stop >= 0 && index > stop)) return fallback;
@@ -43,7 +44,7 @@ export function cloudInvocation(argv) {
     if (!own[i].startsWith("--")) positional.push(own[i]);
   }
   const [command, action] = positional;
-  if (["help", "cloud", "--help", "--version"].includes(command) || own.includes("--help") || own.includes("--version")) return false;
+  if (["help", "--help", "--version"].includes(command) || own.includes("--help") || own.includes("--version")) return false;
   if (connection >= 0 && own[connection + 1] === "cloud") return true;
   const thread = own.indexOf("--thread");
   if (["doctor", "resource"].includes(command) && thread >= 0) return isCloudTask(own[thread + 1]);
@@ -131,7 +132,14 @@ export async function mainCloud(argv) {
     output(`findings.${action}`, single ? await handlers[action](id, options) : await handlers[action](id, args[1], options)); return;
   }
   if (command === "history") {
-    const action = args.shift(), includeText = flag(args, "--include-text"), pending = flag(args, "--pending");
+    const action = args.shift(), attempt = option(args, "--attempt");
+    if (attempt !== undefined) {
+      if (!["show", "check"].includes(action)) throw failure("--attempt requires history show or history check.");
+      exact(args, 1); const id = await bound(args[0]);
+      const settings = { taskId: id };
+      output(`history.${action}`, action === "show" ? await cloudSendReceipt(attempt, settings) : await reconcileCloudSend(attempt, settings)); return;
+    }
+    const includeText = flag(args, "--include-text"), pending = flag(args, "--pending");
     const report = action === "mark" ? { status: option(args, "--status"), note: option(args, "--note"), evidence: repeated(args, "--evidence"), by: option(args, "--by", "local") } : {};
     if (!args[0] || args.length > 2 || !["list", "show", "check", "mark"].includes(action) || (["show", "mark"].includes(action) && !args[1]) || (action === "list" && args[1])) throw failure("Invalid history arguments.");
     const id = await bound(args[0]); const data = action === "list" ? await listMessages(id, { includeText, pending }) : action === "show" ? messageSummary(await getMessage(id, args[1]), includeText)
@@ -188,6 +196,11 @@ export async function mainCloud(argv) {
     if (supervisor) throw failure("A bound supervisor cannot enumerate unrelated cloud tasks.", "SUPERVISOR_CONTROL_FORBIDDEN");
     output("threads.list", await listCloudTasks({ limit, cursor, environment })); return;
   }
+  if (command === "thread" && args[0] === "receipt") {
+    args.shift(); exact(args, 1);
+    if (supervisor) throw failure("A bound supervisor cannot inspect unrelated creation attempts.", "SUPERVISOR_CONTROL_FORBIDDEN");
+    output("thread.receipt", await cloudCreationReceipt(args[0])); return;
+  }
   if (command === "thread" && args[0] === "create") {
     args.shift(); if (supervisor) throw failure("A bound supervisor cannot create another task.", "SUPERVISOR_CONTROL_FORBIDDEN");
     const project = option(args, "--project"), environment = option(args, "--env"), requestedBranch = option(args, "--branch"), dryRun = flag(args, "--dry-run");
@@ -228,7 +241,14 @@ export async function mainCloud(argv) {
     const result = spawnSync("/usr/bin/open", [url], { encoding: "utf8", timeout: 5000 }); if (result.status !== 0) throw failure("Could not open the cloud task in the browser.", "CLOUD_OPEN_FAILED");
     output("open", { thread_id: id, deep_link: url, execution_environment: "cloud" }); return;
   }
-  if (command === "diff") { exact(args, 1); const data = await cloudTaskDiff(await bound(args[0])); if (json) output("diff", data); else if (data.diff !== null) process.stdout.write(data.diff); else console.error("No server-recorded patch is available; inspect command evidence."); return; }
+  if (command === "diff") {
+    const attempt = option(args, "--attempt"), timeout = option(args, "--timeout-ms"); exact(args, 1);
+    const data = await cloudTaskDiff(await bound(args[0]), { ...(attempt === undefined ? {} : { attempt: Number(attempt) }), ...(timeout === undefined ? {} : { timeoutMs: Number(timeout) }) });
+    if (json) output("diff", data);
+    else if (data.diff === null) console.error("No server-recorded patch is available. This does not prove the cloud working copy has no changes; inspect read command evidence.");
+    else process.stdout.write(data.diff);
+    return;
+  }
   if (command !== "send") throw failure("This cloud operation is not implemented yet. No Desktop fallback was attempted.", "CLOUD_CAPABILITY_UNSUPPORTED");
   const dryRun = flag(args, "--dry-run"), newTurn = flag(args, "--new-turn"), backend = option(args, "--backend", "app-server");
   const noSound = flag(args, "--no-sound"), explicitSound = flag(args, "--sound"); if (noSound && explicitSound) throw failure("--sound and --no-sound cannot be combined.");

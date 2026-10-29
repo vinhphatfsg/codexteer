@@ -56,7 +56,7 @@ Cloud監督レコードは所有者専用の`CODEX_HOME/codex-steer/cloud-superv
 - タスク・親ターン・ユーザー入力の鮮度を確認しますが、Cloud APIには読取りと送信を原子的に固定することを確認した契約がなく、`freshness_atomic: false`を返します。別の最新ターンを推測して宛先を変更しません。
 - `accepted`は受付です。新しいターンIDは即時に推測せず、`read`と`history check`で親ターン・本文SHA256を照合します。`stored`も要求の達成の証明ではありません。
 - 結果不明時は`unknown`を維持し、自動再送しません。未解決の配送予約は次のCloud送信も止めます。`not_observed`は未配送の証明ではなく、再送を許可しません。
-- POST前の保存失敗では未送信を記録して予約を戻します。予約の復元も失敗した場合は`reservation_cleanup_required: true`で止め、`cloud reconcile <ATTEMPT_ID>`は保存済みの明示的な未送信証拠がある場合だけ予約を修復できます。履歴に見えないだけの送信を安全と推測せず、自動再送もしません。
+- POST前の保存失敗では未送信を記録して予約を戻します。予約の復元も失敗した場合は`reservation_cleanup_required: true`で止め、`history check <TASK> --attempt <ATTEMPT_ID>`は保存済みの明示的な未送信証拠がある場合だけ予約を修復できます。履歴に見えないだけの送信を安全と推測せず、自動再送もしません。
 
 共通`send --dry-run`はローカルと同様に入力・指摘・根拠・監督状態を確認するだけで、ネットワーク・配送記録・送信を行いません。鮮度は未確認です。初回指示と送信にはstdinの`-`も使えます。空本文・NUL・1 MiB超の指示は拒否します。先頭が`--`の本文には区切りの`--`を使います。
 
@@ -76,11 +76,11 @@ Cloud監督レコードは所有者専用の`CODEX_HOME/codex-steer/cloud-superv
 
 ## 状態・差分・ローカル検証
 
-共通`status`はローカルと同じ`active/idle`等の観測状態を返します。詳細な元のCloud状態は旧`cloud status`でも確認できます。
+共通`status`はローカルと同じ`active/idle`等の観測状態を返します。元のCloudターン状態は`read`のイベントと照合します。
 
 ```bash
 codexteer diff task_example --json
-codexteer cloud diff task_example --attempt 1 --json
+codexteer diff task_example --attempt 1 --json
 ```
 
 公式CLIが返す差分をそのまま返し、ローカルへ適用しません。既定試行で公式CLIが差分を提供せず、APIでも完了ターンに記録済みパッチがないことを確認できたときは、`diff_available: false`・`diff: null`・`local_changes: unknown`です。実機ではファイルの実差分があっても記録済みパッチが提供されない場合がありました。変更ゼロと解釈せず、`read --include-output`のコマンド証拠と区別します。特定の`--attempt 1..4`では他の試行から推測しません。
@@ -93,12 +93,18 @@ Cloud作成時のタイトル・モデル/推論設定・ローカルの権限�
 
 一覧・観測・配送照合・継続指示は、公式`codex app-server --listen stdio://`へ初期化と`getAuthStatus`を送り、既存のChatGPT認証とそのアカウントをメモリ内で使います。認証ファイルを直接読まず、トークン・アカウントIDは表示/保存せず、認証取得のためのモデルターンやDesktop接続も作りません。APIキーや未確認の認証形式は拒否します。
 
-HTTP APIは安定した公開SDK契約ではありません。送信先は公式HTTPSオリジンに固定し、リダイレクト・任意URL・自動ログイン・自動再送を使いません。作成・タスク一覧・元の状態・差分は公式Cloud CLIを使い、必要なhelpと版を確認します。公式CLIは私有の一時作業ディレクトリで動かして診断ログを終了時に削除し、`CODEX_STARTING_DIFF`を引き継ぎません。未確認の入力や認証/通信エラーを、空の正常結果に置き換えません。
+HTTP APIは安定した公開SDK契約ではありません。送信先は公式HTTPSオリジンに固定し、リダイレクト・任意URL・自動ログイン・自動再送を使いません。作成・タスク一覧・差分は公式Cloud CLIを使い、必要なhelpと版を確認します。公式CLIは私有の一時作業ディレクトリで動かして診断ログを終了時に削除し、`CODEX_STARTING_DIFF`を引き継ぎません。未確認の入力や認証/通信エラーを、空の正常結果に置き換えません。
 
-## 旧cloudサブコマンド
+## 試行の確認と回復
 
-`cloud environments list/create/read/watch/send/reconcile/status/diff/receipt`は互換用に残します。新しい監督では共通コマンドを使います。旧`cloud read`の`cloud_v1:...`カーソルと共通`read`のカーソルは別形式なので混ぜません。旧`cloud watch --stream`は期限付きで、共通`watch --stream`とは終了条件が異なります。旧`cloud send`は明示した完了ターンへの継続用で、監督ID付きの旧cloud操作は拒否します。
+```bash
+codexteer --connection cloud thread receipt <ATTEMPT_ID> --json
+codexteer history show task_example --attempt <ATTEMPT_ID> --json
+codexteer history check task_example --attempt <ATTEMPT_ID> --json
+```
 
-作成・配送の試行記録は`cloud receipt <ATTEMPT_ID>`で確認できます。初回指示は保存せずダイジェストを持ち、作成結果不明時も再作成しません。受付後に記録更新だけ失敗した場合は、確認できた実IDと`receipt_update_required: true`を保持します。
+`thread receipt`は作成時のローカル試行記録を表示します。タスクIDを取得できなかった結果不明の場合も、エラーの`attempt_id`で確認できます。作成や配送を再実行せず、外部照会もしません。作成記録に送信済み本文は保存せずダイジェストを持ち、受付後に記録更新だけ失敗した場合は確認できた実IDと`receipt_update_required: true`を保持します。監督ID付きでは他の作成試行の閲覧を拒否します。
+
+通常の送信は`history show/check <TASK> <MESSAGE_ID>`を使います。ジャーナル更新も失敗した場合は、エラーや送信結果の`attempt_id`/`cloud_attempt_id`を`--attempt`に指定します。`history show --attempt`はローカル配送記録、`history check --attempt`は親ターンと本文SHA256の照合および明示的な未送信記録による予約回復です。どちらも指定タスクとの一致と監督の有効状態を確認し、別タスクへの記録アクセスを拒否します。MESSAGE_IDと--attemptは併用しません。照合は再送せず、`not_observed`から未配送を推測しません。
 
 一次資料: [公式CLIリファレンス](https://developers.openai.com/codex/cli/reference)、[公式Cloud CLI実装](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/cloud-tasks/src/lib.rs)。実機検証は専用タスクに限定し、実ID・環境名・認証情報・生ログを公開資料に含めません。

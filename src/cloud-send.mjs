@@ -15,7 +15,7 @@ export async function sendCloudInput(target, message, options = {}, dependencies
   const client = new CloudReadClient({ read });
   try {
     const receipt = await send(taskId, snapshot.turn_id, message, {
-      dryRun: !!options.dryRun, basedOn: snapshot.cursor, deliveryMode: options.newTurn ? "new-turn" : "steer",
+      dryRun: !!options.dryRun, deliveryMode: options.newTurn ? "new-turn" : "steer",
       expectedUserRevision: cloudUserRevision(snapshot),
       beforeSend: current => options.beforeSend?.(cloudThread(current), client),
     });

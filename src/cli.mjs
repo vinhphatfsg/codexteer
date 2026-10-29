@@ -1,6 +1,3 @@
-import { createCloudTask, cloudTaskStatus, cloudTaskDiff, cloudCreationReceipt } from "./cloud.mjs";
-import { cloudEnvironments } from "./cloud-api.mjs";
-import { readCloudTask, watchCloudTask, sendCloudTask, reconcileCloudSend } from "./cloud-observe.mjs";
 import { readFileSync } from "node:fs";
 import { desktopDoctor, inspectDesktopUi, openDesktopThread, sendDesktopMessage } from "./desktop.mjs";
 import { normalizeThreadId, threadDeepLink } from "./thread-id.mjs";
@@ -154,68 +151,6 @@ export async function main(argv) {
       const data = helpData(topic);
       success("help", data, json);
       if (!json) console.log(renderHelp(data));
-      return;
-    }
-
-    if (args[0] === "cloud") {
-      args.shift();
-      if (connection === "desktop") throw desktopReadOnly();
-      if (supervisor) throw Object.assign(new Error("Cloud operations cannot run from a supervisor bound to a Desktop task."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
-      const action = args.shift(), timeout = takeOption(args, "--timeout-ms", undefined);
-      const settings = timeout === undefined ? {} : { timeoutMs: Number(timeout) };
-      let data;
-      if (action === "environments") {
-        if (args.length !== 1 || args[0] !== "list") throw new Error("Expected: cloud environments list [--json].");
-        data = await cloudEnvironments(settings);
-      } else if (action === "reconcile") {
-        if (args.length !== 1 || timeout !== undefined) throw new Error("Expected: cloud reconcile <ATTEMPT_ID>.");
-        data = await reconcileCloudSend(args[0]);
-      } else if (["read", "watch"].includes(action)) {
-        const since = takeOption(args, "--since", undefined);
-        if (since !== undefined) settings.since = since;
-        if (action === "watch") {
-          const interval = takeOption(args, "--interval-ms", undefined);
-          if (interval !== undefined) settings.intervalMs = Number(interval);
-          settings.stream = takeFlag(args, "--stream");
-          const until = takeOption(args, "--until", undefined);
-          if (until !== undefined && until !== "change") throw new Error("Cloud watch supports --until change.");
-          if (settings.stream && until) throw new Error("--stream cannot be combined with --until.");
-        }
-        if (args.length !== 1 || args[0].startsWith("--")) throw new Error(`Expected: cloud ${action} <TASK_ID|URL>.`);
-        data = action === "read" ? await readCloudTask(args[0], settings) : await watchCloudTask(args[0], settings, {
-          emit: settings.stream ? value => console.log(JSON.stringify({ ok: true, command: "cloud.watch", data: value })) : undefined,
-        });
-      } else if (action === "send") {
-        const turn = takeOption(args, "--turn", undefined);
-        settings.basedOn = takeOption(args, "--based-on", undefined);
-        settings.dryRun = takeFlag(args, "--dry-run");
-        const target = args.shift();
-        const end = args.includes("--") ? args.indexOf("--") : args.length;
-        if (args.slice(0, end).some(arg => arg.startsWith("--"))) throw new Error("Unknown cloud send option. Use -- before an instruction starting with --.");
-        data = await sendCloudTask(target, turn, readMessage(args), settings);
-      } else if (action === "create") {
-        const environment = takeOption(args, "--env", undefined), branch = takeOption(args, "--branch", undefined);
-        settings.dryRun = takeFlag(args, "--dry-run");
-        const end = args.includes("--") ? args.indexOf("--") : args.length;
-        if (args.slice(0, end).some(arg => arg.startsWith("--"))) throw new Error("Unknown cloud create option. Use -- before an instruction starting with --.");
-        data = await createCloudTask(environment, branch, readMessage(args), settings);
-      } else {
-        if (action === "diff") {
-          const attempt = takeOption(args, "--attempt", undefined);
-          if (attempt !== undefined) settings.attempt = Number(attempt);
-        }
-        if (!["status", "diff", "receipt"].includes(action) || args.length !== 1 || args[0].startsWith("--") || (action === "receipt" && timeout !== undefined)) throw new Error("Expected: cloud create|status|diff|receipt. See help cloud.");
-        data = action === "status" ? await cloudTaskStatus(args[0], settings) : action === "diff" ? await cloudTaskDiff(args[0], settings) : await cloudCreationReceipt(args[0]);
-      }
-      if (json || (action === "watch" && settings.stream)) console.log(JSON.stringify({ ok: true, command: `cloud.${action}`, data }));
-      if (!json && !(action === "watch" && settings.stream)) {
-        if (action === "diff") {
-          if (data.diff === null) console.error("No server-recorded patch is available. This does not mean the cloud working copy has no changes; inspect cloud read command evidence.");
-          else process.stdout.write(data.diff);
-        }
-        else if (action === "status") process.stdout.write(data.output);
-        else console.log(JSON.stringify(data, null, 2));
-      }
       return;
     }
 

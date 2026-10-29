@@ -236,24 +236,29 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   assert.deepEqual(pkg.bin, { "codexteer": "bin/codexteer.mjs" });
   for (const hook of ["preinstall", "install", "postinstall", "prepare", "prepack"]) assert.equal(pkg.scripts[hook], undefined);
   // Cloud must also work from the saved tarball with no real codex on PATH.
-  const cloudBin = path.join(root, "cloud-bin"); await mkdir(cloudBin);
+  const cloudBin = path.join(root, "cloud-bin"), cloudPreload = path.join(root, "cloud-fixture.mjs"); await mkdir(cloudBin);
+  await writeFile(cloudPreload, `globalThis.fetch=async(url,options)=>{if(options.method!=='GET'||url!=='https://chatgpt.com/backend-api/wham/environments')throw new Error('Unexpected cloud request');return new Response(JSON.stringify([{id:'env_package_fixture',label:'fixture/project',repo_map:{fixture:{repository_full_name:'fixture/project',default_branch:'main'}}}]),{status:200});};`);
   await writeFile(path.join(cloudBin, "codex"), `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
+if(args[0]==='app-server'){
+let pending='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>{pending+=s;let i;while((i=pending.indexOf('\\n'))>=0){const m=JSON.parse(pending.slice(0,i));pending=pending.slice(i+1);if(m.id)console.log(JSON.stringify({id:m.id,result:m.method==='initialize'?{}:{authMethod:'chatgpt',authToken:'fixture.'+Buffer.from(JSON.stringify({'https://api.openai.com/auth':{chatgpt_account_id:'fixture'}})).toString('base64url')+'.fixture'}}));}});
+}else{
 const input = fs.readFileSync(0, 'utf8');
 if (args.includes('--help')) console.log('Usage: codex cloud ' + args[1] + ' --env ENV --branch BRANCH --attempts N --attempt N');
 else if (args[1] === '--version') console.log('codex-cli-cloud 0.157.1');
 else if (args[1] === 'exec' && input === 'synthetic cloud instruction') console.log('https://chatgpt.com/codex/tasks/task_package_fixture');
-else if (args[1] === 'status') console.log('[READY] synthetic cloud task');
 else if (args[1] === 'diff') process.stdout.write('+packaged cloud fixture\\n');
 else process.exitCode = 2;
+}
 `, { mode: 0o700 });
-  const cloudCli = async args => JSON.parse((await exec(process.execPath, [cliPath, "cloud", ...args, "--json"], { cwd: root, env: { ...env, PATH: cloudBin }, timeout: 10000 })).stdout).data;
-  const cloudCreated = await cloudCli(["create", "--env", "env_package_fixture", "--branch", "main", "synthetic cloud instruction"]);
+  const cloudCli = async args => JSON.parse((await exec(process.execPath, ["--import", cloudPreload, cliPath, ...args, "--json"], { cwd: root, env: { ...env, PATH: cloudBin }, timeout: 10000 })).stdout).data;
+  const cloudCreated = await cloudCli(["--connection", "cloud", "thread", "create", "--env", "env_package_fixture", "--branch", "main", "synthetic cloud instruction"]);
   assert.equal(cloudCreated.task_id, "task_package_fixture");
-  assert.equal((await cloudCli(["receipt", cloudCreated.attempt_id])).task_id, cloudCreated.task_id);
-  assert.equal((await cloudCli(["status", cloudCreated.task_id])).status, "ready");
-  assert.equal((await cloudCli(["diff", cloudCreated.task_id])).diff, "+packaged cloud fixture\n");
+  assert.equal((await cloudCli(["--connection", "cloud", "thread", "receipt", cloudCreated.attempt_id])).task_id, cloudCreated.task_id);
+  assert.equal((await cloudCli(["diff", cloudCreated.task_id, "--attempt", "2"])).diff, "+packaged cloud fixture\n");
+  const removed = await exec(process.execPath, [cliPath, "cloud", "read", cloudCreated.task_id, "--json"], { cwd: root, env: { ...env, PATH: cloudBin }, timeout: 10000 }).then(() => null, error => error);
+  assert.equal(removed.code, 1); assert.equal(JSON.parse(removed.stdout).ok, false);
   console.log(JSON.stringify({ suite: "package", result: "PASS", package: PACKAGE_NAME, version: VERSION, packed_files: artifact.files.length, publish_dry_run: true, offline_install: true, npm_exec: true, npx_supervision: true, copied_prompt: true, cache_update: true, cache_removal: true, mixed_versions: true, feature_isolation: true, real_desktop_validated: false }));
 } finally {
   for (const socket of ws?.clients ?? []) socket.terminate();

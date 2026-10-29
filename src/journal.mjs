@@ -96,7 +96,7 @@ export async function reconcileMessages(threadInput, id, options = {}, { discove
     const entries = id ? [await getMessage(threadId, id, options)] : await listMessages(threadId, { ...options, includeText: true });
     const result = [];
     for (const entry of entries) {
-      const receipt = entry.cloud_attempt_id ? await reconcileCloudSend(entry.cloud_attempt_id) : null;
+      const receipt = entry.cloud_attempt_id ? await reconcileCloudSend(entry.cloud_attempt_id, { taskId: threadId }) : null;
       const verification = { status: receipt?.delivery_verification === "stored" ? "stored" : "not_observed", checked_at: new Date().toISOString(),
         matching_items: receipt?.delivery_verification === "stored" ? 1 : 0, turn_id: receipt?.user_turn_id ?? null, basis: "cloud-parent-and-prompt-digest" };
       result.push(await withStoreLock(`message-${threadId}`, async () => {
