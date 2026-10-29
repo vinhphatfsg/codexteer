@@ -114,5 +114,5 @@ export async function cloudEnvironments(settings = {}, { request = cloudApi } = 
   return { backend: "codex-api", execution_environment: "cloud", environments: rows.map(row => ({ id: row.id, name: row.label ?? null, pinned: row.is_pinned === true,
     repositories: Object.values(row.repo_map ?? {}).flatMap(repo => typeof repo?.repository_full_name === "string" && repo.repository_full_name.length < 1000
       ? [{ name: repo.repository_full_name, default_branch: typeof repo.default_branch === "string" && repo.default_branch.length < 256 ? repo.default_branch : null }] : []),
-  })), source: "accessible-legacy-task-environments", availability: "listed-access-only; execution-not-verified" };
+  })), source: "accessible-task-environments", availability: "listed-access-only; execution-not-verified" };
 }
