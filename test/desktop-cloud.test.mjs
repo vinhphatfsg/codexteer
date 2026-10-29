@@ -137,3 +137,37 @@ test("history reconciles an accepted message among several users in the same tur
   await writeRecord("messages", messageId, { ...entry, delivery_status: "unknown", turn_id: undefined }, storage);
   const unknown = await reconcileMessages(id, messageId, storage, deps); assert.equal(unknown[0].verification.status, "not_observed"); assert.equal((await readRecord("messages", messageId, storage)).delivery_status, "unknown");
 });
+
+test("unknown initial creation is journaled and only exact persisted input releases its reservation", async t => {
+  const storage = await profile(t), calls = [];
+  const deps = { ...storage, environments: async () => ({ environments: [{ id: config, name: "Fixture" }] }), connect: async () => client(calls, () => Object.assign(Error("lost acknowledgement"), { uncertain: true })) };
+  let failure;
+  try { await createDesktopCloudTask(config, "initial fixture instruction", {}, deps); } catch (error) { failure = error; }
+  assert(failure?.message_id);
+  const { listMessages, reconcileMessages } = await import("../src/journal.mjs");
+  const [entry] = await listMessages(id, { ...storage, includeText: true });
+  assert.equal(entry.id, failure.message_id); assert.equal(entry.delivery_status, "unknown");
+  assert.equal((await desktopCloudReceipt(failure.attempt_id, storage)).message_id, entry.id);
+  let text = "different instruction";
+  const history = { ...metadata(), turns: [{ id: turn, status: "completed", items: [{ type: "userMessage", id: "fixture-item", clientId: entry.client_message_id, content: [{ type: "text", text: entry.wire_text }] }] }] };
+  const observation = { discover: async () => ({ paths: { socket: "fixture" }, state: { codex_steer_protocol: 1 } }), connect: async () => ({ close() {}, request: async () => ({ thread: { ...history, turns: [{ ...history.turns[0], items: [{ ...history.turns[0].items[0], content: [{ type: "text", text }] }] }] } }) }) };
+  assert.equal((await reconcileMessages(id, entry.id, storage, observation))[0].verification.status, "conflict");
+  await assert.rejects(sendDesktopCloudInput(id, "next", { newTurn: true }, { ...storage, connect: () => assert.fail("pending must block") }), { code: "DESKTOP_CLOUD_DELIVERY_PENDING" });
+  text = entry.wire_text;
+  assert.equal((await reconcileMessages(id, entry.id, storage, observation))[0].verification.status, "stored");
+  assert.equal(calls.filter(row => row.method === "turn/start").length, 1);
+  const next = await sendDesktopCloudInput(id, "explicit next instruction", { newTurn: true }, { ...storage, connect: async () => client(calls) });
+  assert.equal(next.delivery_status, "accepted"); assert.equal(calls.filter(row => row.method === "turn/start").length, 2);
+});
+
+test("Desktop Cloud doctor permits startup before registration but rejects another active supervisor", async t => {
+  const { mkdir, writeFile } = await import("node:fs/promises"), { execFile } = await import("node:child_process"), { promisify } = await import("node:util");
+  const { home } = await profile(t), bin = path.join(home, "bin"), run = promisify(execFile), sid = "aaaaaaaa-aaaa-4aaa-8aaa-000000000004";
+  await mkdir(bin);
+  await writeFile(path.join(bin, "codex"), `#!${process.execPath}\nimport readline from 'node:readline';for await(const line of readline.createInterface({input:process.stdin})){const r=JSON.parse(line);if(r.id)console.log(JSON.stringify({id:r.id,result:r.method==='initialize'?{}:{authMethod:null,authToken:null}}));}\n`, { mode: 0o700 });
+  const args = [new URL("../bin/codexteer.mjs", import.meta.url).pathname, "--connection", "desktop-cloud", "--supervisor", sid, "doctor", "--thread", id, "--json"];
+  const invoke = async () => { try { return await run(process.execPath,args,{env:{...process.env,HOME:home,CODEX_HOME:home,PATH:bin},timeout:10000}); } catch(error) { return error; } };
+  const fresh = JSON.parse((await invoke()).stdout); assert.equal(fresh.ok,false); assert.equal(fresh.error.code,"CLOUD_LOGIN_REQUIRED");
+  await registerSupervisor(id,"aaaaaaaa-aaaa-4aaa-8aaa-000000000005",{home,connection:"desktop-cloud"});
+  assert.equal(JSON.parse((await invoke()).stdout).error.code,"SUPERVISOR_CONFLICT");
+});

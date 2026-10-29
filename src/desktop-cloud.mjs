@@ -33,11 +33,14 @@ export async function createDesktopCloudTask(selector, prompt, options = {}, { e
       config: { "features.mcp_app_ui": true }, environments: [{ environmentConfigId: selected.id }], deferredEnvironment: true, ephemeral: false }, { mutation: true });
     receipt = { ...receipt, creation_status: "created", thread_id: desktopCloudId(result.thread.id), deep_link: desktopCloudLink(result.thread.id) }; creating = false; await save();
     if (options.title) await client.request("thread/name/set", { threadId: receipt.thread_id, name: options.title }, { mutation: true });
-    const sent = await sendDesktopCloudInput(receipt.thread_id, prompt, { newTurn: true, clientMessageId: attempt }, { connect: async () => ({ request: (...args) => client.request(...args), close() {} }), ...storage });
+    const { sendTrackedMessage } = await import("./journal.mjs");
+    const sent = await sendTrackedMessage(receipt.thread_id, prompt, { newTurn: true, connection: "desktop-cloud" }, { ...storage,
+      send: (target, text, settings) => sendDesktopCloudInput(target, text, settings, { ...storage, connect: async () => ({ request: (...args) => client.request(...args), close() {} }) }) });
     receipt = { ...receipt, ...sent }; await save(); return receipt;
   } catch (error) {
     if (creating) receipt.creation_status = error.uncertain !== false ? "unknown" : "not_created";
     if (error.delivery_status) Object.assign(receipt, { delivery_status: error.delivery_status, sent: error.sent });
+    if (error.message_id) Object.assign(receipt, { message_id: error.message_id, client_message_id: error.client_message_id });
     receipt.error_code = error.code ?? "DESKTOP_CLOUD_FAILED";
     try { await save(); } catch { error.receipt_update_required = true; }
     Object.assign(error, { execution_environment: "cloud", creation_status: receipt.creation_status, thread_id: receipt.thread_id, attempt_id: attempt, receipt_path: receipt.receipt_path, sent: receipt.sent, delivery_status: receipt.delivery_status }); throw error;

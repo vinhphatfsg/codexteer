@@ -81,7 +81,15 @@ export async function mainCloud(argv) {
     else console.log(JSON.stringify(data, null, 2));
     return data;
   };
-  const bound = async target => { const id = targetId(target); if (supervisor) await assertSupervisor(id, supervisor, { connection }); return id; };
+  const bound = async (target, { allowUnregistered = false } = {}) => {
+    const id = targetId(target);
+    if (supervisor) {
+      const record = allowUnregistered ? await getSupervisor(id) : null;
+      if (!allowUnregistered || record?.session_id === supervisor) await assertSupervisor(id, supervisor, { connection });
+      else if (record && record.state !== "stopped") throw failure("Another supervisor owns this cloud task.", "SUPERVISOR_CONFLICT");
+    }
+    return id;
+  };
   const dependencies = desktopCloud ? desktopCloudConnection() : cloudConnection();
   if (desktopCloud && await desktopCloudCommands(command, args, { supervisor, output, bound, dependencies })) return;
 
@@ -233,12 +241,7 @@ export async function mainCloud(argv) {
     const target = option(args, "--thread"), backend = option(args, "--backend", "app-server"); exact(args, 0);
     if (backend !== "app-server") throw failure("Cloud cannot use Desktop UI.", "CLOUD_TARGET_CONFLICT");
     if (target) {
-      const id = targetId(target);
-      if (supervisor) {
-        const record = await getSupervisor(id);
-        if (record?.session_id === supervisor) await assertSupervisor(id, supervisor, { connection });
-        else if (record && record.state !== "stopped") throw failure("Another supervisor owns this cloud task.", "SUPERVISOR_CONFLICT");
-      }
+      const id = await bound(target, { allowUnregistered: true });
       await observeThread(id, { connection, limit: 1 }, dependencies);
     } else { if (supervisor) throw failure("A bound supervisor doctor requires its target task.", "SUPERVISOR_CONTROL_FORBIDDEN"); await cloudEnvironments(); }
     output("doctor", { ready: true, backend: "codex-api", execution_environment: "cloud", version: VERSION,
@@ -306,9 +309,10 @@ async function desktopCloudCommands(command, args, { supervisor, output, bound, 
   if (command === "doctor") {
     const target = option(args, "--thread"), project = option(args, "--project"); exact(args, 0);
     if (project !== undefined && !target) throw failure("--project diagnostics require --thread.");
-    if (target) await observeThread(await bound(target), { connection: "desktop-cloud", limit: 1 }, dependencies);
+    const id = target ? await bound(target, { allowUnregistered: true }) : null;
+    if (id) await observeThread(id, { connection: "desktop-cloud", limit: 1 }, dependencies);
     else { if (supervisor) throw failure("A supervisor doctor needs its target."); await desktopCloudEnvironments(); }
-    output("doctor", { ready: true, connection_mode: "desktop-cloud", observation: target ? "verified" : "unverified", project_membership: target ? await desktopCloudProjectDoctor(await bound(target), project) : { membership: { status: "unverified" }, assignment_api: { status: "unverified" } }, approval_roundtrip: "unverified", atomic_server_freshness: "unverified" }); return true;
+    output("doctor", { ready: true, connection_mode: "desktop-cloud", observation: target ? "verified" : "unverified", project_membership: id ? await desktopCloudProjectDoctor(id, project) : { membership: { status: "unverified" }, assignment_api: { status: "unverified" } }, approval_roundtrip: "unverified", atomic_server_freshness: "unverified" }); return true;
   }
   if (command === "open") { exact(args, 1); output("open", { deep_link: desktopCloudLink(await bound(args[0])) }); return true; }
   throw failure("Desktop Cloud diff retrieval is not verified. Inspect file-change events with read --include-output.", "CAPABILITY_UNVERIFIED");
