@@ -10,7 +10,9 @@ const headers = auth => ({ "ChatGPT-Account-ID": auth.accountId, "X-OpenAI-Produ
 export async function desktopCloudGet(route, { signal, timeoutMs = 30000 } = {}, { credentials = cloudCredentials, fetchRequest = fetch } = {}) {
   const url = new URL(route, origin);
   if (!route.startsWith("/v1/environment-configs?") || url.pathname !== "/v1/environment-configs" || url.origin !== origin) throw failure("Invalid Desktop Cloud catalog route.");
-  const deadline = AbortSignal.timeout(timeoutMs), combined = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeoutMs);
+  const cancel = () => controller.abort(); signal?.addEventListener("abort", cancel, { once: true }); if (signal?.aborted) cancel();
+  const combined = controller.signal;
   let auth;
   try {
     auth = await credentials({ signal: combined, timeoutMs });
@@ -21,8 +23,8 @@ export async function desktopCloudGet(route, { signal, timeoutMs = 30000 } = {},
     try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw failure("Desktop Cloud returned invalid catalog JSON."); }
   } catch (error) {
     if (/^(DESKTOP_CLOUD_|CLOUD_)/.test(error.code ?? "")) throw error;
-    throw failure("Desktop Cloud catalog did not complete.", signal?.aborted ? "CANCELLED" : deadline.aborted ? "TIMEOUT" : "CONNECTION_FAILED");
-  } finally { if (auth) auth.token = ""; }
+    throw failure("Desktop Cloud catalog did not complete.", signal?.aborted ? "CANCELLED" : controller.signal.aborted ? "TIMEOUT" : "CONNECTION_FAILED");
+  } finally { clearTimeout(timer); signal?.removeEventListener("abort", cancel); if (auth) auth.token = ""; }
 }
 export function configId(value) {
   if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_~-]{0,399}$/.test(value)) throw failure("Invalid environment configuration ID.");
