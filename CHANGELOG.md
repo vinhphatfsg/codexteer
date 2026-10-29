@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- native/control/pairedのリモート経路、専用端末鍵の登録・ペアリング、ホストを保持する観測・監督に対応しました。
+- リモートのプロジェクト・タスク一覧、指定ターンへの送信、Desktopによる作成・new-turn、checkpoint/resource実行とorchestrationを追加しました。
+- 配送・実行結果が不明な場合は自動再送せず、pause/stopと指摘の重複防止を維持します。full-accessのthread-shellは明示選択が必要です。
+- 準備後の監督付きシェル送信をpause/stopと排他し、RPC応答後に制御ロックを解放します。help・文書も実装に揃えました。
+- リモート操作の手順と検証の集計を追加しました。リモートのUI送信・ホストのプロセス管理・履歴修復は未対応です。
+- POSIXパスの大文字小文字を保持し、CLIの宛先はオプション値ではなく位置引数から選択します。監督の制御は登録時のtransportと一致する場合だけ受け付けます。
+- リモート作成の再照合失敗時は古い認定フラグを除去してreceiptへ記録します。実行RPCの内部エラーでは実行済みの可能性を保持し、resource leaseを解放しません。
+
 ## 0.17.0 — 未公開
 
 - `projects list`と`thread create --project`を追加しました。プロジェクト名と初回指示だけで作成でき、既存チャット・`CODEX_THREAD_ID`・中継AIは不要です。App Serverで作成・Desktop購読・初回配送を行い、新規チャット自身の実在IDからnative RPCで所属登録し、全フォルダと初回指示を照合します。明示的な`--context-thread`は任意で、従来のnative直接作成を使います。配送不明・部分成功を保持し、自動再作成・再送を行いません。

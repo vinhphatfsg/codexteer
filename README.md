@@ -1,6 +1,6 @@
 # codexteer
 
-登録済みプロジェクトへの初回指示付きチャット作成は、`projects list`と`thread create --project`で行えます。プロジェクト名と指示だけで使え、既存チャットや中継AIは不要です。Desktopのnative RPCで所属を登録し、複数フォルダや重複フォルダを持つ「サンプル」も、所属・全フォルダ・初回指示を照合します。[使い方と実機検証](docs/thread-create.md)
+登録済みプロジェクトへの初回指示付きチャット作成は、`projects list`と`thread create --project`で行えます。プロジェクト名と指示だけで使え、既存チャットや中継AIは不要です。Desktopのnative RPCで所属を登録し、複数フォルダや重複フォルダを持つ「サンプル」も、所属・全フォルダ・初回指示を照合します。作成済み・初回受付済みで照合だけ失敗した場合は、`thread verify <ATTEMPT-ID> --json`で再作成・再送せずに再照合できます。[使い方と実機検証](docs/thread-create.md)
 
 ```bash
 codexteer projects list --json
@@ -89,6 +89,32 @@ Codex同梱CLI 0.155系列の保護ソケット形式にも対応します。従
 
 以下の`<thread-id>`は対象のタスクIDに置き換えてください。`codex://threads/...`形式のタスクURLも使えます。
 コマンド一覧では`codexteer`と略記します。npxで手動実行する場合は、その部分を`npx -y codexteer`に置き換えてください。
+
+### プロジェクトと目標から担当編成と進行を任せる
+
+既存のスレッドを指定せず、目的に合わせてCodexの担当を作成・監督する対話CLIを起動できます。`prompt`を付けると本文だけを生成します。
+
+```bash
+codexteer orchestrate --project 'Example Project' '達成したい目標' --use-path-cli
+codexteer orchestrate --project 'Example Project' '達成したい目標' --agent codex
+codexteer orchestrate --project 'My Project' '達成したい目標' --agent claude -- --model <MODEL>
+
+codexteer orchestrate prompt --project 'Example Project' \
+  'モーション図鑑で現状の動作を確認し、変更を指示できる状態にする'
+
+codexteer orchestrate prompt --project 'My Project' '達成したい目標' --use-path-cli --json
+codexteer orchestrate prompt --project 'My Project' '達成したい目標' --agent codex
+codexteer orchestrate prompt --project 'My Project' - < goal.txt
+codexteer help orchestrate prompt
+```
+
+直接起動は`supervise`と同じく、既定で`claude`、`--agent codex`ならCodex CLIを起動します。入出力・cwd・環境と終了コードを引き継ぎ、最初の`--`以降はエージェント引数です。`--use-path-cli`は本文内のcodexteerコマンドをPATH方式にします。`prompt`なしの`--json`は非対応です。
+
+生成専用の場合は本文を同じPCのオーケストレーターへ依頼として渡します。役割はモデルに依存せず、Codex自身も担当できます。オーケストレーターは目的・作業分担・共有資源・検収と統合を担当し、Codex担当は調査・設計判断・実装・検証に加え、依頼の前提への異論や改善案を出します。開始時と重要な節目に、高度（作業の先の成果）・深さ（一次資料と専門的手法・外部検証）・範囲（隣接分野の有効な技法）から目的と計画を再評価します。
+
+`orchestrate prompt`では`--agent`は子の監督IDと送信元のCLI識別を明示する任意指定です。省略時は特定の実行役に固定せず、受け取ったオーケストレーターが自分のCLIを選びます。この生成専用モードではエージェントを起動しません。
+
+生成時はDesktopへ接続せず、チャット作成や監視を開始しません。既定は保存済みCLIを使い、`--use-path-cli`は実行環境のPATHとCODEX_HOMEを使います。作成後は各子に監督IDを付けて登録・観測し、同じ目的の未完了作業の継続まで追います。[使い方・委任と制御の範囲](docs/orchestration.md)も参照してください。
 
 ### Claude Code・Codex CLIに監視とステアリングを任せる
 
@@ -228,6 +254,39 @@ codexteer findings dismiss <thread-id> <finding-id> --reason "既存の実装が
 
 評価は`useful`（有益）・`unnecessary`（不要）・`incorrect`（誤り）、未評価は`unrated`です。`stats`は現在のrevisionを1件として未送信候補も含め、評価済み件数と未評価件数を分けます。`useful_fraction`の母数は評価済み件数で、0件なら`null`です。介入の因果効果を証明する数値ではありません。詳細は`help findings`を参照してください。
 
+### リモートプロジェクトとチャットを観測する
+
+`hostId`付きリンクで、Desktopが接続中のリモートチャットを読み取り・監視・観測専用の監督に使えます。
+
+```bash
+codexteer projects list --remote --json
+codexteer projects list --all --json
+codexteer read 'codex://threads/<UUID>?hostId=remote-control%3Aenv_example' --json
+codexteer supervise 'codex://threads/<UUID>?hostId=remote-control%3Aenv_example' --agent codex
+```
+
+既定native経路を通常の端末で使う場合は`--context-thread <LOCAL-CALLER-UUID>`を指定します。Codex内では実在する呼出し元の`CODEX_THREAD_ID`を使えます。プロジェクト一覧はDesktopの登録情報で、接続状態は`unverified`です。既定native経路のリモート監督は観測専用です。`--remote-transport control`を明示すると、既存activeターンへの指定ターン送信を伴う監督を生成・起動できます。controlは既存端末鍵へのアクセスが必要で、利用できない環境では接続前に停止します。利用環境で互換性を確認してください。[指定ターン送信の実装と検証範囲](docs/remote-control.md)も参照してください。[前提・制約・記録と実機確認](docs/remote-observation.md)
+
+controlは接続前に公開鍵を照合し、失敗すれば`REMOTE_DEVICE_KEY_UNAVAILABLE`で停止します。`doctor`の`remote_control_auth`で、鍵取得の失敗段階・Desktop本体とNodeの公開entitlement差・同梱schemaの操作一覧を確認できます。鍵を利用できない環境では停止します。[認証の前提と制約](docs/remote-control.md)を参照してください。
+
+pairedではCLI単体からリモートの新規チャット作成、タスク一覧・ID取得、new-turn、checkpoint/resource、orchestrateを使えます。正式project IDとDesktop登録IDを出し分け、作成/new-turn/openには実在ローカルcallerによるDesktop公式APIを使います。通常の端末では`--context-thread`を指定してください。Windowsで使える明示的なthread-shell実行とMac固有操作の制限を含め、[リモートCLIの対応範囲と手順](docs/remote-operations.md)を参照してください。
+
+専用鍵を使う場合は、利用者がセットアップを許可して`paired`経路を明示します。登録・ペアリングは、チャットの作成・送信とは別の操作です。対象ホストとチャットを照合し、許可された範囲だけで実行してください。動作確認には専用のテスト用チャットを使い、他のタスクに試験送信しないでください。代理承認やDesktop画面への表示は受付結果と区別します。
+
+```sh
+codexteer remote prepare --key-provider keychain --json
+codexteer remote enroll --json
+# 対象ホストのDesktop設定 → Connections → Control this PC → Addで取得したコードを入力
+codexteer --host 'remote-control:env_example' remote pair --code-stdin --json
+codexteer remote verify --json
+codexteer remote identity --json
+codexteer --remote-transport paired doctor --thread '<hostId付きリンク>' --json
+```
+
+keychain方式はXcode command-line toolsが必要で、codexteer自身のhelperとOSの非抽出P-256鍵を使います。既存Desktop鍵やその権限は変更しません。コードのTTY入力は非表示で、登録やペアリングの自動再試行はしません。[専用鍵の公式登録・ペアリング手順](docs/remote-device-enrollment.md)と`help remote-device`を参照してください。
+
+端末情報にはcodexteerの製品名・実OS・CPUを含めます。`remote status`の識別名は`codexteer_mac_os_arm64`など、`remote identity`の`server_display_name`はサーバーに保存された表示名です。任意のサーバー表示名の更新には対応していないため、`name_matches: false`として区別します。
+
 ### 通常起動したDesktopを再起動せずに観測する
 
 Desktopが共有ローカルdaemonを使っていて、`CODEX_HOME/app-server-control/app-server-control.sock`が存在する環境では、観測専用の直接接続を選べます。
@@ -283,7 +342,7 @@ codexteer watch <thread-id> --until idle --timeout-ms 60000 --json
 変化するたびに1行のJSONを受け取るには、次のコマンドを使います。Ctrl-Cで停止します。
 
 ```bash
-codexteer watch <thread-id> --stream --json
+codexteer watch <thread-id> --stream --notify all --json
 ```
 
 ### 詳細な使い方
@@ -430,6 +489,12 @@ codexteer open <thread-id>
 
 #### メッセージ送信・ステアリング
 
+古いターンが実行中のまま履歴に残っていても、ページ形式の履歴では通常の`send`を使えます。チャットが稼働中で、最新ターンも進行中の場合だけそのIDを指定し、サーバー側で現在の実行中IDとの一致を確認します。不一致・受付不明時に別のターンへ自動再送しません。この対応にCodexの終了や保存履歴の修復は不要です。Codex本体の表示や保存履歴の修復とは別で、観測上の`active_turn_id`は複数候補なら`null`のままです。
+
+`--based-on`は残留状態があっても最新ターンの変更を検出します。古い全履歴cursorで最新ターンを特定できない場合は、改めて`read`して取得したcursorを使ってください。修正版CLIは既存の共有wrapperで利用できます。保存済みCLIを使う監督には、監督の起動・プロンプト生成をやり直して反映します。`--use-path-cli`では次のコマンド実行から反映されます。
+
+Codexが古いターンの表示を`interrupted`から`inProgress`へ戻すと、既存の`watch`や`--since`が`STALE_CURSOR`になる場合があります。その場合は`read`を`--since`なしで実行し、必要な履歴を確認してから新しいcursorで監視を再開してください。
+
 ```bash
 # 実行中タスクへ追加入力
 codexteer send <thread-id> "今の要件に必要な変更へ絞ってください" --json
@@ -499,7 +564,7 @@ codexteer watch <thread-id> --until idle --timeout-ms 60000 --json
 codexteer watch <thread-id> --until attention --json
 
 # 変化するたびにJSONを1行ずつ出力し続ける
-codexteer watch <thread-id> --stream --since <cursor> --include-output --json
+codexteer watch <thread-id> --stream --notify all --since <cursor> --include-output --json
 ```
 
 | オプション | 対象・用途 |

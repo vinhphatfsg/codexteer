@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { desktopDoctor, inspectDesktopUi, openDesktopThread, sendDesktopMessage } from "./desktop.mjs";
-import { normalizeThreadId, threadDeepLink } from "./thread-id.mjs";
+import { normalizeThreadId, threadDeepLink, parseThreadTarget } from "./thread-id.mjs";
+import { targetHost, targetContext, withTarget, validateHostId, hostFields, remoteReadOnly, remoteTransport, validateRemoteTransport, isControlTransport } from "./target.mjs";
 import { listLocalThreads } from "./thread-store.mjs";
 import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, listInstructions } from "./journal.mjs";
 import { appServerDoctor, startDesktop } from "./launcher.mjs";
@@ -12,15 +13,21 @@ import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, ve
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 import { playSendSound } from "./sound.mjs";
 import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
+import { prepareOrchestrationPrompt, orchestrateAgent } from "./orchestrate.mjs";
 import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
 import { connectionMode, observationConnection, desktopReadOnly } from "./connection.mjs";
-import { listProjects } from "./projects.mjs";
+import { listProjects, registeredRemoteProjects } from "./projects.mjs";
 import { createProjectThread } from "./thread-create.mjs";
+import { verifyProjectThread } from "./thread-verify.mjs";
+import { withDeviceAccount, prepareDevice, recoverDeviceKey, enrollDevice, pairDevice, verifyDevice, deviceStatus, deviceIdentityInfo, readPairingCode } from "./remote-device.mjs";
+import { readDevice } from "./remote-device-store.mjs";
+import { listRemoteProjects, listRemoteThreads, createRemoteProjectThread, verifyRemoteProjectThread, ensureRemoteDesktopSubscription } from "./remote-management.mjs";
 
 const DEFAULT_SEND_BACKEND = "app-server";
 
 function success(command, data, json) {
+  if (data && !Array.isArray(data)) Object.assign(data, hostFields());
   if (json) console.log(JSON.stringify({ ok: true, command, data }));
   return data;
 }
@@ -28,7 +35,7 @@ function success(command, data, json) {
 function fail(error, json) {
   const message = error instanceof Error ? error.message : String(error);
   if (json) console.log(JSON.stringify({ ok: false, ...(error.watch ? { command: "watch", data: error.watch } : {}), error: {
-    message, code: error.code, delivery_status: error.delivery_status,
+    message, code: error.code, ...hostFields(), delivery_status: error.delivery_status,
     operation: error.operation, capability: error.capability,
     sent: error.sent, thread_id: error.thread_id, rpc_code: error.rpc_code ?? error.rpcCode,
     message_id: error.message_id, client_message_id: error.client_message_id, journal_update_required: error.journal_update_required,
@@ -37,6 +44,10 @@ function fail(error, json) {
     receipt_path: error.receipt_path,
     creation_status: error.creation_status, attempt_id: error.attempt_id, receipt_update_required: error.receipt_update_required,
     native_call_id: error.native_call_id,
+    uncertain: error.uncertain, resource: error.resource, lease_retained: error.lease_retained, remote_execution_status: error.remote_execution_status,
+    remote_process_id: error.remote_process_id,
+    verification_checks: error.verification_checks,
+    remote_control_auth: error.remote_control_auth,
   } }));
   else console.error(`codexteer: ${message}`);
   process.exitCode = 1;
@@ -62,6 +73,23 @@ function takeOptions(args, name) {
   const values = []; let value;
   while ((value = takeOption(args, name, undefined)) !== undefined) values.push(value);
   return values;
+}
+
+function routingThread(probe) {
+  const valued = new Set(["--backend", "--source", "--kind", "--evidence", "--based-on", "--supersedes", "--expires-at", "--checkpoint", "--finding",
+    "--wait-ms", "--limit", "--max-chars", "--since", "--until", "--timeout-ms", "--poll-ms", "--notify", "--settle-ms", "--max-hold-ms",
+    "--owner", "--agent", "--status", "--note", "--by", "--reason", "--condition", "--ttl-ms", "--token", "--cwd", "--exec-backend", "--shell", "--key", "--title", "--rating", "--path", "--exclude", "--artifact"]);
+  const positional = [];
+  for (let i = 0; i < probe.length; i++) {
+    if (probe[i] === "--") { positional.push(...probe.slice(i + 1)); break; }
+    if (probe[i].startsWith("--")) { if (valued.has(probe[i])) i++; continue; }
+    positional.push(probe[i]);
+  }
+  const [command, action] = positional;
+  if (/^(codex:\/\/|[0-9a-f]{8}-)/i.test(command ?? "")) return command;
+  const nested = ["history", "instructions", "findings", "checkpoint", "thread"].includes(command)
+    || (command === "supervise" && ["prompt", "register", "status", "pause", "resume", "stop", "list"].includes(action));
+  return positional[nested ? 2 : 1];
 }
 
 function readMessage(parts) {
@@ -107,6 +135,35 @@ function printSupervisor(data) {
 
 export async function main(argv) {
   const args = [...argv];
+  try {
+    const transport = validateRemoteTransport(takeOption(args, "--remote-transport", "native"));
+    const explicitHost = takeOption(args, "--host", undefined);
+    if (args.slice(0, args.includes("--") ? args.indexOf("--") : args.length).includes("--host")) throw new Error("Specify --host only once.");
+    if (explicitHost !== undefined) validateHostId(explicitHost);
+    const probe = [...args];
+    takeFlag(probe, "--json");
+    for (const flag of ["--connection", "--supervisor", "--require-node-version"]) takeOption(probe, flag, undefined);
+    takeOption(probe, "--context-thread", undefined);
+    const command = probe[0];
+    const contextThread = takeOption(args, "--context-thread", undefined);
+    let candidate;
+    if (command === "doctor") candidate = takeOption(probe, "--thread", undefined);
+    else if (command === "resource") candidate = takeOption(probe, "--thread", undefined);
+    else if (["read", "status", "watch", "send", "open", "debug-ui", "supervise", "history", "instructions", "findings", "checkpoint"].includes(command)
+      || (command === "thread" && ["resolve", "repair"].includes(probe[1])) || /^(codex:\/\/|[0-9a-f]{8}-)/i.test(command ?? "")) {
+      candidate = routingThread(probe);
+    }
+    const linkHost = candidate === undefined ? undefined : parseThreadTarget(candidate).hostId;
+    if (explicitHost !== undefined && linkHost !== undefined && explicitHost !== linkHost) throw Object.assign(new Error("--host conflicts with the thread link hostId."), { code: "HOST_MISMATCH" });
+    const host = linkHost ?? explicitHost ?? "local";
+    const ownArguments = probe.slice(0, probe.includes("--") ? probe.indexOf("--") : probe.length);
+    if (isControlTransport(transport) && host === "local" && command !== "remote" && !["help", "--help", "--version"].some(value => ownArguments.includes(value))) throw Object.assign(new Error("--remote-transport control requires a remote hostId link or --host."), { code: "REMOTE_HOST_REQUIRED" });
+    return await withTarget(host, contextThread, () => mainOnTarget(args), { transport });
+  } catch (error) { fail(error, argv.includes("--json")); }
+}
+
+async function mainOnTarget(argv) {
+  const args = [...argv];
   let json = takeFlag(args, "--json");
 
   try {
@@ -127,7 +184,7 @@ export async function main(argv) {
     if (args.length === 0 || takeFlag(args, "--help") || args[0] === "help") {
       if (args[0] === "help") args.shift();
       const candidate = args[0] ?? "overview";
-      const topic = candidate === "supervise" && args[1] === "prompt" ? "supervise prompt"
+      const topic = ["supervise", "orchestrate"].includes(candidate) && args[1] === "prompt" ? `${candidate} prompt`
         : /^(codex:\/\/|[0-9a-f]{8}-)/i.test(candidate) ? "send" : candidate;
       const data = helpData(topic);
       success("help", data, json);
@@ -136,9 +193,32 @@ export async function main(argv) {
     }
 
     let command = args.shift();
+    const control = isControlTransport();
+    if (targetHost() !== "local" && ["desktop", "debug-ui"].includes(command)) throw Object.assign(new Error("Desktop process/update and Accessibility diagnostics cannot target the remote host. No local operation was run."), { code: "REMOTE_HOST_OPERATION_UNSUPPORTED" });
+    if (targetHost() !== "local" && !["remote", "projects", "read", "status", "watch", "doctor", "supervise", "findings", "history", "instructions", "thread", "open", ...(control ? ["send"] : []), ...(remoteTransport() === "paired" ? ["threads", "resource", "checkpoint", "orchestrate"] : [])].includes(command)
+      && !(control && /^(codex:\/\/|[0-9a-f]{8}-)/i.test(command))) throw remoteReadOnly();
+    if (targetHost() !== "local" && command === "thread" && args[0] !== "resolve" && remoteTransport() !== "paired") throw remoteReadOnly();
+    if (targetHost() !== "local" && command === "thread" && args[0] === "repair") throw Object.assign(new Error("Offline rollout repair is supported only for validated local macOS/CLI versions. The remote history was not modified."), { code: "REMOTE_REPAIR_UNSUPPORTED" });
+    if (targetHost() !== "local" && command === "instructions" && args[0] !== "list" && !control) throw remoteReadOnly();
     // An explicit observation endpoint can never silently route a mutation to
     // the shared wrapper or UI. Local records/help remain available.
     if (connection === "desktop" && !["supervise", "findings", "history", "instructions", "checkpoint", "resource", "read", "status", "watch", "doctor", "threads", "thread"].includes(command)) throw desktopReadOnly();
+    if (command === "remote") {
+      if (supervisor) throw Object.assign(new Error("A bound supervisor cannot enroll, pair or manage account credentials."), { code: "SUPERVISOR_MISMATCH" });
+      const action = args.shift(), codeStdin = takeFlag(args, "--code-stdin"), provider = takeOption(args, "--key-provider", undefined);
+      if (provider !== undefined && action !== "prepare") throw new Error("--key-provider is only available for remote prepare.");
+      if (!["prepare", "recover-key", "enroll", "status", "identity", "pair", "verify"].includes(action) || args.length || (codeStdin && action !== "pair") || (action === "pair" && !codeStdin)) throw new Error("Expected: remote prepare|recover-key|enroll|status|identity|verify, or --host HOST remote pair --code-stdin.");
+      if (["prepare", "enroll"].includes(action) && targetHost() !== "local") throw new Error("remote prepare/enroll registers this local controller; omit --host.");
+      // Code input is never an argv option or a chat message.
+      if (action === "pair" && !/^remote-control:env_[A-Za-z0-9_-]+$/.test(targetHost())) throw new Error("remote pair requires --host remote-control:env_...");
+      if (action === "pair" && process.stdin.isTTY) console.error("codexteer: Enter the selected host's fresh pairing code (hidden), then press Enter.");
+      const code = action === "pair" ? await readPairingCode() : undefined;
+      if (code && code.length > 128) throw new Error("Invalid pairing code input.");
+      const data = await withDeviceAccount(context => action === "prepare" ? prepareDevice(context, { ...(provider ? { provider } : {}) }) : action === "recover-key" ? recoverDeviceKey(context) : action === "enroll" ? enrollDevice(context, { progress: text => console.error(`codexteer: ${text}`) })
+        : action === "pair" ? pairDevice(context, targetHost(), code)
+          : action === "verify" ? verifyDevice(context) : action === "identity" ? deviceIdentityInfo(context) : readDevice(context.home, context.identity).then(deviceStatus));
+      success(`remote.${action}`, data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
+    }
     if (command === "supervise" && ["register", "status", "list", "pause", "resume", "stop"].includes(args[0])) {
       const action = args.shift(), owner = action === "register" ? takeOption(args, "--owner", "external") : undefined;
       if (args.length !== (action === "list" ? 0 : 1)) throw new Error(`Expected: supervise ${action}${action === "list" ? "" : " <THREAD>"}.`);
@@ -184,6 +264,28 @@ export async function main(argv) {
       if (!json) console.log(JSON.stringify(data, null, 2));
       return;
     }
+    if (command === "orchestrate") {
+      if (supervisor) throw Object.assign(new Error("Managed supervision is bound to its existing task and cannot orchestrate a project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+      const promptOnly = args[0] === "prompt";
+      if (promptOnly) args.shift();
+      else if (json) throw new Error("orchestrate inherits agent output and does not support --json. Use help orchestrate --json or orchestrate prompt --project ID|NAME <GOAL> --json.");
+      const separator = promptOnly ? -1 : args.indexOf("--");
+      const ownArgs = separator < 0 ? args : args.slice(0, separator);
+      const agentArgs = separator < 0 ? [] : args.slice(separator + 1);
+      const project = takeOption(ownArgs, "--project", undefined);
+      const agent = takeOption(ownArgs, "--agent", promptOnly ? undefined : "claude");
+      const usePathCli = takeFlag(ownArgs, "--use-path-cli");
+      if (promptOnly && ownArgs[0] === "--") ownArgs.shift();
+      else if (ownArgs.some(arg => arg.startsWith("--"))) throw new Error("Unknown orchestrate option. See help orchestrate; agent arguments belong after --.");
+      if (ownArgs.length !== 1) throw new Error("Expected: orchestrate [prompt] --project <ID-or-exact-name> <GOAL>. Quote the goal as one argument, or use - for stdin.");
+      const goal = ownArgs[0] === "-" ? readFileSync(0, "utf8") : ownArgs[0];
+      if (promptOnly) {
+        const data = await prepareOrchestrationPrompt(project, goal, { agent, connection, usePathCli });
+        success("orchestrate.prompt", data, json);
+        if (!json) console.log(data.prompt);
+      } else process.exitCode = await orchestrateAgent(project, goal, { agent, agentArgs, connection, usePathCli });
+      return;
+    }
     if (command === "supervise" && args[0] === "prompt") {
       args.shift();
       const agent = takeOption(args, "--agent", "claude");
@@ -210,11 +312,12 @@ export async function main(argv) {
     if (command === "resource") {
       const action = args.shift(); let data;
       if (["acquire", "run"].includes(action)) {
-        const options = { owner: takeOption(args, "--owner", undefined), ttlMs: Number(takeOption(args, "--ttl-ms", "600000")), reason: takeOption(args, "--reason", ""), condition: takeOption(args, "--condition", ""), threadId: takeOption(args, "--thread", undefined) };
+        const options = { owner: takeOption(args, "--owner", undefined), ttlMs: Number(takeOption(args, "--ttl-ms", "600000")), reason: takeOption(args, "--reason", ""), condition: takeOption(args, "--condition", ""), threadId: takeOption(args, "--thread", undefined), cwd: takeOption(args, "--cwd", undefined) };
         if (action === "run") {
-          const timeoutMs = Number(takeOption(args, "--timeout-ms", "0")), includeOutput = takeFlag(args, "--include-output");
+          const timeoutMs = Number(takeOption(args, "--timeout-ms", "0")), includeOutput = takeFlag(args, "--include-output"), execBackend = takeOption(args, "--exec-backend", "app-server"), remoteShell = takeOption(args, "--shell", undefined);
+          if (supervisor) await assertSupervisor(options.threadId, supervisor, { connection, sending: execBackend === "thread-shell" });
           if (args[1] !== "--" || args.length < 3) throw new Error("Expected: resource run <NAME> --owner NAME -- <COMMAND> [ARGS...]");
-          data = await runWithResource(args[0], args.slice(2), { ...options, timeoutMs });
+          data = await runWithResource(args[0], args.slice(2), { ...options, timeoutMs, execBackend, remoteShell, supervisor, connection });
           if (!includeOutput) delete data.output_tail;
           if (!data.valid) process.exitCode = 1;
         } else {
@@ -241,9 +344,10 @@ export async function main(argv) {
         if (args.length !== 2) throw new Error("Expected: checkpoint capture <THREAD> <NAME> --path PATH ...");
         data = await createCheckpoint(args[0], args[1], { paths, excludes });
       } else if (action === "run") {
-        const timeoutMs = Number(takeOption(args, "--timeout-ms", "0"));
+        const timeoutMs = Number(takeOption(args, "--timeout-ms", "0")), execBackend = takeOption(args, "--exec-backend", "app-server"), remoteShell = takeOption(args, "--shell", undefined);
+        if (supervisor && execBackend === "thread-shell") await assertSupervisor(args[0], supervisor, { connection, sending: true });
         if (args[2] !== "--" || args.length < 4) throw new Error("Expected: checkpoint run <THREAD> <ID> -- <COMMAND> [ARGS...]");
-        data = await runCheckpoint(args[0], args[1], args.slice(3), { timeoutMs });
+        data = await runCheckpoint(args[0], args[1], args.slice(3), { timeoutMs, execBackend, remoteShell, supervisor, connection });
         if (!includeOutput) delete data.output_tail;
         if (!data.valid) process.exitCode = 1;
       } else if (action === "attach") {
@@ -338,8 +442,9 @@ export async function main(argv) {
         if (record?.session_id === supervisor) await assertSupervisor(threadId, supervisor, { connection });
       }
       if (args.length) throw new Error(`Unexpected argument: ${args[0]}`);
+      if (targetHost() !== "local" && backend === "ui") throw remoteReadOnly();
       const report = backend === "ui" ? desktopDoctor() : await appServerDoctor({ threadId, ...connectionDependencies });
-      if (report.connection) Object.assign(report.connection, { mode: connection, observation_only: connection === "desktop" });
+      if (report.connection) Object.assign(report.connection, { mode: connection, observation_only: connection === "desktop" || (targetHost() !== "local" && !control), ...hostFields() });
       report.default_send_backend = DEFAULT_SEND_BACKEND;
       report.rollout_status = "enabled";
       success("doctor", report, json);
@@ -366,7 +471,8 @@ export async function main(argv) {
     }
 
     if (command === "desktop") {
-      if (args.shift() !== "start") throw new Error("Expected: codexteer desktop start");
+      const action = args.shift();
+      if (action !== "start") throw new Error("Expected: codexteer desktop start");
       const dryRun = takeFlag(args, "--dry-run");
       if (args.length) throw new Error(`Unexpected argument: ${args[0]}`);
       const data = await startDesktop({ dryRun });
@@ -377,10 +483,15 @@ export async function main(argv) {
 
     if (command === "projects") {
       if (connection === "desktop") throw desktopReadOnly();
-      if (args.shift() !== "list" || args.length) throw new Error("Expected: codexteer projects list");
-      const projects = await listProjects();
+      if (args.shift() !== "list") throw new Error("Expected: codexteer projects list [--remote | --all] [--host HOST-ID]");
+      const remote = takeFlag(args, "--remote"), all = takeFlag(args, "--all");
+      if (args.length || (remote && all) || (all && targetHost() !== "local")) throw new Error("Use projects list [--remote | --all] or projects list --host HOST-ID.");
+      const saved = targetHost() !== "local" && remoteTransport() === "paired" ? await listRemoteProjects()
+        : remote || all || targetHost() !== "local" ? await registeredRemoteProjects() : [];
+      const projects = [...(!remote && (all || targetHost() === "local") ? await listProjects() : []),
+        ...saved.filter(project => targetHost() === "local" || project.host_id === targetHost())];
       success("projects.list", { projects, count: projects.length }, json);
-      if (!json) for (const project of projects) console.log(`${project.project_id}  ${project.name}\n${project.roots.map(root => `  ${root}`).join("\n")}`);
+      if (!json) for (const project of projects) console.log(`${project.project_id}  ${project.name}${project.host_id ? `  [${project.host_id}; availability: ${project.availability}]` : ""}\n${project.roots.map(root => `  ${root}`).join("\n")}`);
       return;
     }
 
@@ -388,18 +499,31 @@ export async function main(argv) {
       if (args.shift() !== "list") throw new Error("Expected: codexteer threads list");
       const limit = Number.parseInt(takeOption(args, "--limit", "20"), 10);
       const desktopOnly = takeFlag(args, "--desktop-only");
+      const cursor = takeOption(args, "--cursor", undefined), projectId = takeOption(args, "--project", undefined), search = takeOption(args, "--search", undefined);
       if (args.length > 0) throw new Error(`Unexpected argument: ${args[0]}`);
       if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
         throw new Error("--limit must be an integer between 1 and 500.");
       }
-      const threads = await listLocalThreads({ limit, desktopOnly });
-      success("threads.list", { threads, count: threads.length }, json);
+      if (targetHost() === "local" && [cursor, projectId, search].some(value => value !== undefined)) throw new Error("--cursor/--project/--search currently require a paired remote host.");
+      const data = targetHost() === "local" ? { threads: await listLocalThreads({ limit, desktopOnly }) } : await listRemoteThreads({ limit, desktopOnly, cursor, projectId, search });
+      const threads = data.threads;
+      success("threads.list", { ...data, count: threads.length }, json);
       if (!json) printThreads(threads);
       return;
     }
 
     if (command === "thread") {
       const action = args.shift();
+      if (action === "verify") {
+        if (connection === "desktop") throw desktopReadOnly();
+        if (supervisor) throw Object.assign(new Error("Managed supervision is bound to its existing task. Verify a project creation receipt without --supervisor."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        const timeoutMs = Number(takeOption(args, "--timeout-ms", "120000"));
+        if (args.length !== 1 || args[0].startsWith("--")) throw new Error("Expected: thread verify <ATTEMPT-ID> [--timeout-ms N].");
+        const data = await (targetHost() === "local" ? verifyProjectThread : verifyRemoteProjectThread)(args[0], { timeoutMs });
+        success("thread.verify", data, json);
+        if (!json) console.log(`Verified existing ${data.deep_link}; creation and initial instruction were not repeated.`);
+        return;
+      }
       if (action === "create") {
         if (connection === "desktop") throw desktopReadOnly();
         if (supervisor) throw Object.assign(new Error("Managed supervision is bound to its existing task. Run thread create without --supervisor under the user's delegated creation scope."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
@@ -407,19 +531,19 @@ export async function main(argv) {
         const options = { title: takeOption(args, "--title", undefined), cwd: takeOption(args, "--cwd", undefined), model: takeOption(args, "--model", undefined),
           permissions: takeOption(args, "--permissions", undefined), sandbox: takeOption(args, "--sandbox", undefined),
           approvalPolicy: takeOption(args, "--approval-policy", undefined), approvalsReviewer: takeOption(args, "--approvals-reviewer", undefined), dryRun: takeFlag(args, "--dry-run"),
-          contextThread: takeOption(args, "--context-thread", undefined), thinking: takeOption(args, "--thinking", undefined), timeoutMs: takeOption(args, "--timeout-ms", undefined) };
+          contextThread: targetContext(), thinking: takeOption(args, "--thinking", undefined), timeoutMs: takeOption(args, "--timeout-ms", undefined) };
         if (options.timeoutMs !== undefined) {
           options.timeoutMs = Number(options.timeoutMs);
         }
         const literal = args.indexOf("--");
         if (args.slice(0, literal < 0 ? args.length : literal).some(arg => arg.startsWith("--"))) throw new Error("Unknown thread create option. Use -- before an instruction starting with --.");
         const message = readMessage(args);
-        const data = await createProjectThread(selector, message, options);
+        const data = await (targetHost() === "local" ? createProjectThread : createRemoteProjectThread)(selector, message, options);
         success("thread.create", data, json);
         if (!json) console.log(options.dryRun ? `Dry run: ${data.project_name} (${data.cwd}), ${data.message_characters} characters.` : `Created ${data.deep_link} in ${data.project_name}; initial instruction accepted${data.turn_id ? ` (turn ${data.turn_id})` : ""}.`);
         return;
       }
-      if (action !== "resolve") throw new Error("Expected: codexteer thread create|resolve. See help thread.");
+      if (action !== "resolve") throw new Error("Expected: codexteer thread create|verify|resolve. See help thread.");
       if (args.length !== 1) throw new Error("thread resolve requires exactly one thread ID or URL.");
       const threadId = normalizeThreadId(args[0]);
       const data = { thread_id: threadId, deep_link: threadDeepLink(threadId) };
@@ -431,7 +555,7 @@ export async function main(argv) {
     if (command === "open") {
       if (args.length !== 1) throw new Error("open requires exactly one thread ID or URL.");
       const threadId = normalizeThreadId(args[0]);
-      const data = openDesktopThread(threadId);
+      const data = targetHost() === "local" ? openDesktopThread(threadId) : await ensureRemoteDesktopSubscription(threadId);
       success("open", data, json);
       if (!json) console.log(`Opened ${data.deep_link}`);
       return;
@@ -454,6 +578,10 @@ export async function main(argv) {
 
     const dryRun = takeFlag(args, "--dry-run");
     const backend = backendOption(args, DEFAULT_SEND_BACKEND);
+    if (targetHost() !== "local" && backend === "ui") {
+      if (remoteTransport() !== "paired") throw remoteReadOnly();
+      throw Object.assign(new Error("UI sending on the remote host is unsupported. No UI or other delivery route was used."), { code: "REMOTE_UI_UNSUPPORTED", sent: false, delivery_status: "not_sent" });
+    }
     if (supervisor && backend !== "app-server") throw new Error("Managed supervision requires the app-server backend.");
     const explicitSound = takeFlag(args, "--sound");
     const noSound = takeFlag(args, "--no-sound");

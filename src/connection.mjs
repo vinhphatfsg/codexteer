@@ -3,6 +3,9 @@ import path from "node:path";
 import { codexHome } from "./runtime.mjs";
 import { RpcClient } from "./rpc.mjs";
 import { inspectAppServerSocket } from "./socket-endpoint.mjs";
+import { targetHost, remoteTransport, isControlTransport } from "./target.mjs";
+import { remoteObservationConnection } from "./remote.mjs";
+import { remoteControlConnection } from "./remote-control.mjs";
 
 const failure = (message, code) => Object.assign(new Error(message), { code });
 const reads = new Set(["thread/loaded/list", "thread/read", "thread/turns/list", "thread/items/list"]);
@@ -96,6 +99,10 @@ export async function connectDesktop(paths, options, connect = RpcClient.connect
 // Each operation owns its discovery result. No implicit fallback to another
 // profile, daemon, or wrapper, including after connection failures.
 export function observationConnection(mode) {
+  if (targetHost() !== "local") {
+    if (connectionMode(mode) !== "shared") throw failure("Remote observation uses the selected Desktop native host route and cannot use --connection desktop.", "HOST_CONNECTION_MISMATCH");
+    return isControlTransport() ? remoteControlConnection() : remoteObservationConnection();
+  }
   if (connectionMode(mode) === "shared") return {};
   let selected;
   return {

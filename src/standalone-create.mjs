@@ -10,12 +10,13 @@ import { fetchThread } from "./observe.mjs";
 import { ensureDesktopSubscription } from "./subscription.mjs";
 import { discoverNativeEndpoint, inspectNativeEndpoint, nativeToolJson } from "./native-rpc.mjs";
 import { nativeOnAppServer, inspectNativeCommandProtocol, mutationOutcomeUnknown } from "./native-command.mjs";
-import { desktopMembership, initialInstructionMatches } from "./creation-verification.mjs";
+import { desktopMembership, initialInstructionMatches, validateMembershipCatalog } from "./creation-verification.mjs";
 import { writeRecord, storePath } from "./store.mjs";
 
 const failure = (message, code = "CREATION_FAILED") => Object.assign(new Error(message), { code });
 
 export function validateStandaloneCreationCatalog(catalog) {
+  const membership = validateMembershipCatalog(catalog);
   const schema = catalog?.tools?.find(tool => tool.name === "move_thread_to_project" && tool.namespace === "codex_app")?.inputSchema;
   const list = catalog?.tools?.find(tool => tool.name === "list_projects" && tool.namespace === "codex_app")?.inputSchema;
   const project = schema?.properties?.projectId;
@@ -24,7 +25,7 @@ export function validateStandaloneCreationCatalog(catalog) {
     || !(project?.type === "string" || project?.anyOf?.some(type => type.type === "string"))) {
     throw failure("Desktop native tools do not expose local project assignment.", "NATIVE_CREATION_UNSUPPORTED");
   }
-  return { status: "verified", source: "desktop-native-assignment-schema", schema_sha256: createHash("sha256").update(JSON.stringify([list, schema])).digest("hex") };
+  return { status: "verified", source: "desktop-native-assignment-schema", schema_sha256: createHash("sha256").update(JSON.stringify([list, schema, membership])).digest("hex") };
 }
 
 // No caller chat is required. The initial instruction starts exactly one real
@@ -114,7 +115,7 @@ export async function createStandaloneProjectThread(selector, prompt, settings, 
       return thread?.id === threadId && thread.projectId === project.id && thread.cwd === scope.cwd
         && Array.isArray(roots) && roots.length === scope.runtimeWorkspaceRoots.length && scope.runtimeWorkspaceRoots.every(root => roots.includes(root))
         && thread.name === title
-        && await membership(paths.home, threadId, desktopId) && initialInstructionMatches(await history(client, threadId), prompt);
+        && await membership(invokeNative, nativeEndpoint, threadId, desktopId, context, nativeOptions) && initialInstructionMatches(await history(client, threadId), prompt);
     };
     let verified = await verify();
     for (let retry = 0; retry < 20 && !verified; retry++) { await sleep(250); verified = await verify(); }

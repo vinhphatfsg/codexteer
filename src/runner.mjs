@@ -1,7 +1,12 @@
 import { spawn } from "node:child_process";
+import { targetHost } from "./target.mjs";
+import { runRemoteCommand, runRemoteShellCommand } from "./remote-io.mjs";
 
-export function runCommand(argv, { cwd, timeoutMs = 0, onStart = async () => {}, signal: abortSignal } = {}) {
+export function runCommand(argv, { cwd, timeoutMs = 0, onStart = async () => {}, signal: abortSignal, execBackend = "app-server", threadId, remoteShell, supervisor, connection } = {}) {
   if (!argv.length || !argv[0] || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw new Error("A command and timeout-ms between 0 and 86400000 are required.");
+  if (!["app-server", "thread-shell"].includes(execBackend)) throw new Error("--exec-backend must be app-server or thread-shell.");
+  if (targetHost() !== "local") return (execBackend === "thread-shell" ? runRemoteShellCommand : runRemoteCommand)(argv, { cwd, timeoutMs, onStart, signal: abortSignal, threadId, shell: remoteShell, supervisor, connection });
+  if (execBackend !== "app-server") throw new Error("thread-shell is an explicit remote execution backend.");
   return new Promise((resolve, reject) => {
     const started = new Date().toISOString();
     let output = "", truncated = false, timedOut = false, failure, killer, timer, startUpdate = Promise.resolve(), closed = false;
