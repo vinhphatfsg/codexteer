@@ -32,7 +32,7 @@ export function validateStandaloneCreationSchemas(schemas) {
   }
 }
 
-export async function inspectNativeCommandProtocol(state, { run = spawnSync, executable = BUNDLED_CLI, standalone = false } = {}) {
+export async function inspectNativeCommandProtocol(state, { run = spawnSync, executable = BUNDLED_CLI, standalone = false, remoteControl = false } = {}) {
   const version = run(executable, ["--version"], { encoding: "utf8", timeout: 5000 });
   const installed = version.stdout?.match(/codex-cli ([\w.+-]+)/)?.[1];
   if (version.status !== 0 || !installed || installed !== state.cli_version) throw failure("Native helper requires the installed bundled schema to match the running server.", "NATIVE_COMMAND_UNVERIFIED");
@@ -42,12 +42,20 @@ export async function inspectNativeCommandProtocol(state, { run = spawnSync, exe
     if (generated.status !== 0) throw failure("Cannot inspect native helper command schema.", "NATIVE_COMMAND_UNVERIFIED");
     const schemas = await Promise.all(["CommandExecParams", "CommandExecResponse"].map(async name => JSON.parse(await readFile(path.join(directory, "v2", `${name}.json`), "utf8"))));
     validateNativeCommandSchema(...schemas);
+    let remoteMethods;
+    if (remoteControl) {
+      const requests = JSON.parse(await readFile(path.join(directory, "ClientRequest.json"), "utf8"));
+      if (!Array.isArray(requests.oneOf)) throw failure("Cannot inspect the bundled Remote Control request surface.", "NATIVE_COMMAND_UNVERIFIED");
+      remoteMethods = [...new Set(requests.oneOf.flatMap(entry => entry.properties?.method?.enum ?? []).filter(method => typeof method === "string" && method.startsWith("remoteControl/")))].sort();
+      schemas.push(remoteMethods);
+    }
     if (standalone) {
       const names = ["ThreadStartParams", "ThreadStartResponse", "TurnStartParams", "TurnStartResponse", "ThreadSetNameParams", "ThreadMetadataUpdateParams"];
       const creation = Object.fromEntries(await Promise.all(names.map(async name => [name, JSON.parse(await readFile(path.join(directory, "v2", `${name}.json`), "utf8"))])));
       validateStandaloneCreationSchemas(creation); schemas.push(creation);
     }
-    return { status: "verified", source: "matching-bundled-command-schema", cli_version: installed, schema_sha256: createHash("sha256").update(JSON.stringify(schemas)).digest("hex"), ...(standalone ? { standalone_creation: "verified" } : {}) };
+    return { status: "verified", source: "matching-bundled-command-schema", cli_version: installed, schema_sha256: createHash("sha256").update(JSON.stringify(schemas)).digest("hex"),
+      ...(standalone ? { standalone_creation: "verified" } : {}), ...(remoteControl ? { remote_control_methods: remoteMethods } : {}) };
   } catch (error) { if (error.code === "NATIVE_COMMAND_UNVERIFIED") throw error; throw failure("Cannot read native helper command schemas.", "NATIVE_COMMAND_UNVERIFIED"); }
   finally { await rm(directory, { recursive: true, force: true }); }
 }

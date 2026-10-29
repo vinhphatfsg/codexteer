@@ -21,7 +21,7 @@ export async function prepareDirective(threadId, body, options, id, storage = {}
     ...(concern ? { finding_id: concern.id, finding_revision: concern.revision } : {}), ...(supervisor ? { supervisor_id: supervisor } : {}) };
   const lines = [`[codexteer ${id}]`, `送信者: ${metadata.source}`, `種類: ${kindLabels[metadata.kind]}`];
   for (const ref of refs) lines.push(`根拠: ${JSON.stringify(ref.ref)}${ref.sha256 ? ` (sha256:${ref.sha256})` : " (参照URL)"}`);
-  if (observed) lines.push(`観測対象ターン: ${observed.active_turn_id ?? "停止中"}`);
+  if (observed) lines.push(`観測対象ターン: ${observed.active_turn_id ?? "未確定"}`);
   if (supersedes) lines.push(`置き換える指示: ${supersedes}。この指示を以後の方針として扱ってください。`);
   if (retracts) lines.push(`撤回する指示: ${retracts}。以後の方針から除外してください。`);
   if (expiresAt) lines.push(`有効期限: ${expiresAt}`);
@@ -34,7 +34,10 @@ export async function prepareDirective(threadId, body, options, id, storage = {}
       else {
         if (thread.turns?.some(t => t.itemsView && t.itemsView !== "full") || !thread.turns?.length) thread = await fetchThread(client, threadId);
         const current = threadSnapshot(thread);
-        if (current.user_revision !== observed.user_revision || current.state.active_turn_id !== observed.active_turn_id) throw Object.assign(new Error("New user input or a different turn was observed. Read the task again before sending."), { code: "STALE_OBSERVATION" });
+        const latestChanged = observed.latest_turn_id !== undefined && observed.latest_turn_id !== (thread.turns?.at(-1)?.id ?? null);
+        // Older v1 cursors cannot distinguish two ambiguous active snapshots.
+        const unpinned = observed.latest_turn_id === undefined && thread.historyMode === "paginated" && thread.turns.filter(t => t.status === "inProgress").length > 1;
+        if (latestChanged || unpinned || current.user_revision !== observed.user_revision || current.state.active_turn_id !== observed.active_turn_id) throw Object.assign(new Error("New user input or a different turn was observed, or the old cursor cannot identify the latest turn. Read the task again before sending."), { code: "STALE_OBSERVATION" });
       }
     }
     await verifyEvidence(refs);

@@ -1,8 +1,33 @@
-import { readFile, realpath, stat } from "node:fs/promises";
+import { readFile, realpath, stat, lstat } from "node:fs/promises";
 import path from "node:path";
-import { discoverRuntime } from "./runtime.mjs";
+import { discoverRuntime, codexHome } from "./runtime.mjs";
 import { RpcClient } from "./rpc.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
+import { validateHostId } from "./target.mjs";
+
+// Registration inventory, not a claim that a remote host is online. Desktop's
+// native list currently drops projects when its remote Git metadata read fails.
+export async function registeredRemoteProjects(home = codexHome()) {
+  const file = path.join(home, ".codex-global-state.json");
+  let state;
+  try {
+    const info = await lstat(file);
+    if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o022)) throw failure("Unsafe Desktop project registry.", "PROJECT_REGISTRY_UNSAFE");
+    state = JSON.parse(await readFile(file, "utf8"));
+  } catch (error) { if (error.code === "ENOENT") return []; throw error; }
+  const projects = state["remote-projects"] ?? [];
+  if (!Array.isArray(projects)) throw failure("Invalid Desktop remote project registry.");
+  const ids = new Set();
+  return projects.map(project => {
+    const hostId = validateHostId(project?.hostId);
+    if (hostId === "local" || typeof project.id !== "string" || !project.id || typeof project.label !== "string" || typeof project.remotePath !== "string" || !project.remotePath || /[\0\r\n]/.test(project.remotePath)) throw failure("Invalid Desktop remote project registration.");
+    const key = JSON.stringify([hostId, project.id]);
+    if (ids.has(key)) throw failure("Duplicate Desktop remote project registration.");
+    ids.add(key);
+    return { project_id: project.id, desktop_project_ids: [project.id], name: project.label, roots: [project.remotePath],
+      project_kind: "remote", host_id: hostId, source: "desktop-registration", availability: "unverified" };
+  });
+}
 
 const failure = (message, code = "PROJECT_PROTOCOL_ERROR") => Object.assign(new Error(message), { code });
 

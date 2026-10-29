@@ -2,12 +2,14 @@ import { lstat, mkdir, readFile, writeFile, rename, rm, readdir, link } from "no
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { codexHome, isAlive } from "./runtime.mjs";
+import { hostNamespace, hostFields } from "./target.mjs";
 
 const valid = value => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,150}$/.test(value);
 // The persisted namespace predates the codexteer rename; keep existing records.
 export function storePath(bucket, id, home = codexHome()) {
   if (!valid(bucket) || (id != null && !valid(id))) throw new Error("Invalid local record identifier.");
-  return path.join(home, "codex-steer", bucket, ...(id == null ? [] : [`${id}.json`]));
+  const namespace = hostNamespace();
+  return path.join(home, "codex-steer", ...(namespace ? ["hosts", namespace] : []), bucket, ...(id == null ? [] : [`${id}.json`]));
 }
 
 async function owned(file, directory = false) {
@@ -17,7 +19,8 @@ async function owned(file, directory = false) {
 
 async function directory(bucket, home, create = false) {
   const root = path.join(home, "codex-steer"), target = storePath(bucket, null, home);
-  for (const p of [root, target]) {
+  const namespace = hostNamespace();
+  for (const p of [root, ...(namespace ? [path.join(root, "hosts"), path.join(root, "hosts", namespace)] : []), target]) {
     if (create) await mkdir(p, { mode: 0o700 }).catch(e => { if (e.code !== "EEXIST") throw e; });
     await owned(p, true);
   }
@@ -36,7 +39,7 @@ export async function writeRecord(bucket, id, data, { home = codexHome() } = {})
   await directory(bucket, home, true);
   const target = storePath(bucket, id, home), temp = `${target}.${randomUUID()}.tmp`;
   await owned(target).catch(e => { if (e.code !== "ENOENT") throw e; });
-  try { await writeFile(temp, JSON.stringify(data) + "\n", { mode: 0o600, flag: "wx" }); await rename(temp, target); }
+  try { await writeFile(temp, JSON.stringify({ ...data, ...hostFields() }) + "\n", { mode: 0o600, flag: "wx" }); await rename(temp, target); }
   finally { await rm(temp, { force: true }); }
 }
 

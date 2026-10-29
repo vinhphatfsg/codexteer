@@ -105,6 +105,47 @@ test("v1 freshness checks never treat paged send summaries as full item history"
   }
 });
 
+test("orphan steering preserves observations and pins the latest turn for both cursor formats", async () => {
+  for (const version of [1, 2]) {
+    for (const change of ["progress", "new-empty-turn", "new-user", ...(version === 1 ? ["legacy-cursor"] : [])]) {
+      const t = task([user("old-input"), msg("old-output")]);
+      t.turns.push({ id: "current", status: "inProgress", items: [msg("current-output")] });
+      const s = server(t), observed = version === 1 ? readSnapshot(t) : await s.read();
+      assert.equal(observed.active_turn_id, null, "observation must not claim a verified runtime ID");
+      assert.deepEqual(observed.events.filter(e => e.type === "turn").map(e => [e.id, e.status]), [["t0", "inProgress"], ["current", "inProgress"]]);
+      let cursor = observed.cursor;
+      if (change === "legacy-cursor") {
+        const value = decodeCursor(cursor, ID); delete value.latest_turn_id;
+        cursor = Buffer.from(JSON.stringify(value)).toString("base64url");
+      }
+      const directive = await prepareDirective(ID, "check", { basedOn: cursor }, "id");
+      assert.match(directive.wireText, /観測対象ターン: 未確定/);
+      if (change === "new-empty-turn") {
+        t.turns.at(-1).status = "completed";
+        t.turns.push({ id: "next", status: "inProgress", items: [] });
+        assert.equal(readSnapshot(t).active_turn_id, null, "null alone would miss this turn change");
+      } else t.turns.at(-1).items.push(change === "new-user" ? user("new-user") : msg("progress"));
+      let writes = 0;
+      const client = { async request(method, params) {
+        if (method !== "turn/steer") return s.client.request(method, params);
+        writes++; assert.equal(params.expectedTurnId, "current"); return { turnId: "current" };
+      } };
+      const send = sendOnClient(client, ID, directive.wireText, { beforeSend: directive.beforeSend });
+      if (change === "progress") assert.equal((await send).turn_id, "current");
+      else await assert.rejects(send, { code: "STALE_OBSERVATION" });
+      assert.equal(writes, change === "progress" ? 1 : 0);
+    }
+  }
+});
+
+test("v1 cursors reject malformed optional latest-turn identities", () => {
+  const original = decodeCursor(readSnapshot(task()).cursor, ID);
+  for (const latest_turn_id of [123, {}, ""]) {
+    const cursor = Buffer.from(JSON.stringify({ ...original, latest_turn_id })).toString("base64url");
+    assert.throws(() => decodeCursor(cursor, ID), { code: "STALE_CURSOR" });
+  }
+});
+
 test("paged reads deliver old running-command updates outside the visible tail without rescanning the turn", async () => {
   const t = task([user("u"), cmd("command"), ...Array.from({ length: 600 }, (_, i) => msg(`a${i}`))]);
   const s = server(t), a = await s.read({ limit: 2 });

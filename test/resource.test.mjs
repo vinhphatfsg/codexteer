@@ -51,3 +51,12 @@ test("concurrent claims have at most one winner and a busy run executes nothing"
   await assert.rejects(runWithResource("one", [process.execPath, "-e", "require('fs').writeFileSync(process.argv[1],'bad')", marker], { ...f, owner: "c" }), /held/);
   await assert.rejects(readFile(marker), { code: "ENOENT" });
 });
+
+test("unknown remote execution retains its lease instead of allowing a competing run", async t => {
+  const f = await fixture(t);
+  await assert.rejects(runWithResource("unknown", ["remote-program"], { ...f, owner: "original" }, {
+    execute: async () => { throw Object.assign(new Error("lost command completion"), { code: "CONNECTION_FAILED", uncertain: true }); },
+  }), error => error.lease_retained === true && error.remote_execution_status === "unknown");
+  assert.equal((await resourceStatus("unknown", f)).state, "held");
+  await assert.rejects(acquireResource("unknown", { ...f, owner: "other" }), { code: "RESOURCE_BUSY" });
+});

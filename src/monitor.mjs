@@ -9,6 +9,7 @@ import { decodeCursor, digest, readOnClient } from "./observe.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 import { assertSupervisor, recordSupervisorObservation, recordSupervisorFailure } from "./supervision.mjs";
 import { NotificationBuffer, notificationOptions } from "./notify.mjs";
+import { hostFields } from "./target.mjs";
 
 const retryable = new Set(["CONNECTION_FAILED", "TIMEOUT", "RUNTIME_UNAVAILABLE", "RUNTIME_NOT_READY"]);
 const needsReview = new Set(["STALE_CURSOR", "CURSOR_UPGRADE_REQUIRED", "OBSERVATION_CHANGED"]);
@@ -33,7 +34,7 @@ export async function streamThread(threadInput, options, onChange, { discover = 
   let initialStateHash;
   let established = false, lastObservedAt = null, outageStarted = null, attempts = 0, backoff = 1000, lastFailure;
   const connection = (state, extra = {}) => ({
-    type: "connection", thread_id: threadId, state, resume_cursor: (buffer ? notifiedCursor : cursor) ?? null,
+    type: "connection", thread_id: threadId, ...hostFields(), state, resume_cursor: (buffer ? notifiedCursor : cursor) ?? null,
     last_observed_at: lastObservedAt, observed_at: new Date().toISOString(), reconnect_attempts: attempts, ...extra,
   });
   const expired = () => Object.assign(new Error("Watch could not restore observation within the reconnect deadline. Check doctor before restarting from a reviewed cursor."), {

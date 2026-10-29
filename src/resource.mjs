@@ -3,6 +3,7 @@ import { digest } from "./observe.mjs";
 import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
 import { normalizeTaskId } from "./task-id.mjs";
 import { runCommand } from "./runner.mjs";
+import { targetHost } from "./target.mjs";
 
 function resourceKey(name) {
   if (!name?.trim() || name.length > 200 || /[\r\n\x00-\x1f]/.test(name)) throw new Error("Resource name must be a non-empty single line (up to 200 characters).");
@@ -53,18 +54,19 @@ export async function listResources({ now = Date.now, ...storage } = {}) {
   return (await listRecords("resources", storage)).map(lease => ({ name: lease.name, state: leaseState(lease, now()), lease })).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export async function runWithResource(name, argv, { timeoutMs = 0, cwd = process.cwd(), ttlMs = 600000, ...options }) {
+export async function runWithResource(name, argv, { timeoutMs = 0, cwd = targetHost() === "local" ? process.cwd() : undefined, ttlMs = 600000, execBackend, remoteShell, supervisor, connection, ...options }, { execute = runCommand } = {}) {
   if (!argv.length || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw new Error("A command and valid --timeout-ms are required.");
   const lease = await acquireResource(name, { ...options, ttlMs }), controller = new AbortController();
-  let timer, renewal = Promise.resolve(), stopped = false, leaseError = null, released = false, result;
+  let timer, renewal = Promise.resolve(), stopped = false, leaseError = null, released = false, result, uncertain = false;
   const schedule = () => { timer = setTimeout(() => {
     renewal = renewResource(name, lease.token, { ...options, ttlMs }).then(() => { if (!stopped) schedule(); }).catch(e => { leaseError = e.message; controller.abort(); });
   }, Math.floor(ttlMs / 3)); };
   schedule();
-  try { result = await runCommand(argv, { cwd, timeoutMs, signal: controller.signal }); }
+  try { result = await execute(argv, { cwd, timeoutMs, signal: controller.signal, execBackend, remoteShell, threadId: options.threadId, supervisor, connection }); }
+  catch (error) { uncertain = !!error.uncertain; if (uncertain) { error.resource = name; error.lease_retained = true; error.remote_execution_status = "unknown"; } throw error; }
   finally {
     stopped = true; clearTimeout(timer); await renewal;
-    try { await releaseResource(name, lease.token, options); released = true; } catch (e) { leaseError ??= e.message; }
+    if (!uncertain) try { await releaseResource(name, lease.token, options); released = true; } catch (e) { leaseError ??= e.message; }
   }
   return { resource: name, owner: lease.owner, ...result, lease_error: leaseError, released, valid: !leaseError && result.exit_code === 0 && !result.error && !result.timed_out };
 }

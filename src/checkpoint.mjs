@@ -7,11 +7,14 @@ import { digest } from "./observe.mjs";
 import { normalizeTaskId } from "./task-id.mjs";
 import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
 import { runCommand } from "./runner.mjs";
+import { targetHost } from "./target.mjs";
+import { remoteCaptureInputs, remoteCheckpointScope, remoteWatchInputs } from "./remote-io.mjs";
 
 const within = (file, root) => file === root || file.startsWith(root + path.sep);
 function excluded(file, excludes) { return file.split(path.sep).includes(".git") || excludes.some(x => within(file, x)); }
 
 export async function captureInputs(roots, excludes = [], { allowMissing = false } = {}) {
+  if (targetHost() !== "local") return remoteCaptureInputs(roots, excludes, { allowMissing });
   const records = new Map();
   async function visit(file) {
     if (excluded(file, excludes) || records.has(file)) return;
@@ -46,10 +49,12 @@ export async function getCheckpoint(threadInput, id, storage = {}) {
 export async function createCheckpoint(threadInput, name, { paths, excludes = [], cwd = process.cwd(), ...storage }) {
   const threadId = normalizeTaskId(threadInput);
   if (!name?.trim() || !paths?.length) throw new Error("capture requires a name and at least one --path.");
-  const roots = [...new Set(paths.map(p => path.resolve(cwd, p)))], omit = excludes.map(p => path.resolve(cwd, p));
+  const scope = targetHost() === "local" ? { cwd: path.resolve(cwd), roots: [...new Set(paths.map(p => path.resolve(cwd, p)))], excludes: excludes.map(p => path.resolve(cwd, p)) }
+    : await remoteCheckpointScope(threadId, paths, excludes);
+  const { roots, excludes: omit } = scope;
   const snapshot = await captureInputs(roots, omit);
   if (!snapshot.files.some(f => f.type === "file")) throw new Error("No input files were selected.");
-  const entry = { schema: 1, id: randomUUID(), thread_id: threadId, name, cwd: path.resolve(cwd), created_at: new Date().toISOString(), snapshot, runs: [], artifacts: [] };
+  const entry = { schema: 1, id: randomUUID(), thread_id: threadId, name, cwd: scope.cwd, created_at: new Date().toISOString(), snapshot, runs: [], artifacts: [] };
   await writeRecord("checkpoints", entry.id, entry, storage);
   return checkpointSummary(entry);
 }
@@ -72,39 +77,70 @@ export async function verifyCheckpoint(threadInput, id, storage = {}) {
 }
 
 function watchInputs(snapshot) {
-  const touched = new Set(), watchers = []; let error = null;
+  const touched = new Set(), watchers = []; let error = null, pending = Promise.resolve(), dirty = false, scanning = false;
+  // macOS can deliver queued events for files created before watch startup,
+  // including parent notifications for excluded outputs. Confirm an event
+  // against the input snapshot rather than treating its path alone as a write.
+  const scan = () => {
+    dirty = true;
+    if (scanning) return;
+    scanning = true;
+    pending = pending.then(async () => {
+      while (dirty) {
+        dirty = false;
+        try {
+          const current = await captureInputs(snapshot.roots, snapshot.excludes, { allowMissing: true }), changes = differences(snapshot, current);
+          for (const file of [...changes.added, ...changes.removed, ...changes.changed]) if (touched.size < 100) touched.add(file);
+        } catch (e) { error = e.message; }
+      }
+    }).finally(() => { scanning = false; });
+  };
   const files = new Map(snapshot.files.map(f => [f.ref, f]));
   const dirs = [...new Set(snapshot.roots.map(r => files.get(r)?.type === "directory" ? r : path.dirname(r)))];
   try {
     for (const dir of dirs) {
-      const watcher = watch(dir, { recursive: true }, (_, filename) => {
+      const watcher = watch(dir, { recursive: true }, (eventType, filename) => {
         const file = filename ? path.resolve(dir, filename.toString()) : dir;
-        if (!excluded(file, snapshot.excludes) && (!filename || snapshot.roots.some(r => within(file, r)))) { if (touched.size < 100) touched.add(file); }
+        if (!excluded(file, snapshot.excludes) && (!filename || snapshot.roots.some(r => within(file, r)))) {
+          // A content-change event on an existing input remains evidence even
+          // if it was restored within the filesystem timestamp resolution.
+          if (eventType === "change" && files.get(file)?.type === "file" && touched.size < 100) touched.add(file);
+          scan();
+        }
       });
       watcher.on("error", e => { error = e.message; }); watchers.push(watcher);
     }
   } catch (e) { for (const w of watchers) w.close(); throw e; }
-  return { touched, get error() { return error; }, close() { for (const w of watchers) w.close(); } };
+  return { touched, get error() { return error; }, settle: () => pending, async close() { for (const w of watchers) w.close(); await pending; } };
 }
 
-export async function runCheckpoint(threadInput, id, argv, { timeoutMs = 0, ...storage } = {}) {
+export async function runCheckpoint(threadInput, id, argv, { timeoutMs = 0, execBackend, remoteShell, supervisor, connection, ...storage } = {}) {
   if (!argv.length || !argv[0] || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw new Error("A command and timeout-ms between 0 and 86400000 are required.");
   const threadId = normalizeTaskId(threadInput);
   return withStoreLock(`checkpoint-${id}`, async () => {
-    const entry = await getCheckpoint(threadId, id, storage), watcher = watchInputs(entry.snapshot);
+    const entry = await getCheckpoint(threadId, id, storage), watcher = targetHost() === "local" ? watchInputs(entry.snapshot) : await remoteWatchInputs(entry.snapshot);
     try {
       const before = await captureInputs(entry.snapshot.roots, entry.snapshot.excludes, { allowMissing: true });
       if (before.digest !== entry.snapshot.digest) throw new Error("Inputs changed since capture. Capture a new checkpoint before running.");
       const run = { id: randomUUID(), argv, status: "running", started_at: new Date().toISOString() };
       entry.runs.push(run); await writeRecord("checkpoints", id, entry, storage);
-      const result = await runCommand(argv, { cwd: entry.cwd, timeoutMs, onStart: async pid => { run.pid = pid; await writeRecord("checkpoints", id, entry, storage); } });
+      let result;
+      try { result = await runCommand(argv, { cwd: entry.cwd, timeoutMs, execBackend, remoteShell, supervisor, connection, threadId, onStart: async (pid, info) => { Object.assign(run, { pid }, info); await writeRecord("checkpoints", id, entry, storage); } }); }
+      catch (error) {
+        Object.assign(run, { status: error.uncertain ? "unknown" : "failed", error_code: error.code, error: error.message, inputs_unchanged: false,
+          remote_process_id: error.remote_process_id, touched_paths: [...watcher.touched], observation_error: watcher.error, completed_at: new Date().toISOString() });
+        await writeRecord("checkpoints", id, entry, storage); throw error;
+      }
       let after, snapshotError;
       try { after = await captureInputs(entry.snapshot.roots, entry.snapshot.excludes, { allowMissing: true }); } catch (e) { snapshotError = e.message; }
+      await watcher.settle?.();
+      const changedInputs = after ? differences(entry.snapshot, after) : null;
+      const touchedPaths = [...new Set([...watcher.touched, ...(changedInputs ? [...changedInputs.added, ...changedInputs.removed, ...changedInputs.changed] : [])])].slice(0, 100);
       Object.assign(run, result, { status: "completed", inputs_unchanged: after?.digest === entry.snapshot.digest && !watcher.touched.size && !watcher.error,
-        touched_paths: [...watcher.touched], observation_error: watcher.error ?? snapshotError ?? null, differences: after ? differences(entry.snapshot, after) : null });
+        touched_paths: touchedPaths, observed_touched_paths: [...watcher.touched], observation_error: watcher.error ?? snapshotError ?? null, differences: changedInputs });
       await writeRecord("checkpoints", id, entry, storage);
       return { checkpoint_id: id, ...run, valid: run.exit_code === 0 && !run.error && !run.timed_out && run.inputs_unchanged };
-    } finally { watcher.close(); }
+    } finally { await watcher.close(); }
   }, storage);
 }
 

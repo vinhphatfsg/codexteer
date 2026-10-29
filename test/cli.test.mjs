@@ -6,6 +6,38 @@ import os from "node:os";
 import path from "node:path";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
+
+test("routing takes the destination from positionals rather than metadata option values or message text", () => {
+  const link = `codex://threads/${ID}?hostId=remote-control%3Aenv_fixture`;
+  for (const leading of [["--evidence", link], ["--source", ID.replace(/1$/, "2")]]) {
+    const before = cli(["send", ...leading, ID, "fixture", "--dry-run", "--no-sound"]);
+    const after = cli(["send", ID, "fixture", ...leading, "--dry-run", "--no-sound"]);
+    assert.equal(before.status, 0); assert.equal(after.status, 0); assert.equal(before.result.data.thread_id, ID);
+    assert.equal(cli(["--host", "local", "send", ...leading, ID, "fixture", "--dry-run"]).status, 0);
+  }
+  const invalidCursorBefore = cli(["send", "--based-on", link, ID, "fixture", "--dry-run"]);
+  const invalidCursorAfter = cli(["send", ID, "fixture", "--based-on", link, "--dry-run"]);
+  assert.equal(invalidCursorBefore.result.error.code, invalidCursorAfter.result.error.code);
+  assert(!["REMOTE_READ_ONLY", "HOST_MISMATCH"].includes(invalidCursorBefore.result.error.code));
+  const remote = cli(["--remote-transport", "control", "send", "--source", ID, link, "fixture", "--dry-run", "--no-sound"]);
+  assert.equal(remote.status, 0); assert.equal(remote.result.data.host_id, "remote-control:env_fixture");
+  assert.equal(cli(["send", ID, "--dry-run", "--", link]).status, 0);
+  assert.equal(cli(["--host", "local", "send", link, "fixture", "--dry-run"]).result.error.code, "HOST_MISMATCH");
+});
+
+test("thread repair exposes offline help and rejects unsafe CLI combinations before access", () => {
+  const help = cli(["help", "thread"]);
+  assert.ok(help.result.data.usage.includes("thread repair <THREAD> [--dry-run | --apply]"));
+  for (const flags of [["--apply", "--dry-run"], ["--force"], ["--all"]]) {
+    const r = cli(["thread", "repair", ID, ...flags]);
+    assert.equal(r.status, 1); assert.match(r.result.error.message, /Expected:/);
+  }
+  const desktop = cli(["--connection", "desktop", "thread", "repair", ID]);
+  assert.equal(desktop.result.error.code, "DESKTOP_READ_ONLY");
+  const supervisor = cli(["--supervisor", ID, "thread", "repair", ID, "--apply"]);
+  assert.equal(supervisor.result.error.code, "SUPERVISOR_CONTROL_FORBIDDEN");
+});
+
 function cli(args, input, env = {}) {
   const result = spawnSync(process.execPath, ["bin/codexteer.mjs", "--json", ...args], { encoding: "utf8", input, env: { ...process.env, ...env } });
   return { status: result.status, result: JSON.parse(result.stdout), stderr: result.stderr };
@@ -156,4 +188,24 @@ test("metadata dry-run validates kind and evidence without exposing message text
   assert.equal(JSON.stringify(result).includes("private body"), false);
   assert.equal(cli(["send", ID, "test", "--dry-run", "--kind", "typo"]).status, 1);
   assert.equal(cli(["send", ID, "test", "--dry-run", "--kind", "review", "--backend", "ui"]).status, 1);
+});
+
+test("desktop update dry run and argument validation", () => {
+  const { status, result } = cli(["desktop", "update", "--dry-run"]);
+  assert.equal(status, 0);
+  assert.equal(result.command, "desktop.update");
+  assert.equal(result.data.started, false);
+  for (const args of [["--timeout-ms", "wat"], ["--timeout-ms", "1"], ["--unknown"]]) {
+    assert.equal(cli(["desktop", "update", "--dry-run", ...args]).status, 1);
+  }
+});
+
+test("bound supervisors cannot launch Desktop updates", () => {
+  // Both fallbacks are harmless even if the supervisor guard regresses:
+  // dry-run has no effects, and the invalid timeout fails before platform work.
+  for (const flags of [["--dry-run"], ["--timeout-ms", "1"]]) {
+    const result = cli(["--supervisor", ID, "desktop", "update", ...flags]);
+    assert.equal(result.status, 1);
+    assert.equal(result.result.error.code, "SUPERVISOR_CONTROL_FORBIDDEN");
+  }
 });

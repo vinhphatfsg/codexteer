@@ -12,6 +12,7 @@ import { RpcFailure } from "../src/rpc.mjs";
 
 const CHILD = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001", CONTEXT = "aaaaaaaa-aaaa-4aaa-8aaa-000000000002";
 export const catalog = { tools: [
+  { name: "list_threads", namespace: "codex_app", inputSchema: { type: "object", properties: { limit: { type: "number" } } } },
   { name: "list_projects", namespace: "codex_app", inputSchema: { type: "object" } },
   { name: "move_thread_to_project", namespace: "codex_app", inputSchema: { required: ["threadId", "projectId"], properties: { threadId: { type: "string" }, projectId: { anyOf: [{ type: "string" }, { type: "null" }] } } } },
   { name: "create_thread", namespace: "codex_app", inputSchema: { required: ["prompt", "target"], properties: { prompt: { type: "string" }, target: { anyOf: [{ required: ["projectId"], properties: { type: { enum: ["project"] }, projectId: { type: "string" }, environment: { anyOf: [{ properties: { type: { enum: ["local"] } } }] } } }] } } } },
@@ -66,6 +67,20 @@ async function standaloneFixture(t) {
   };
   return f;
 }
+
+test("both creation paths verify native Desktop membership when no legacy disk entry exists", async t => {
+  for (const standalone of [false, true]) {
+    const f = await (standalone ? standaloneFixture(t) : fixture(t)), native = f.deps.native;
+    delete f.deps.membership;
+    f.deps.native = async (...args) => {
+      if (args[1] !== "list_threads") return native(...args);
+      f.calls.push({ action: args[1] });
+      return result({ pinnedThreads: [], threads: [{ id: CHILD, kind: "codex", hostId: "local", projectId: "desktop" }] });
+    };
+    assert.equal((await createProjectThread("サンプル", "日本語\nfirst instruction", f.options, f.deps)).verification_status, "verified");
+    assert.equal(f.calls.filter(call => call?.action === "list_threads").length, 1);
+  }
+});
 
 test("project and prompt alone create exactly one task with its own real native context and Desktop subscription", async t => {
   const f = await standaloneFixture(t), request = f.client.request;

@@ -220,6 +220,8 @@ npx -y codexteer@0.17.0 --version
 
 ## 0.17.0の公開候補
 
-`package.json`と`package-lock.json`の版を0.17.0に揃えています。0.16.0はnpm registryで公開済みであることを確認し、同じ版への上書き公開は行いません。`projects list`と`thread create --project`、Desktopの所属登録、全フォルダと初回指示の照合を追加します。既存のruntime protocolとcapability契約はv1を維持します。
+`package.json`と`package-lock.json`の版を0.18.0に揃えています。0.17.0はnpm registryで公開済みであることを確認し、同じ版への上書き公開は行いません。`projects list`と`thread create --project`、Desktopの所属登録、全フォルダと初回指示の照合を追加します。既存のruntime protocolとcapability契約はv1を維持します。
 
 公開前に構文・全回帰・tarballとoffline install・npm/npx・publish dry-runを確認します。公開するファイルを固定する場合は、検証済みtarballのSHA-256を照合してから同じtarballを公開してください。PRのReady化やバージョン更新だけではnpmへ公開されません。
+
+検証結果の要約は`remote-cli-validation.json`を参照してください。実環境のホスト・プロジェクト・チャット識別子、ローカルパス、診断ログは公開用の配布物へ含めません。npm公開・Gitタグ作成はPR更新とは別の操作です。

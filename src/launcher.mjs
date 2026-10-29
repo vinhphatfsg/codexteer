@@ -38,6 +38,7 @@ export async function appServerDoctor({ threadId: threadInput, versions = instal
   let wrapperNodeVersion = null;
   let connectionStatus = "unavailable", failure = null, method = null;
   let steerCompatibility = versionCompatibility();
+  let remoteControlAuth;
   let runtimeState, runtimePaths;
   try {
     const { paths, state } = await discover();
@@ -53,12 +54,14 @@ export async function appServerDoctor({ threadId: threadInput, versions = instal
     client = compatibleClient(await connect(paths.socket), state);
     connectionStatus = "connected";
     compatibility.api_checks.initialize = "verified";
-    method = "thread/loaded/list";
-    const loaded = await client.request(method);
-    if (!Array.isArray(loaded?.data) || !loaded.data.every(id => typeof id === "string")) {
-      throw Object.assign(new Error("App Server returned an invalid loaded-task list."), { code: "PROTOCOL_ERROR" });
+    if (!state.remote_host_id) {
+      method = "thread/loaded/list";
+      const loaded = await client.request(method);
+      if (!Array.isArray(loaded?.data) || !loaded.data.every(id => typeof id === "string")) {
+        throw Object.assign(new Error("App Server returned an invalid loaded-task list."), { code: "PROTOCOL_ERROR" });
+      }
+      compatibility.api_checks[method] = "verified";
     }
-    compatibility.api_checks[method] = "verified";
     checks.initialized = true;
     method = null;
     if (!state.native_observation_only && !checks.bundled_wrapper_node) throw Object.assign(new Error("The running wrapper does not confirm Desktop's bundled Node runtime. App tools may fail code-signing authorization. Finish current tasks, quit Desktop, then run: codexteer desktop start"), { code: "WRAPPER_NODE_UNVERIFIED" });
@@ -71,9 +74,10 @@ export async function appServerDoctor({ threadId: threadInput, versions = instal
     }
   } catch (error) {
     remediation = error.message;
-    failure = { code: error.code ?? "DIAGNOSTIC_FAILED", rpc_code: error.rpcCode ?? null, method, ...(error.capability ? { capability: error.capability } : {}) };
+    remoteControlAuth = error.remote_control_auth;
+    failure = { code: error.code ?? "DIAGNOSTIC_FAILED", rpc_code: error.rpcCode ?? null, method: remoteControlAuth ? "remote-control-auth" : method, ...(error.capability ? { capability: error.capability } : {}) };
     const unavailable = ["CONNECTION_FAILED", "TIMEOUT", "RUNTIME_UNAVAILABLE", "RUNTIME_NOT_READY"].includes(error.code);
-    if (method && !unavailable) {
+    if (method && !unavailable && !remoteControlAuth) {
       if (["CAPABILITY_UNVERIFIED", "RUNTIME_PROTOCOL_UNVERIFIED"].includes(error.code)) {
         // The client stopped before calling the runtime, so there is no API result to classify.
         compatibility.status = "unverified";
@@ -90,7 +94,9 @@ export async function appServerDoctor({ threadId: threadInput, versions = instal
     unsupportedMethods: apiChecks.filter(([, status]) => status === "unsupported").map(([name]) => name),
   });
   let desktopSubscription = { status: "unverified" };
-  if (runtimePaths && contracts.operations.send_new_turn.status === "supported") {
+  if (runtimeState?.remote_transport === "paired") {
+    desktopSubscription = { status: "unverified", source: "desktop-native-navigation", caller_required: true, opens_remote_chat: true };
+  } else if (runtimePaths && contracts.operations.send_new_turn.status === "supported") {
     try { await inspectControl(runtimePaths); desktopSubscription = { status: "available" }; }
     catch (error) {
       desktopSubscription = { status: error.code === "DESKTOP_SUBSCRIPTION_UNAVAILABLE" ? "unavailable" : "failed", code: error.code ?? "DIAGNOSTIC_FAILED" };
@@ -103,7 +109,8 @@ export async function appServerDoctor({ threadId: threadInput, versions = instal
     codex_steer_compatibility: steerCompatibility,
     runtime_compatibility: contracts, desktop_subscription: desktopSubscription,
     cli_version_status: !serverVersion || !versions.cli_version ? "unverified" : serverVersion === versions.cli_version ? "matched" : "mismatch",
-    connection: { status: connectionStatus, mode: runtimeState?.native_observation_only ? "desktop" : "shared", observation_only: !!runtimeState?.native_observation_only }, compatibility, failure, checks, remediation };
+    connection: { status: connectionStatus, mode: runtimeState?.native_observation_only ? "desktop" : "shared", observation_only: !!runtimeState?.native_observation_only }, compatibility, failure, checks, remediation,
+    ...(remoteControlAuth ? { remote_control_auth: remoteControlAuth } : {}) };
 }
 
 export function desktopLaunchArgs(home, wrapper) {

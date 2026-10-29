@@ -1,5 +1,7 @@
 # Desktopプロジェクトにチャットを直接作成する
 
+本書のcaller不要standalone方式はローカル向けです。`--host ... --remote-transport paired thread create`のリモート作成・正式project ID・caller要件・host照合は[リモートCLI操作](remote-operations.md)を参照してください。
+
 `projects list`でローカルプロジェクトを確認し、`thread create`で初回指示付きのチャットを作成します。Desktopのnative RPCを使い、中継AIは実装から削除しました。「サンプル」のような複数フォルダ・共有フォルダを持つプロジェクトにも対応します。
 
 ```bash
@@ -29,11 +31,11 @@ terminal CLI → App Server thread/start（選択プロジェクトの全フォ�
   → Desktopの所属サービスで登録・表示更新
 ```
 
-App Serverはnative操作用にcodexteer同梱の固定helperだけを起動します。native引数は所有者専用の一時JSONファイルで渡し、shellやargvへ埋め込みません。helperの許可操作はcatalog、list_projects、ローカルcreate_thread、新規チャット自身のmove_thread_to_projectだけです。新規チャットの初回処理以外のモデル推論は発生しません。
+App Serverはnative操作用にcodexteer同梱の固定helperだけを起動します。native引数は所有者専用の一時JSONファイルで渡し、shellやargvへ埋め込みません。helperの許可操作はcatalog、list_projects、固定上限のlist_threads、引数制限付きread_thread、ローカルcreate_thread、新規チャット自身のmove_thread_to_project、正確なthread IDだけを受け付けるnavigate_to_codex_pageです。navigate_to_codex_pageはpairedの購読確立のため制御側Desktopで対象リモートチャットを開きます。呼出し前に一覧とnative readでthread/hostを照合します。read_threadは[リモート観測](remote-observation.md)用で、作成先の範囲を広げません。新規チャットの初回処理以外のモデル推論は発生しません。
 
 作成前に、実行中サーバーと同じ同梱CLIからcommand/execとread-only sandboxのschemaを確認します。helperはDesktopのpeer認証を通過する署名付きApp Serverの正規の子として実行されます。Unix socketへ接続するためsandboxのnetworkAccessはtrueですが、helperにHTTP/DNSや外部サービスへの接続処理はありません。認証チェックや署名は変更しません。
 
-codexteerは選択プロジェクトからプライマリcwdと全workspace rootsを解決します。名前とcanonical所属をAPIで保存し、Desktopの購読を確立します。初回指示の前に範囲と空の履歴を確認します。初回受付後、Desktopのnative所属サービスを呼び、スケジュールと同じ所属ストアと表示へ反映します。作成応答だけを成功の証拠にせず、保存されたDesktop所属、canonical projectId、全フォルダ、userMessageとして保存された初回指示の完全一致とタイトルを照合します。関連付けを明示したnative作成の場合は、`codex_delegation`の呼出し元IDと本文を含むliteral全文を比較します。XMLとして解釈しません。
+codexteerは選択プロジェクトからプライマリcwdと全workspace rootsを解決します。名前とcanonical所属をAPIで保存し、Desktopの購読を確立します。初回指示の前に範囲と空の履歴を確認します。初回受付後、Desktopのnative所属サービスを呼び、スケジュールと同じ所属ストアと表示へ反映します。作成応答だけを成功の証拠にせず、Desktop native一覧のthread ID・local host・Desktop project ID、canonical projectId、全フォルダ、userMessageとして保存された初回指示の完全一致とタイトルを照合します。旧global stateファイルの`thread-project-assignments`だけを現在の所属とはみなしません。関連付けを明示したnative作成の場合は、`codex_delegation`の呼出し元IDと本文を含むliteral全文を比較します。XMLとして解釈しません。
 
 受付が履歴の永続化より早い場合は、最大5秒間、読取りだけで反映を待ちます。作成や初回ターンを再実行しません。standaloneではcanonical所属をthread/startで指定し、購読前にmetadata APIでも保存します。関連付けを明示したnative作成では必要に応じてmetadata APIでcanonical所属を登録します。Desktopの状態ファイル・DBを直接書き換えません。
 
@@ -49,7 +51,7 @@ CLI終了後の承認はDesktopが担当します。codexteerは承認を自動�
 - `--timeout-ms`は各RPCの待機期限で、既定120000、1000〜600000です。
 - `--dry-run`は接続・プロジェクト・native schemaを読み、チャット・指示・receiptを作りません。
 
-native RPCはDesktop内部のversion依存APIです。この実装の実測はDesktop `26.1007.30912`と`26.1007.71326` / 同梱CLI `0.162.0-alpha.17.2`です。未対応schema、unsafe socket、変更されたendpoint、認証拒否では止めます。
+native RPCはDesktopのバージョンに依存します。未対応schema、unsafe socket、変更されたendpoint、認証拒否では止めます。
 
 wrapperはnative endpointを所有者専用runtimeに公開します。公開されていない旧wrapperでは、選択済み・所有者検証済みPIDと同梱Node実行ファイルを確認し、継承環境のnative endpointだけを取得します。環境全体を出力・保存しません。
 
@@ -67,8 +69,22 @@ wrapperはnative endpointを所有者専用runtimeに公開します。公開さ
 - `verification_status: verified`と所属・初回指示の個別verifiedが、照合完了の証拠です。
 - 最終receipt保存だけ失敗した場合は`receipt_update_required`を返します。受付済み操作を再送可能な失敗に変換しません。
 
-## 検証
+## 作成済みreceiptの再照合
 
-作成、所属、初回指示、CLI終了後の承認・質問を、利用者が許可した専用チャットで確認してください。環境固有の識別子や操作ログは公開しません。
+```bash
+codexteer thread verify <ATTEMPT-ID> --json
+```
+
+`creation_status: created`、`sent: true`、`delivery_status: accepted`を持つschema 2/3のreceiptを、同じCODEX_HOMEで再照合します。作成・購読・移動・metadata更新・指示送信は行いません。新しいthread/turnやAI処理も発生しません。更新するのはcodexteer自身のreceiptだけで、以前の照合状態・エラーと今回の全チェックを`verification_history`へ残します。unknown/dispatching/未受付をこのコマンドで成功扱いにはしません。
+
+Desktop native所属、現在のプロジェクトID対応と全フォルダ、threadのcanonical所属・cwd・全フォルダ・指定タイトルに加え、保存された初回本文のSHA-256とUnicode文字数をreceiptと比較します。standaloneでは初回turn IDも一致が必要です。初回本文を再度渡す必要はありません。関連付けを明示した場合は既知の呼出し元を含むliteral envelopeから本文を取り出し、XMLとして解釈しません。
+
+native一覧はDesktopの実schemaに従い最新50件と全pinnedです。対象が見つからない、別host/projectに所属する、重複して見える、schemaやruntimeが変わる場合は成功と推測しません。失敗の`verification_checks`を確認してください。`--timeout-ms`は各RPCの期限です。`--supervisor`と観測専用の`--connection desktop`からは実行できません。保存済みCLIは変更しないため、この機能には修正版CLIが必要です。
+
+## 検証と互換性
+
+作成とreceipt照合の回帰テストは、架空のプロジェクト・識別子・一時プロファイルを使います。未知の応答、別プロジェクト、追加root、初回指示の不一致では停止し、作成や配送を繰り返しません。実環境で使う前に、その環境のDesktopとCLIでschema・所属・購読・承認動作を確認してください。
+
+この文書のプロジェクト名とIDは説明用の例です。実際のチャットID、プロジェクト一覧、ローカルパス、実行ログは公開資料に含めません。
 
 DesktopのCloud環境構成で作成する場合は[Desktop Cloud](desktop-cloud.md)を参照してください。環境選択とローカルDesktopプロジェクト所属は別で、通常のリモートCloud環境への初回所属登録は未対応です。Desktop自身の実行環境に限定した署名付きAPIの対応範囲は、Desktop Cloudの説明を参照してください。

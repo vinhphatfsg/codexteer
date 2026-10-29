@@ -1,4 +1,5 @@
 import { digest, project, trimEvent, decodeCursor, invalidCursor } from "./observe.mjs";
+import { hostFields } from "./target.mjs";
 
 const PAGE = 100;
 const running = new Set(["inProgress", "running", "pending"]);
@@ -71,6 +72,7 @@ function validateTurns(old, turns) {
 }
 
 function finish(state, cursor, events, commands, old, pending, omitted) {
+  Object.assign(cursor, hostFields());
   cursor.state = digest(state); cursor.active_turn_id = state.active_turn_id; cursor.pending = pending;
   const encoded = Buffer.from(JSON.stringify(cursor)).toString("base64url");
   if (encoded.length > 1024 * 1024) throw new Error("Too many in-progress items for a fast cursor. Use --full-history.");
@@ -214,7 +216,11 @@ export async function verifyPagedFreshness(client, threadId, encoded) {
   const { thread } = await client.request("thread/read", { threadId, includeTurns: false });
   if (thread?.id !== threadId) throw invalidCursor();
   const turns = await turnMetadata(client, threadId); validateTurns(old, turns);
-  if (stateOf(thread, turns).active_turn_id !== old.active_turn_id) throw Object.assign(new Error("The active turn changed. Read the task again before sending."), { code: "STALE_OBSERVATION" });
+  // With orphaned turns both active IDs can be null even when a new turn
+  // started. Pin the chronological tail as well, including empty new turns.
+  if (turns.at(-1)?.id !== old.turns.at(-1)?.id || stateOf(thread, turns).active_turn_id !== old.active_turn_id) {
+    throw Object.assign(new Error("The latest or active turn changed. Read the task again before sending."), { code: "STALE_OBSERVATION" });
+  }
   let position = old.head.cursor, first = true;
   do {
     const page = await items(client, threadId, { cursor: position });

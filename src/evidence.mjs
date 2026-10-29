@@ -2,8 +2,11 @@ import { stat, realpath } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { targetHost } from "./target.mjs";
+import { remoteFingerprintFile } from "./remote-io.mjs";
 
 export async function fingerprintFile(input) {
+  if (targetHost() !== "local") return remoteFingerprintFile(input);
   const ref = path.resolve(input), canonical = await realpath(ref), before = await stat(canonical);
   if (!before.isFile()) throw new Error("Evidence must be a file or an http(s)/codex URL.");
   const hash = createHash("sha256");

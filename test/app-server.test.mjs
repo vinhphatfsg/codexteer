@@ -316,12 +316,57 @@ test("paged steering finds the active turn across pages without reading item bod
   }]);
 });
 
-test("missing or ambiguous active turns across pages never send", async () => {
-  for (const activeCount of [0, 2]) {
-    const turns = Array.from({ length: 101 }, (_, i) => ({ id: `turn-${i}`, status: activeCount && (i === 0 || i === 100) ? "inProgress" : "completed" }));
+test("missing or only historical active turns across pages never send", async () => {
+  for (const latestStatus of ["completed", "failed", "interrupted"]) {
+    const turns = Array.from({ length: 101 }, (_, i) => ({ id: `turn-${i}`, status: i < 2 ? "inProgress" : "completed" }));
+    turns.at(-1).status = latestStatus;
     const { client, calls } = pagedServer({ turns });
     await assert.rejects(sendOnClient(client, ID, "must not send"), /active turn/);
     assert.equal(calls.filter(call => call.method.startsWith("turn/")).length, 0);
+  }
+  for (const turns of [[], [{ id: "old", status: "inProgress" }, { id: "latest", status: "completed" }]]) {
+    const { client, calls } = pagedServer({ turns });
+    await assert.rejects(sendOnClient(client, ID, "must not send"), /active turn/);
+    assert.equal(calls.filter(call => call.method.startsWith("turn/")).length, 0);
+  }
+});
+
+test("historical orphan turns do not block a guarded steer to the latest paginated turn", async () => {
+  const turns = Array.from({ length: 201 }, (_, i) => ({ id: `turn-${i}`, status: i === 0 || i === 100 || i === 200 ? "inProgress" : "completed" }));
+  const { client, calls } = pagedServer({ turns });
+  const receipt = await sendOnClient(client, ID, "continue", { beforeSend: async thread => {
+    assert.deepEqual(thread.turns.filter(t => t.status === "inProgress").map(t => t.id), ["turn-0", "turn-100", "turn-200"], "raw historical states remain available to freshness checks");
+  } });
+  assert.equal(receipt.turn_id, "turn-200");
+  assert.deepEqual(calls.filter(c => c.method.startsWith("turn/")).map(c => [c.method, c.expectedTurnId]), [["turn/steer", "turn-200"]]);
+  assert.equal(calls.filter(c => c.method === "thread/turns/list").length, 3);
+});
+
+test("legacy ambiguity still fails before mutation", async () => {
+  const ambiguous = { ...thread(), turns: [{ id: "old", status: "inProgress" }, { id: TURN, status: "inProgress" }] };
+  await assert.rejects(sendOnClient({ async request(method) {
+    assert.equal(method, "thread/read"); return { thread: ambiguous };
+  } }, ID, "must not send"), /active turn/);
+});
+
+test("orphan workaround never retries, falls back, or starts after rejection or unknown acknowledgement", async t => {
+  const root = await mkdtemp("/private/tmp/cs-orphan-send-"); t.after(() => rm(root, { recursive: true, force: true }));
+  for (const outcome of ["mismatch", "lost", "wrong-receipt"]) {
+    const turns = [{ id: "old", status: "inProgress" }, { id: TURN, status: "inProgress" }];
+    const server = pagedServer({ turns }); let writes = 0;
+    await assert.rejects(sendAppServerMessage(ID, "continue", {
+      discover: async () => ({ state: steerState, paths: { lease: root, socket: "unused" } }),
+      connect: async () => ({ close() {}, async request(method, params) {
+        if (!method.startsWith("turn/")) return server.client.request(method, params);
+        writes++; assert.equal(method, "turn/steer"); assert.equal(params.expectedTurnId, TURN);
+        if (outcome === "mismatch") throw new RpcFailure("runtime moved to a different turn", { code: "RPC_REJECTED", rpcCode: -32600 });
+        if (outcome === "lost") throw new RpcFailure("lost acknowledgement", { uncertain: true });
+        return { turnId: "other" };
+      } }),
+    }), error => outcome === "mismatch"
+      ? error.code === "RPC_REJECTED" && error.sent === false && error.delivery_status === "not_sent"
+      : error.sent === null && error.delivery_status === "unknown");
+    assert.equal(writes, 1);
   }
 });
 

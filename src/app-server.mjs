@@ -9,11 +9,14 @@ import { normalizeThreadId } from "./thread-id.mjs";
 import { ensureDesktopSubscription } from "./subscription.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 import { turnMetadata } from "./paged-read.mjs";
+import { targetHost, remoteReadOnly, remoteTransport, hostNamespace, hostFields, isControlTransport } from "./target.mjs";
+import { remoteControlConnection, remoteNewTurnUnsupported } from "./remote-control.mjs";
+import { ensureRemoteDesktopSubscription } from "./remote-management.mjs";
 import { isCloudTask } from "./task-id.mjs";
 import { sendCloudInput } from "./cloud-send.mjs";
 
 export class SendFailure extends Error {
-  constructor(message, { code = "NOT_SENT", uncertain = false, threadId, rpcCode, capability, operation } = {}) {
+  constructor(message, { code = "NOT_SENT", uncertain = false, threadId, rpcCode, capability, operation, remoteControlAuth } = {}) {
     super(message);
     this.code = code;
     this.delivery_status = uncertain ? "unknown" : "not_sent";
@@ -22,12 +25,22 @@ export class SendFailure extends Error {
     this.rpc_code = rpcCode;
     this.capability = capability;
     this.operation = operation;
+    this.remote_control_auth = remoteControlAuth;
   }
 }
 
 function activeTurn(thread) {
+  if (thread.status?.type !== "active") return null;
+  if (thread.historyMode === "paginated") {
+    // readSendState obtains every page in ascending order. Codex may also
+    // report orphaned historical turns as inProgress while a new turn runs.
+    // The latest turn is only a candidate: turn/steer.expectedTurnId must
+    // still match the actual runtime turn. Never fall back to an older ID.
+    const latest = thread.turns?.at(-1);
+    return latest?.status === "inProgress" ? latest : null;
+  }
   const turns = thread.turns?.filter(turn => turn.status === "inProgress") ?? [];
-  return thread.status?.type === "active" && turns.length === 1 ? turns[0] : null;
+  return turns.length === 1 ? turns[0] : null;
 }
 
 function verifyThread(thread, threadId) {
@@ -61,7 +74,7 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
   const input = [{ type: "text", text: message }];
   if (!newTurn) {
     const turn = activeTurn(thread);
-    if (!turn) throw new Error("The task has no unambiguous active turn. Use --new-turn for an idle task.");
+    if (!turn) throw new Error("The task has no eligible active turn. Read it again before sending; use --new-turn only for an idle task.");
     await beforeSend?.(thread, client);
     // Desktop uses clientId on the resulting userMessage to render external
     // steering as a user bubble instead of just an anonymous "steered" marker.
@@ -88,12 +101,17 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
   return { turn_id: accepted.turn.id, client_message_id: clientUserMessageId };
 }
 
-export async function sendAppServerMessage(threadInput, message, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend, connect = RpcClient.connect, discover = discoverRuntime, subscribe = ensureDesktopSubscription, inspectControl = verifyControlEndpoint } = {}) {
+export async function sendAppServerMessage(threadInput, message, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend, connect, discover, subscribe = ensureDesktopSubscription, inspectControl = verifyControlEndpoint } = {}) {
   if (isDesktopCloudTask(threadInput)) return sendDesktopCloudInput(threadInput, message, { dryRun, newTurn, clientMessageId, beforeSend });
   if (isCloudTask(threadInput)) return sendCloudInput(threadInput, message, { dryRun, newTurn, clientMessageId, beforeSend });
+  const remote = targetHost() !== "local";
+  if (remote && !isControlTransport()) throw remoteReadOnly();
+  if (remote && newTurn && remoteTransport() !== "paired") throw remoteNewTurnUnsupported();
+  const route = remote ? remoteControlConnection() : {};
+  connect ??= route.connect ?? RpcClient.connect; discover ??= route.discover ?? discoverRuntime;
   const threadId = normalizeThreadId(threadInput);
   if (typeof message !== "string" || !message.trim()) throw new Error("Message must not be empty.");
-  const plan = { thread_id: threadId, backend: "app-server", delivery_action: newTurn ? "new-turn" : "steer", message_characters: [...message].length, dry_run: dryRun };
+  const plan = { thread_id: threadId, ...hostFields(), backend: "app-server", delivery_action: newTurn ? "new-turn" : "steer", message_characters: [...message].length, dry_run: dryRun };
   if (dryRun) return { ...plan, sent: false, delivery_status: "not_sent" };
   let client;
   let lock;
@@ -103,8 +121,8 @@ export async function sendAppServerMessage(threadInput, message, { dryRun = fals
   try {
     const { paths, state } = await discover();
     assertRuntimeOperation(state, operation);
-    if (newTurn) await inspectControl(paths);
-    const candidate = path.join(paths.lease, `send-${threadId}`);
+    if (newTurn && !remote) await inspectControl(paths);
+    const candidate = path.join(paths.lease, `send-${remote ? `${hostNamespace()}-` : ""}${threadId}`);
     try { await mkdir(candidate, { mode: 0o700 }); } catch (error) {
       if (error.code === "EEXIST") throw new Error("Another send is in progress for this task, or a previous sender exited unexpectedly. Restart the shared Desktop after checking delivery before retrying.");
       throw error;
@@ -117,18 +135,18 @@ export async function sendAppServerMessage(threadInput, message, { dryRun = fals
       if (current.state.instance !== state.instance || current.paths.socket !== paths.socket || (newTurn && current.paths.control !== paths.control)) {
         throw Object.assign(new Error("Runtime changed before delivery. Read the target again before sending."), { code: "RUNTIME_CHANGED" });
       }
-      if (newTurn) await inspectControl(current.paths);
+      if (newTurn && !remote) await inspectControl(current.paths);
     };
     const receipt = await sendOnClient(client, threadId, message, { newTurn, clientMessageId,
       beforeSend: async (...args) => { await beforeSend?.(...args); await checkRuntime(); },
-      subscribe: async id => { await checkRuntime(); return subscribe(paths.control, id); },
+      subscribe: async id => { await checkRuntime(); return remote ? ensureRemoteDesktopSubscription(id) : subscribe(paths.control, id); },
     });
     result = { ...plan, ...receipt, sent: true, delivery_status: "accepted" };
     return result;
   } catch (error) {
     throw new SendFailure(error.uncertain
       ? "Delivery is unknown because App Server did not confirm receipt. Check the target task before retrying."
-      : error.message, { code: error.code ?? "NOT_SENT", uncertain: error.uncertain, threadId, rpcCode: error.rpcCode, capability: error.capability, operation: error.operation });
+      : error.message, { code: error.code ?? "NOT_SENT", uncertain: error.uncertain, threadId, rpcCode: error.rpcCode, capability: error.capability, operation: error.operation, remoteControlAuth: error.remote_control_auth });
   } finally {
     // Cleanup failure must never turn an acknowledged send into a retryable
     // error. Keep its acceptance receipt and leave any stale lock fail-closed.

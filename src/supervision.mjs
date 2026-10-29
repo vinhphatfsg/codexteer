@@ -1,5 +1,6 @@
 import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
 import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
+import { targetHost, remoteReadOnly, remoteTransport, isControlTransport } from "./target.mjs";
 import { normalizeTaskId, isCloudTask } from "./task-id.mjs";
 import { isAlive } from "./runtime.mjs";
 
@@ -37,6 +38,7 @@ export async function assertSupervisor(threadInput, sessionInput, { sending = fa
   if (!record) throw failure("Register this supervisor session before observing or sending.", "SUPERVISOR_NOT_REGISTERED");
   if (record.session_id !== sessionId) throw failure("Another supervisor session owns this task. This command belongs to an older or different session.", "SUPERVISOR_MISMATCH");
   if (connection !== undefined && record.connection !== connection) throw failure("The supervisor is registered for another connection. Keep the original command intact.", "SUPERVISOR_MISMATCH");
+  if (targetHost() !== "local" && (record.remote_transport ?? "native") !== remoteTransport()) throw failure("The supervisor belongs to a different remote transport. Keep the generated route intact.", "SUPERVISOR_MISMATCH");
   if (record.state === "stopped") throw failure("This supervisor session has stopped. Start a new supervisor when needed.", "SUPERVISOR_STOPPED");
   if (launcherAlive(record) === false) throw failure("The supervisor launcher exited. Stop the stale session before starting another supervisor.", "SUPERVISOR_ORPHANED");
   if (sending && record.state === "paused") throw failure("Automatic intervention is paused. Observation can continue; only the user should resume intervention.", "SUPERVISOR_PAUSED");
@@ -69,6 +71,7 @@ export async function controlSupervisor(threadInput, action, { expectedSession, 
   return withStoreLock(`supervisor-${threadId}`, async () => {
     const record = await getSupervisor(threadId, storage);
     if (!record) throw failure("No supervisor is registered for this task.", "SUPERVISOR_NOT_REGISTERED");
+    if (targetHost() !== "local" && (record.remote_transport ?? "native") !== remoteTransport()) throw failure("Keep the registered remote transport when controlling this supervisor. No state was changed.", "SUPERVISOR_MISMATCH");
     if (expectedSession && record.session_id !== supervisorId(expectedSession)) throw failure("The supervisor session changed.", "SUPERVISOR_MISMATCH");
     if (record.state === "stopped" && action !== "stop") throw failure("A stopped supervisor cannot be resumed. Start a new supervisor.", "SUPERVISOR_STOPPED");
     if (action === "resume") await assertSupervisor(threadId, record.session_id, storage);
@@ -120,13 +123,22 @@ export async function recordSupervisorFailure(threadId, sessionId, error, storag
   catch { /* The original failure is returned to the consumer. */ }
 }
 
-export async function withSupervisedSend(threadInput, sessionInput, send, { connection, ...storage } = {}) {
-  if (sessionInput === undefined) return send();
+export async function withSupervisedMutation(threadInput, sessionInput, mutate, { connection, ...storage } = {}) {
+  if (targetHost() !== "local" && !isControlTransport()) throw remoteReadOnly();
+  if (sessionInput === undefined) return mutate();
   const threadId = normalizeTaskId(threadInput), sessionId = supervisorId(sessionInput);
   // Holding this lock through the receipt serializes pause/stop with the actual
   // mutation. A busy pause is an error, never a false acknowledgement of a stop.
   return withStoreLock(`supervisor-${threadId}`, async () => {
     const record = await assertSupervisor(threadId, sessionId, { ...storage, sending: true, connection });
+    return mutate(record);
+  }, storage);
+}
+
+export async function withSupervisedSend(threadInput, sessionInput, send, { connection, ...storage } = {}) {
+  return withSupervisedMutation(threadInput, sessionInput, async record => {
+    if (!record) return send();
+    const threadId = record.thread_id;
     try {
       const receipt = await send();
       try { await writeRecord(supervisorBucket(threadId), threadId, { ...record, updated_at: new Date().toISOString(), last_error: null,
@@ -140,5 +152,5 @@ export async function withSupervisedSend(threadInput, sessionInput, send, { conn
       catch { error.supervision_update_required = true; }
       throw error;
     }
-  }, storage);
+  }, { connection, ...storage });
 }

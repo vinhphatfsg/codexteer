@@ -1,3 +1,4 @@
+import { targetHost, remoteTransport } from "./target.mjs";
 import { normalizeTaskId } from "./task-id.mjs";
 
 export const DEFAULT_SUPERVISION_POLICY = [
@@ -108,15 +109,20 @@ ${command}
 
 export function supervisorPrompt(threadInput, command, policy, supervisor = { owner: "claude" }, { usePathCli = false } = {}) {
   const threadId = normalizeTaskId(threadInput);
+  const host = supervisor.host_id ?? targetHost();
+  const transport = supervisor.remote_transport ?? remoteTransport();
+  const observationOnly = supervisor.connection === "desktop" || (host !== "local" && transport === "native");
   validateSupervisionPolicy(policy);
   if (typeof command !== "string" || !command) throw new Error("A prepared supervision command is required.");
   return {
-    thread_id: threadId,
+    thread_id: threadId, ...(host === "local" ? {} : { host_id: host, remote_transport: transport, observation_only: observationOnly }),
     prompt: [
       `1. 役割と監督方針\nあなたはCodex ${["cloud", "desktop-cloud"].includes(supervisor.connection) ? "Cloud" : "Desktop"}タスクの監督役（オーケストレーター）です。codexteerで次のタスクを継続監督してください。`,
-      `対象タスク: ${threadId}`,
-      policy ?? (supervisor.connection === "desktop" ? "最新のユーザーの目的・制約と進捗を観測し、問題・確認できた結果・未確認事項を短く報告してください。変化のない定期報告は控え、タスク停止時に最後の差分を整理してください。" : DEFAULT_SUPERVISION_POLICY),
-      ...supervisionSteps(threadId, command, supervisor.owner, supervisor.connection === "desktop", { usePathCli, cloud: supervisor.connection === "cloud", desktopCloud: supervisor.connection === "desktop-cloud" }),
+      `対象タスク: ${threadId}${host === "local" ? "" : transport === "native"
+        ? `\n対象ホスト: ${host}\nリモート監督は観測専用です。全コマンドで--host・--remote-transport・--context-threadを保持し、ローカルや別ホストへ切り替えないでください。送信・再開・承認の代理回答は行いません。`
+        : `\n対象ホスト: ${host}\nRemote Controlの直接経路を明示選択しています。全コマンドで--host・--remote-transport ${transport}・指定された--context-threadを保持します。sendは読了した同じ経路のカーソルと指摘を使い、既存のactiveターンへexpectedTurnId付きで一度だけ送ります。ターン不一致・不明な配送は自動再送しません。${transport === "paired" ? "--new-turnはユーザーが再開を委任したidleタスクだけに使えます。実在ローカルcallerとDesktopへの対象チャット表示による購読が必要です。" : "--new-turnは未対応です。"} 別経路への切替・承認の代理回答は行いません。接続・認証に失敗したら介入を停止し、失敗と未確認事項を報告してください。`}`,
+      policy ?? (observationOnly ? "最新のユーザーの目的・制約と進捗を観測し、問題・確認できた結果・未確認事項を短く報告してください。変化のない定期報告は控え、タスク停止時に最後の差分を整理してください。" : DEFAULT_SUPERVISION_POLICY),
+      ...supervisionSteps(threadId, command, supervisor.owner, observationOnly, { usePathCli, cloud: supervisor.connection === "cloud", desktopCloud: supervisor.connection === "desktop-cloud" }),
     ].join("\n\n"),
   };
 }
