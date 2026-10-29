@@ -98,3 +98,8 @@ test("native rejection codes survive the real worker and helper without retrying
     assert.equal(commands, 1); assert.equal(requests, 1);
   }
 });
+
+test("signed project assignment disconnection preserves unknown execution", async t => {
+  const f = await fixture(t, socket => socket.destroy());
+  await assert.rejects(nativeRpc(f.endpoint, { jsonrpc: "2.0", id: "fixture", method: "taskProject/assign", params: {} }), error => error.uncertain === true);
+});

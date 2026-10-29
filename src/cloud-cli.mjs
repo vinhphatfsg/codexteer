@@ -1,3 +1,5 @@
+import { desktopCloudProjectDoctor, assignDesktopCloudProject, desktopCloudProjectReceipt } from "./desktop-cloud-project.mjs";
+import { listProjects as listDesktopProjects } from "./projects.mjs";
 import { isDesktopCloudTask, desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
 import { desktopCloudConnection, desktopCloudEnvironments } from "./desktop-cloud-api.mjs";
 import { createDesktopCloudTask, listDesktopCloudTasks, desktopCloudReceipt } from "./desktop-cloud.mjs";
@@ -279,7 +281,7 @@ async function desktopCloudCommands(command, args, { supervisor, output, bound, 
   if (supervisor && ["projects", "environments", "threads", "thread"].includes(command)) throw failure("A supervisor cannot enumerate or create other tasks.", "SUPERVISOR_CONTROL_FORBIDDEN");
   if (["projects", "environments"].includes(command)) {
     exact(args, 1); if (args[0] !== "list") throw failure("Expected list.");
-    if (command === "projects") throw failure("Desktop project membership and Cloud environments are separate. Use environments list; --project creation is unavailable through the current official API.", "DESKTOP_CLOUD_PROJECT_UNAVAILABLE");
+    if (command === "projects") { output("projects.list", { projects: (await listDesktopProjects()).flatMap(row => row.desktop_project_ids.map(id => ({ project_id: id, canonical_project_id: row.project_id, name: row.name, roots: row.roots }))), catalog_source: "desktop-app-server", assignment_requires_exact_desktop_executor: true }); return true; }
     output("environments.list", await desktopCloudEnvironments()); return true;
   }
   if (command === "threads") {
@@ -295,16 +297,18 @@ async function desktopCloudCommands(command, args, { supervisor, output, bound, 
       if (args.slice(0, end).some(arg => arg.startsWith("--"))) throw failure("Unknown Desktop Cloud creation option.");
       output("thread.create", await createDesktopCloudTask(environment, message(args), { project, title, dryRun })); return true;
     }
+    if (action === "assign") { const project = option(args, "--project"); exact(args, 1); const data = await assignDesktopCloudProject(await bound(args[0]), project); output("thread.assign", data); if (data.verification_status !== "verified") process.exitCode = 1; return true; }
     exact(args, 1);
-    if (action === "receipt") { output("thread.receipt", await desktopCloudReceipt(args[0])); return true; }
+    if (action === "receipt") { let data; try { data = await desktopCloudReceipt(args[0]); } catch (error) { if (error.code !== "DESKTOP_CLOUD_CREATION_RECEIPT_NOT_FOUND") throw error; data = await desktopCloudProjectReceipt(args[0]); } output("thread.receipt", data); return true; }
     if (action === "resolve") { const id = await bound(args[0]); output("thread.resolve", { thread_id: id, deep_link: desktopCloudLink(id) }); return true; }
-    throw failure("Expected thread create|receipt|resolve.");
+    throw failure("Expected thread create|assign|receipt|resolve.");
   }
   if (command === "doctor") {
-    const target = option(args, "--thread"); exact(args, 0);
+    const target = option(args, "--thread"), project = option(args, "--project"); exact(args, 0);
+    if (project !== undefined && !target) throw failure("--project diagnostics require --thread.");
     if (target) await observeThread(await bound(target), { connection: "desktop-cloud", limit: 1 }, dependencies);
     else { if (supervisor) throw failure("A supervisor doctor needs its target."); await desktopCloudEnvironments(); }
-    output("doctor", { ready: true, connection_mode: "desktop-cloud", observation: target ? "verified" : "unverified", project_membership: "unavailable", approval_roundtrip: "unverified", atomic_server_freshness: "unverified" }); return true;
+    output("doctor", { ready: true, connection_mode: "desktop-cloud", observation: target ? "verified" : "unverified", project_membership: target ? await desktopCloudProjectDoctor(await bound(target), project) : { membership: { status: "unverified" }, assignment_api: { status: "unverified" } }, approval_roundtrip: "unverified", atomic_server_freshness: "unverified" }); return true;
   }
   if (command === "open") { exact(args, 1); output("open", { deep_link: desktopCloudLink(await bound(args[0])) }); return true; }
   throw failure("Desktop Cloud diff retrieval is not verified. Inspect file-change events with read --include-output.", "CAPABILITY_UNVERIFIED");

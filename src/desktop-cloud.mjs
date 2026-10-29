@@ -8,11 +8,11 @@ const hash = value => createHash("sha256").update(value).digest("hex");
 export async function desktopCloudReceipt(attempt, storage = {}) {
   if (!/^[a-f0-9-]{36}$/.test(attempt ?? "")) throw failure("Invalid creation attempt ID.");
   const receipt = await readRecord("desktop-cloud-creations", attempt, storage);
-  if (!receipt || receipt.attempt_id !== attempt) throw failure("Creation receipt not found.");
+  if (!receipt || receipt.attempt_id !== attempt) throw failure("Creation receipt not found.", "DESKTOP_CLOUD_CREATION_RECEIPT_NOT_FOUND");
   return receipt;
 }
 export async function createDesktopCloudTask(selector, prompt, options = {}, { environments = desktopCloudEnvironments, connect = connectDesktopCloud, ...storage } = {}) {
-  if (options.project !== undefined) throw failure("Desktop Cloud cannot safely assign a local Desktop project through the available official API. No chat was created. Select an environment without --project only when a projectless verification chat is intended.", "DESKTOP_CLOUD_PROJECT_UNAVAILABLE");
+  if (options.project !== undefined) throw failure("Creation cannot currently register a Desktop project for a newly allocated Cloud environment. No chat was created. Use doctor --thread TARGET --project PROJECT to check an existing task's executor-bound assignment API.", "DESKTOP_CLOUD_PROJECT_UNAVAILABLE");
   if (typeof selector !== "string" || !selector.trim() || typeof prompt !== "string" || !prompt.trim()) throw failure("An --environment ID or exact name and initial instruction are required.");
   if (options.title !== undefined && (typeof options.title !== "string" || !options.title.trim() || options.title.length > 1000)) throw failure("Invalid --title.");
   const matches = (await environments()).environments.filter(row => row.id === selector || row.name === selector);

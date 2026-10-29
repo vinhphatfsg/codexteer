@@ -202,14 +202,15 @@ export const topics = {
   "desktop-cloud": {
     title: "Desktop Cloud",
     summary: "DesktopのCloud環境構成にCLI単体で接続します。",
-    usage: ["--connection desktop-cloud environments list", "--connection desktop-cloud threads list [--limit 1..100] [--cursor CURSOR]", "--connection desktop-cloud thread create --environment ID_OR_EXACT_NAME [--title TEXT] [--dry-run] <MESSAGE...>|-", "read|status|watch <DURABLE_ID|HOST_LINK> ...", "send <DURABLE_ID|HOST_LINK> <MESSAGE...>|- [--new-turn]", "supervise [prompt] <DURABLE_ID|HOST_LINK> [POLICY]", "--connection desktop-cloud thread receipt <ATTEMPT_ID>"],
+    usage: ["--connection desktop-cloud projects list", "--connection desktop-cloud doctor --thread TARGET [--project ID_OR_EXACT_NAME]", "--connection desktop-cloud thread assign TARGET --project ID_OR_EXACT_NAME", "--connection desktop-cloud environments list", "--connection desktop-cloud threads list [--limit 1..100] [--cursor CURSOR]", "--connection desktop-cloud thread create --environment ID_OR_EXACT_NAME [--title TEXT] [--dry-run] <MESSAGE...>|-", "read|status|watch <DURABLE_ID|HOST_LINK> ...", "send <DURABLE_ID|HOST_LINK> <MESSAGE...>|- [--new-turn]", "supervise [prompt] <DURABLE_ID|HOST_LINK> [POLICY]", "--connection desktop-cloud thread receipt <ATTEMPT_ID>"],
     examples: ["codexteer --connection desktop-cloud environments list --json", "codexteer --connection desktop-cloud thread create --environment example-config '接続を確認してください' --json", "codexteer read 'codex://threads/aaaaaaaa-aaaa-4aaa-8aaa-000000000001?hostId=durable' --json"],
     notes: ["Web側Cloudのtask ID・環境一覧とは別のサービスです。durable_付きIDまたはhostId=durable付きリンクで接続先を保持します。裸のUUIDからCloud宛先は推測しません。",
       "初回・継続送信は選択済み環境と遅延起動指定を保持します。既存のCLIログインをメモリ内で認証に利用し、Desktopの起動・UI操作は不要です。",
-      "環境とDesktopプロジェクト所属は別です。公式APIで安全に所属を登録できないため、--projectは作成前に拒否します。--environmentだけの作成結果はproject_membership:not_requestedです。",
+      "環境とDesktopプロジェクト所属は別です。projects listはDesktopの正規プロジェクト一覧、environments listはCloud環境構成です。doctor --thread --projectは登録済み所属と登録APIの可否を区別します。新規割当Cloud環境の--project作成は現在も事前拒否し、所属未指定を成功扱いしません。",
+      "thread assignは公式の署名付き所属APIを使い、対象の実環境・nonce・署名・プロジェクトを照合し、保存結果まで確認します。そのDesktopの実行環境を使うチャットだけが対象です。通常のCloud実行環境で事前照合が拒否された場合、環境IDの差替えやローカル実行先の追加は行いません。受付不明はthread receiptで確認し、自動再送しません。",
       "共通の監督登録・pause/resume/stop・指摘・履歴・カーソル監視を使います。履歴は上限付きで全ターンページを取得します。履歴量によって遅くなる場合があります。",
       "受付不明は保存して同じチャットへの次の送信を拒否します。サーバーがclientIdを記録しない場合、既知の受付ターンと本文の照合だけが可能です。履歴に見えないことは未送信の証明ではありません。",
-      "承認の往復・差分専用API・プロジェクト所属は未検証または未対応です。help cloudとdocs/desktop-cloud.mdを参照してください。"],
+      "承認の往復・差分専用API・通常のCloud実行環境へのプロジェクト登録は未検証または未対応です。help cloudとdocs/desktop-cloud.mdを参照してください。"],
   },
   environments: { title: "Cloud environments", summary: "Desktop Cloudの実行環境構成を一覧します。", usage: ["--connection desktop-cloud environments list"], examples: [], notes: ["Desktopプロジェクト一覧とは別です。help desktop-cloudを参照してください。"] },
   cloud: {
