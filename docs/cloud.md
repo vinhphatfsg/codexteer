@@ -109,3 +109,5 @@ codexteer history check task_example --attempt <ATTEMPT_ID> --json
 通常の送信は`history show/check <TASK> <MESSAGE_ID>`を使います。ジャーナル更新も失敗した場合は、エラーや送信結果の`attempt_id`/`cloud_attempt_id`を`--attempt`に指定します。`history show --attempt`はローカル配送記録、`history check --attempt`は親ターンと本文SHA256の照合および明示的な未送信記録による予約回復です。通常の`history check <TASK> <MESSAGE_ID>`は試行記録と今回の送信本文SHA256・親ターンの一致も検査し、不一致は`conflict`のまま配送済みへ更新しません。どちらの--attempt操作も指定タスクとの一致と監督の有効状態を確認し、別タスクへの記録アクセスを拒否します。MESSAGE_IDと--attemptは併用しません。照合は再送せず、`not_observed`から未配送を推測しません。
 
 一次資料: [公式CLIリファレンス](https://developers.openai.com/codex/cli/reference)、[公式Cloud CLI実装](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/cloud-tasks/src/lib.rs)。実機検証は専用タスクに限定し、実ID・環境名・認証情報・生ログを公開資料に含めません。
+
+Desktop's Cloud environment configurations are available separately through `--connection desktop-cloud environments list`. Their IDs, creation contract and project-membership limits differ from the Web task service described here. See [Desktop Cloud](desktop-cloud.md).

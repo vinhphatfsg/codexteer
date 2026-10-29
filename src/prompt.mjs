@@ -18,7 +18,7 @@ export function validateSupervisionPolicy(policy) {
 
 // Shared by the generated prompt and help monitor. Keep monitoring preferences
 // in the selected policy; these sections describe mandatory mechanics only.
-export function supervisionSteps(thread = "<THREAD>", command = "codexteer", owner = "claude", observationOnly = false, { usePathCli = false, cloud = false } = {}) {
+export function supervisionSteps(thread = "<THREAD>", command = "codexteer", owner = "claude", observationOnly = false, { usePathCli = false, cloud = false, desktopCloud = false } = {}) {
   const steps = [
     `2. 必ず守ること
 - 監視の観点・介入の判断基準・報告方法は指定された監督方針に従います。監視だけを指示されている場合は送信しません。目的・制約が不明な場合や要件自体の変更が必要な場合は確認してください。
@@ -98,6 +98,11 @@ ${command}
     steps[4] += "\nCloudの通常sendは、実行中の指定ターンを中断して同じタスクの後続ターンを開始する方式です。ローカルと同じターンIDのまま進むとは仮定せず、delivery_action、親ターン、history checkと新しいreadで結果を照合してください。サーバー側で読取りと送信を原子的に固定する契約はなく、送信直前に再確認します。停止中の継続には、方針で再開が許可された場合だけ--new-turnを付けます。";
     steps[1] = steps[1].replaceAll("対象Desktopと同じプロファイル", "公式CLIの同じChatGPTプロファイル");
   }
+  if (desktopCloud) {
+    steps[0] += "\n- 対象はDesktop Cloudです。同じ公式CLI認証・durable_ ID・--connection desktop-cloudを保持し、ローカルDesktopやWeb Cloudへ切り替えません。Cloudのファイルはローカルにマウントされていません。受付不明の再送や所属登録の安全確認の迂回はしません。";
+    steps[4] += "\n継続送信は選択済み環境と遅延起動指定を保持します。送信前に最新のターンとユーザー入力を再確認しますが、読取りと送信の原子的な固定は未検証です。サーバーがclientIdを保持しない場合、未知のターンを本文だけで照合して受付済みに変えません。専用diff取得・プロジェクト所属・承認往復は未対応または未検証です。";
+    steps[1] = steps[1].replaceAll("対象Desktopと同じプロファイル", "公式CLIの同じChatGPTプロファイル");
+  }
   return steps;
 }
 
@@ -108,10 +113,10 @@ export function supervisorPrompt(threadInput, command, policy, supervisor = { ow
   return {
     thread_id: threadId,
     prompt: [
-      `1. 役割と監督方針\nあなたはCodex ${supervisor.connection === "cloud" ? "Cloud" : "Desktop"}タスクの監督役（オーケストレーター）です。codexteerで次のタスクを継続監督してください。`,
+      `1. 役割と監督方針\nあなたはCodex ${["cloud", "desktop-cloud"].includes(supervisor.connection) ? "Cloud" : "Desktop"}タスクの監督役（オーケストレーター）です。codexteerで次のタスクを継続監督してください。`,
       `対象タスク: ${threadId}`,
       policy ?? (supervisor.connection === "desktop" ? "最新のユーザーの目的・制約と進捗を観測し、問題・確認できた結果・未確認事項を短く報告してください。変化のない定期報告は控え、タスク停止時に最後の差分を整理してください。" : DEFAULT_SUPERVISION_POLICY),
-      ...supervisionSteps(threadId, command, supervisor.owner, supervisor.connection === "desktop", { usePathCli, cloud: supervisor.connection === "cloud" }),
+      ...supervisionSteps(threadId, command, supervisor.owner, supervisor.connection === "desktop", { usePathCli, cloud: supervisor.connection === "cloud", desktopCloud: supervisor.connection === "desktop-cloud" }),
     ].join("\n\n"),
   };
 }

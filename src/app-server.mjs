@@ -1,3 +1,5 @@
+import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
+import { sendDesktopCloudInput } from "./desktop-cloud.mjs";
 import { mkdir, rm, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -87,6 +89,7 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
 }
 
 export async function sendAppServerMessage(threadInput, message, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend, connect = RpcClient.connect, discover = discoverRuntime, subscribe = ensureDesktopSubscription, inspectControl = verifyControlEndpoint } = {}) {
+  if (isDesktopCloudTask(threadInput)) return sendDesktopCloudInput(threadInput, message, { dryRun, newTurn, clientMessageId, beforeSend });
   if (isCloudTask(threadInput)) return sendCloudInput(threadInput, message, { dryRun, newTurn, clientMessageId, beforeSend });
   const threadId = normalizeThreadId(threadInput);
   if (typeof message !== "string" || !message.trim()) throw new Error("Message must not be empty.");

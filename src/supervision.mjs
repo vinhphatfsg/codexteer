@@ -1,10 +1,11 @@
+import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
 import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
 import { normalizeTaskId, isCloudTask } from "./task-id.mjs";
 import { isAlive } from "./runtime.mjs";
 
 const failure = (message, code) => Object.assign(new Error(message), { code });
 const states = new Set(["active", "paused", "stopped"]);
-const supervisorBucket = id => isCloudTask(id) ? "cloud-supervisors" : "supervisors";
+const supervisorBucket = id => (isCloudTask(id) || isDesktopCloudTask(id)) ? "cloud-supervisors" : "supervisors";
 function launcherAlive(record) {
   if (record.launcher_pid === null) return null;
   try { return isAlive(record.launcher_pid); }
@@ -23,7 +24,7 @@ export async function getSupervisor(threadInput, storage = {}) {
   const threadId = normalizeTaskId(threadInput), record = await readRecord(supervisorBucket(threadId), threadId, storage);
   if (!record) return null;
   if (record.schema !== 1 || record.thread_id !== threadId || !states.has(record.state)
-    || !["shared", "desktop", "cloud"].includes(record.connection)
+    || !["shared", "desktop", "cloud", "desktop-cloud"].includes(record.connection)
     || supervisorId(record.session_id) !== record.session_id || typeof record.owner !== "string"
     || (record.launcher_pid !== null && (!Number.isSafeInteger(record.launcher_pid) || record.launcher_pid <= 0))) {
     throw failure("Invalid supervisor state. Inspect the local record before continuing.", "SUPERVISOR_INVALID");
@@ -46,7 +47,7 @@ export async function registerSupervisor(threadInput, sessionInput, { owner = "e
   const threadId = normalizeTaskId(threadInput), sessionId = supervisorId(sessionInput);
   if (typeof owner !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(owner)) throw failure("Supervisor owner must be a short agent name.", "SUPERVISOR_INVALID");
   if (launcherPid !== null && (!Number.isSafeInteger(launcherPid) || launcherPid <= 0)) throw failure("Invalid supervisor launcher PID.", "SUPERVISOR_INVALID");
-  if (!["shared", "desktop", "cloud"].includes(connection)) throw failure("Invalid supervisor connection.", "SUPERVISOR_INVALID");
+  if (!["shared", "desktop", "cloud", "desktop-cloud"].includes(connection)) throw failure("Invalid supervisor connection.", "SUPERVISOR_INVALID");
   return withStoreLock(`supervisor-${threadId}`, async () => {
     const current = await getSupervisor(threadId, storage);
     if (current?.session_id === sessionId) {

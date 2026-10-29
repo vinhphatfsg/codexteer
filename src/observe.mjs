@@ -1,3 +1,5 @@
+import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
+import { desktopCloudConnection } from "./desktop-cloud-api.mjs";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { normalizeTaskId, isCloudTask, taskConnection } from "./task-id.mjs";
@@ -155,9 +157,9 @@ export async function readOnClient(client, threadId, options = {}) {
 
 export async function observeThread(threadInput, options = {}, { discover = discoverRuntime, connect = RpcClient.connect, sleep = delay, now = () => performance.now() } = {}) {
   const threadId = normalizeTaskId(threadInput);
-  if (isCloudTask(threadId)) {
+  if (isCloudTask(threadId) || isDesktopCloudTask(threadId)) {
     options = { ...options, connection: taskConnection(threadId, options.connection) };
-    const cloud = cloudConnection();
+    const cloud = isDesktopCloudTask(threadId) ? desktopCloudConnection() : cloudConnection();
     if (discover === discoverRuntime) discover = cloud.discover;
     if (connect === RpcClient.connect) connect = cloud.connect;
   }

@@ -44,6 +44,10 @@ npx -y codexteer@0.17.0 supervise <thread-id>
 
 </details>
 
+### DesktopのCloud環境を使う
+
+DesktopのCloud環境構成は、`codexteer --connection desktop-cloud environments list --json`で取得します。新規作成は`thread create --environment <ID_OR_EXACT_NAME>`、継続・監視・監督は`durable_`付きIDまたは`hostId=durable`付きリンクで共通コマンドを使います。Desktopプロジェクトへの所属登録は公式APIで安全に確認できないため、`--project`を指定した作成は事前に拒否します。[操作・確認済み範囲と制限](docs/desktop-cloud.md)
+
 ### Codex Cloudを使う
 
 CloudタスクのID・公式リンクで、同じ`supervise`・`read/watch`・`send`・`history/instructions/findings`を使えます。監督の`pause/resume/stop`や保存済みCLIも共通です。接続先をまだ選んでいない一覧と作成は`--connection cloud projects list`・`threads list`・`thread create --project <ENV_ID>`を使います。実行中のCloud送信は同じタスクの元ターンを中断して後続ターンを開始する方式です。[操作とサービス上の違い](docs/cloud.md)

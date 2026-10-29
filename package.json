@@ -27,6 +27,7 @@
   },
   "files": [
     "docs/cloud.md",
+    "docs/desktop-cloud.md",
     "bin/*.mjs",
     "src/*.mjs",
     "scripts/*.applescript",

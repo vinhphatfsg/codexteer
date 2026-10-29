@@ -70,3 +70,5 @@ wrapperはnative endpointを所有者専用runtimeに公開します。公開さ
 ## 検証
 
 作成、所属、初回指示、CLI終了後の承認・質問を、利用者が許可した専用チャットで確認してください。環境固有の識別子や操作ログは公開しません。
+
+DesktopのCloud環境構成で作成する場合は[Desktop Cloud](desktop-cloud.md)を参照してください。環境選択とローカルDesktopプロジェクト所属は別で、現在の所属登録は利用できません。

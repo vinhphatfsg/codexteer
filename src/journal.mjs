@@ -1,3 +1,6 @@
+import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
+import { confirmDesktopCloudDelivery } from "./desktop-cloud.mjs";
+import { desktopCloudConnection } from "./desktop-cloud-api.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { sendAppServerMessage } from "./app-server.mjs";
 import { normalizeTaskId, isCloudTask } from "./task-id.mjs";
@@ -109,6 +112,11 @@ export async function reconcileMessages(threadInput, id, options = {}, { discove
     }
     return result;
   }
+  if (isDesktopCloudTask(threadId)) {
+    const cloud = desktopCloudConnection();
+    if (discover === discoverRuntime) discover = cloud.discover;
+    if (connect === RpcClient.connect) connect = cloud.connect;
+  }
   // Validate the local target before connecting.
   if (id) await getMessage(threadId, id, options);
   const { paths, state } = await discover();
@@ -121,10 +129,11 @@ export async function reconcileMessages(threadInput, id, options = {}, { discove
       const items = thread.turns.flatMap(t => t.items.map(i => ({ ...i, turn_id: t.id })));
       const result = [];
       for (const entry of entries) {
-        const matches = items.filter(i => i.type === "userMessage" && i.clientId === entry.client_message_id);
+        const matches = items.filter(i => i.type === "userMessage" && (i.clientId === entry.client_message_id || (isDesktopCloudTask(threadId) && entry.delivery_status === "accepted" && entry.turn_id && i.turn_id === entry.turn_id && digest(i.content.filter(c => c.type === "text").map(c => c.text).join("\n")) === entry.message_sha256)));
         const matchingText = matches.length === 1 && digest(matches[0].content.filter(c => c.type === "text").map(c => c.text).join("\n")) === entry.message_sha256;
         const verification = { status: matchingText ? "stored" : matches.length ? "conflict" : "not_observed", checked_at: new Date().toISOString(), matching_items: matches.length };
         if (matchingText) Object.assign(verification, { item_id: matches[0].id, turn_id: matches[0].turn_id });
+        if (isDesktopCloudTask(threadId) && verification.status === "stored" && entry.delivery_status !== "not_sent") await confirmDesktopCloudDelivery(entry, verification, options);
         const updated = { ...entry, verification, updated_at: verification.checked_at, ...(matchingText ? { delivery_status: "accepted", sent: true, turn_id: matches[0].turn_id } : {}) };
         await writeRecord("messages", entry.id, updated, options);
         result.push(messageSummary(updated, options.includeText));

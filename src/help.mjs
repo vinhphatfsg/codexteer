@@ -199,6 +199,19 @@ export const topics = {
     examples: ["codexteer diff task_example --attempt 1 --json"],
     notes: ["記録済みパッチがない場合はdiff_available:false・local_changes:unknownです。変更ゼロとは解釈しません。", "--timeout-msは1000〜600000ms、既定120000ms。特定試行の失敗時に他の試行へ切り替えません。"],
   },
+  "desktop-cloud": {
+    title: "Desktop Cloud",
+    summary: "DesktopのCloud環境構成にCLI単体で接続します。",
+    usage: ["--connection desktop-cloud environments list", "--connection desktop-cloud threads list [--limit 1..100] [--cursor CURSOR]", "--connection desktop-cloud thread create --environment ID_OR_EXACT_NAME [--title TEXT] [--dry-run] <MESSAGE...>|-", "read|status|watch <DURABLE_ID|HOST_LINK> ...", "send <DURABLE_ID|HOST_LINK> <MESSAGE...>|- [--new-turn]", "supervise [prompt] <DURABLE_ID|HOST_LINK> [POLICY]", "--connection desktop-cloud thread receipt <ATTEMPT_ID>"],
+    examples: ["codexteer --connection desktop-cloud environments list --json", "codexteer --connection desktop-cloud thread create --environment example-config '接続を確認してください' --json", "codexteer read 'codex://threads/00000000-0000-4000-8000-000000000001?hostId=durable' --json"],
+    notes: ["Web側Cloudのtask ID・環境一覧とは別のサービスです。durable_付きIDまたはhostId=durable付きリンクで接続先を保持します。裸のUUIDからCloud宛先は推測しません。",
+      "初回・継続送信は選択済み環境と遅延起動指定を保持します。既存のCLIログインをメモリ内で認証に利用し、Desktopの起動・UI操作は不要です。",
+      "環境とDesktopプロジェクト所属は別です。公式APIで安全に所属を登録できないため、--projectは作成前に拒否します。--environmentだけの作成結果はproject_membership:not_requestedです。",
+      "共通の監督登録・pause/resume/stop・指摘・履歴・カーソル監視を使います。履歴は上限付きで全ターンページを取得します。履歴量によって遅くなる場合があります。",
+      "受付不明は保存して同じチャットへの次の送信を拒否します。サーバーがclientIdを記録しない場合、既知の受付ターンと本文の照合だけが可能です。履歴に見えないことは未送信の証明ではありません。",
+      "承認の往復・差分専用API・プロジェクト所属は未検証または未対応です。help cloudとdocs/desktop-cloud.mdを参照してください。"],
+  },
+  environments: { title: "Cloud environments", summary: "Desktop Cloudの実行環境構成を一覧します。", usage: ["--connection desktop-cloud environments list"], examples: [], notes: ["Desktopプロジェクト一覧とは別です。help desktop-cloudを参照してください。"] },
   cloud: {
     title: "共通の操作体系でCodex Cloudを使う",
     when: "Cloudの環境・タスクを選び、既存と同じ監督・観測・介入・指摘管理を使うとき。",
@@ -219,7 +232,7 @@ export const topics = {
 export function helpData(topic = "overview") {
   const data = topics[topic];
   if (!data) throw new Error(`Unknown help topic: ${topic}. Run codexteer help.`);
-  return { version: VERSION, topic, ...data, ...(topic === "overview" ? { usage: [...data.usage, "history list|show|check|mark <THREAD> ...", "instructions list|retract <THREAD> ...", "checkpoint capture|run|attach|verify|list|show <THREAD> ...", "resource acquire|status|list|renew|release|run ...", "findings create|list|show|resolve|dismiss|reopen|evaluate|stats <THREAD> ...", "--connection shared|desktop|cloud <COMMAND> ..."] } : {}) };
+  return { version: VERSION, topic, ...data, ...(topic === "overview" ? { usage: [...data.usage, "history list|show|check|mark <THREAD> ...", "instructions list|retract <THREAD> ...", "checkpoint capture|run|attach|verify|list|show <THREAD> ...", "resource acquire|status|list|renew|release|run ...", "findings create|list|show|resolve|dismiss|reopen|evaluate|stats <THREAD> ...", "--connection shared|desktop|cloud|desktop-cloud <COMMAND> ..."] } : {}) };
 }
 
 export function renderHelp(data) {

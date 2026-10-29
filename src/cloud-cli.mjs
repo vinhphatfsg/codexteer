@@ -1,3 +1,6 @@
+import { isDesktopCloudTask, desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
+import { desktopCloudConnection, desktopCloudEnvironments } from "./desktop-cloud-api.mjs";
+import { createDesktopCloudTask, listDesktopCloudTasks, desktopCloudReceipt } from "./desktop-cloud.mjs";
 import { isCloudTask } from "./task-id.mjs";
 import { cloudTaskId } from "./cloud-id.mjs";
 import { cloudConnection } from "./cloud-connection.mjs";
@@ -19,7 +22,7 @@ import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, ve
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code, execution_environment: "cloud" });
-const values = new Set("--connection --supervisor --require-node-version --host --remote-transport --context-thread --thread --backend --source --kind --evidence --based-on --finding --expires-at --supersedes --checkpoint --limit --max-chars --since --poll-ms --timeout-ms --until --notify --settle-ms --max-hold-ms --owner --key --condition --note --rating --reason --root --path --exclude --command --cwd --artifact --status --by --token --ttl-ms --agent --project --env --branch --title --model --thinking --cursor --attempt".split(" "));
+const values = new Set("--environment --connection --supervisor --require-node-version --host --remote-transport --context-thread --thread --backend --source --kind --evidence --based-on --finding --expires-at --supersedes --checkpoint --limit --max-chars --since --poll-ms --timeout-ms --until --notify --settle-ms --max-hold-ms --owner --key --condition --note --rating --reason --root --path --exclude --command --cwd --artifact --status --by --token --ttl-ms --agent --project --env --branch --title --model --thinking --cursor --attempt".split(" "));
 function option(args, name, fallback) {
   const index = args.indexOf(name), stop = args.indexOf("--");
   if (index < 0 || (stop >= 0 && index > stop)) return fallback;
@@ -35,7 +38,7 @@ const repeated = (args, name) => { const result = []; let value; while ((value =
 const message = args => { if (args[0] === "--") args.shift(); return args.length === 1 && args[0] === "-" ? readFileSync(0, "utf8") : args.join(" "); };
 function exact(args, count) { if (args.length !== count || args.some(arg => arg.startsWith("--"))) throw failure("Unexpected arguments. See the command's help."); }
 
-export function cloudInvocation(argv) {
+function selectedCloudInvocation(argv) {
   const end = argv.indexOf("--"), own = end < 0 ? argv : argv.slice(0, end);
   const connection = own.indexOf("--connection");
   const positional = [];
@@ -45,37 +48,43 @@ export function cloudInvocation(argv) {
   }
   const [command, action] = positional;
   if (["help", "--help", "--version"].includes(command) || own.includes("--help") || own.includes("--version")) return false;
-  if (connection >= 0 && own[connection + 1] === "cloud") return true;
+  if (connection >= 0 && ["cloud", "desktop-cloud"].includes(own[connection + 1])) return own[connection + 1];
   const thread = own.indexOf("--thread");
-  if (["doctor", "resource"].includes(command) && thread >= 0) return isCloudTask(own[thread + 1]);
+  if (["doctor", "resource"].includes(command) && thread >= 0) return isDesktopCloudTask(own[thread + 1]) ? "desktop-cloud" : isCloudTask(own[thread + 1]) ? "cloud" : false;
   if (command === "thread" && action === "create") return false;
   const nested = ["history", "instructions", "findings", "checkpoint", "thread"].includes(command)
     || (command === "supervise" && ["prompt", "register", "status", "pause", "resume", "stop", "list"].includes(action));
-  return isCloudTask(isCloudTask(command) ? command : positional[nested ? 2 : 1]);
+  const target = isCloudTask(command) || isDesktopCloudTask(command) ? command : positional[nested ? 2 : 1];
+  return isDesktopCloudTask(target) ? "desktop-cloud" : isCloudTask(target) ? "cloud" : false;
 }
+
+export const cloudInvocation = argv => !!selectedCloudInvocation(argv);
 
 // Only parsing/routing is backend-specific. Supervision, monitoring, directives,
 // findings, journaling and saved-agent launch use the same local implementation.
 export async function mainCloud(argv) {
-  const args = [...argv], json = flag(args, "--json"), connection = option(args, "--connection", "cloud");
-  if (connection !== "cloud") throw failure("A cloud task requires the cloud connection.", "CLOUD_TARGET_CONFLICT");
+  const args = [...argv], json = flag(args, "--json"), connection = option(args, "--connection", selectedCloudInvocation(argv) || "cloud");
+  const desktopCloud = connection === "desktop-cloud";
+  const targetId = desktopCloud ? desktopCloudId : cloudTaskId;
+  if (!["cloud", "desktop-cloud"].includes(connection)) throw failure("A cloud task requires the cloud connection.", "CLOUD_TARGET_CONFLICT");
   const own = args.slice(0, args.includes("--") ? args.indexOf("--") : args.length);
   if (own.some(value => ["--host", "--remote-transport", "--context-thread"].includes(value))) throw failure("Desktop host routes cannot select a cloud task.", "CLOUD_TARGET_CONFLICT");
   const requiredNode = option(args, "--require-node-version");
   if (requiredNode !== undefined && requiredNode !== process.version) throw failure("The saved supervisor requires its original Node version. Regenerate its prompt.", "NODE_VERSION_MISMATCH");
   const session = option(args, "--supervisor"), supervisor = session === undefined ? undefined : supervisorId(session);
   let command = args.shift();
-  if (isCloudTask(command)) { args.unshift(command); command = "send"; }
+  if (isCloudTask(command) || isDesktopCloudTask(command)) { args.unshift(command); command = "send"; }
   const output = (name, data) => {
     if (json) console.log(JSON.stringify({ ok: true, command: name, data }));
     else console.log(JSON.stringify(data, null, 2));
     return data;
   };
-  const bound = async target => { const id = cloudTaskId(target); if (supervisor) await assertSupervisor(id, supervisor, { connection: "cloud" }); return id; };
-  const dependencies = cloudConnection();
+  const bound = async target => { const id = targetId(target); if (supervisor) await assertSupervisor(id, supervisor, { connection }); return id; };
+  const dependencies = desktopCloud ? desktopCloudConnection() : cloudConnection();
+  if (desktopCloud && await desktopCloudCommands(command, args, { supervisor, output, bound, dependencies })) return;
 
   if (["read", "status", "watch"].includes(command)) {
-    const options = { supervisor, connection: "cloud", fullHistory: flag(args, "--full-history"), since: option(args, "--since"),
+    const options = { supervisor, connection, fullHistory: flag(args, "--full-history"), since: option(args, "--since"),
       limit: Number(option(args, "--limit", "50")), maxChars: Number(option(args, "--max-chars", "2000")), includeOutput: flag(args, "--include-output") };
     const stream = command === "watch" && flag(args, "--stream");
     if (command === "watch") {
@@ -88,7 +97,7 @@ export async function mainCloud(argv) {
     }
     exact(args, 1); const id = await bound(args[0]);
     if (stream) return monitorCommand(id, options, dependencies);
-    const data = await observeThread(id, options, dependencies); data.connection_mode = "cloud";
+    const data = await observeThread(id, options, dependencies); data.connection_mode = connection;
     if (command === "status") delete data.events;
     if (json) output(command, data); else printObservation(data, command === "status");
     return;
@@ -98,14 +107,14 @@ export async function mainCloud(argv) {
     if (["register", "status", "list", "pause", "resume", "stop"].includes(action)) {
       args.shift(); const owner = action === "register" ? option(args, "--owner", "external") : undefined;
       exact(args, action === "list" ? 0 : 1);
-      const id = action === "list" ? null : cloudTaskId(args[0]); let data;
+      const id = action === "list" ? null : targetId(args[0]); let data;
       if (action === "register") {
         if (!supervisor) throw failure("supervise register requires the generated --supervisor ID.");
-        data = await registerSupervisor(id, supervisor, { owner, connection: "cloud" });
+        data = await registerSupervisor(id, supervisor, { owner, connection });
       } else {
         if (supervisor && action !== "status") throw failure("A supervisor cannot change its own control state.", "SUPERVISOR_CONTROL_FORBIDDEN");
         if (supervisor && id && (await getSupervisor(id))?.session_id !== supervisor) throw failure("This command belongs to another supervisor.", "SUPERVISOR_MISMATCH");
-        data = action === "list" ? (await listSupervisors()).filter(record => record.connection === "cloud") : action === "status" ? await supervisorStatus(id) : await controlSupervisor(id, action);
+        data = action === "list" ? (await listSupervisors()).filter(record => record.connection === connection) : action === "status" ? await supervisorStatus(id) : await controlSupervisor(id, action);
         if (action === "status") { const pending = await listFindings(id, { limit: 20 }); data.unresolved_findings = { total: pending.total, has_more: pending.has_more, findings: pending.findings.map(f => ({ id: f.id, title: f.title, status: f.status, revision: f.revision })) }; }
       }
       output(`supervise.${action}`, data); return;
@@ -115,9 +124,9 @@ export async function mainCloud(argv) {
     const separator = args.indexOf("--"), ownArgs = separator < 0 ? args : args.slice(0, separator), forwarded = separator < 0 ? [] : args.slice(separator + 1);
     const agent = option(ownArgs, "--agent", "claude"), usePathCli = flag(ownArgs, "--use-path-cli");
     if (ownArgs.length < 1 || ownArgs.length > 2 || ownArgs.some(a => a.startsWith("--"))) throw failure("Expected: supervise [prompt] <TASK> [POLICY] [--agent claude|codex].");
-    const id = cloudTaskId(ownArgs[0]);
-    if (promptOnly) { const data = await prepareSupervisorPrompt(id, ownArgs[1], { agent, usePathCli, connection: "cloud" }); if (json) output("supervise.prompt", data); else console.log(data.prompt); }
-    else { if (json) throw failure("supervise inherits agent output and does not support --json."); process.exitCode = await superviseAgent(id, { policy: ownArgs[1], agent, usePathCli, agentArgs: forwarded, connection: "cloud" }); }
+    const id = targetId(ownArgs[0]);
+    if (promptOnly) { const data = await prepareSupervisorPrompt(id, ownArgs[1], { agent, usePathCli, connection }); if (json) output("supervise.prompt", data); else console.log(data.prompt); }
+    else { if (json) throw failure("supervise inherits agent output and does not support --json."); process.exitCode = await superviseAgent(id, { policy: ownArgs[1], agent, usePathCli, agentArgs: forwarded, connection }); }
     return;
   }
   if (command === "findings") {
@@ -135,6 +144,7 @@ export async function mainCloud(argv) {
   if (command === "history") {
     const action = args.shift(), attempt = option(args, "--attempt");
     if (attempt !== undefined) {
+      if (desktopCloud) throw failure("Use the common history check with a message ID for Desktop Cloud.");
       if (!["show", "check"].includes(action)) throw failure("--attempt requires history show or history check.");
       exact(args, 1); const id = await bound(args[0]);
       const settings = { taskId: id };
@@ -153,7 +163,7 @@ export async function mainCloud(argv) {
     if (action !== "retract") throw failure("Expected instructions list|retract.");
     const source = option(args, "--source", "external"), reason = option(args, "--reason"), basedOn = option(args, "--based-on"), dryRun = flag(args, "--dry-run"), newTurn = flag(args, "--new-turn");
     exact(args, 2); if (!reason) throw failure("Retraction requires --reason.");
-    output("instructions.retract", await sendTrackedMessage(await bound(args[0]), reason, { source, retracts: args[1], basedOn, dryRun, newTurn, supervisor, connection: "cloud" })); return;
+    output("instructions.retract", await sendTrackedMessage(await bound(args[0]), reason, { source, retracts: args[1], basedOn, dryRun, newTurn, supervisor, connection })); return;
   }
   if (command === "checkpoint") {
     const action = args.shift(), includeOutput = flag(args, "--include-output"); let data;
@@ -221,13 +231,13 @@ export async function mainCloud(argv) {
     const target = option(args, "--thread"), backend = option(args, "--backend", "app-server"); exact(args, 0);
     if (backend !== "app-server") throw failure("Cloud cannot use Desktop UI.", "CLOUD_TARGET_CONFLICT");
     if (target) {
-      const id = cloudTaskId(target);
+      const id = targetId(target);
       if (supervisor) {
         const record = await getSupervisor(id);
-        if (record?.session_id === supervisor) await assertSupervisor(id, supervisor, { connection: "cloud" });
+        if (record?.session_id === supervisor) await assertSupervisor(id, supervisor, { connection });
         else if (record && record.state !== "stopped") throw failure("Another supervisor owns this cloud task.", "SUPERVISOR_CONFLICT");
       }
-      await observeThread(id, { connection: "cloud", limit: 1 }, dependencies);
+      await observeThread(id, { connection, limit: 1 }, dependencies);
     } else { if (supervisor) throw failure("A bound supervisor doctor requires its target task.", "SUPERVISOR_CONTROL_FORBIDDEN"); await cloudEnvironments(); }
     output("doctor", { ready: true, backend: "codex-api", execution_environment: "cloud", version: VERSION,
       codex_steer_compatibility: { status: "compatible" }, connection: { status: "connected", mode: "cloud" },
@@ -235,7 +245,7 @@ export async function mainCloud(argv) {
       runtime_compatibility: { operations: Object.fromEntries(["read", "watch", "monitor", "history_check", "send", "send_new_turn"].map(name => [name, { status: "supported" }])) },
       active_send_semantics: "interrupt-and-follow-up; same task, new turn", unverified_features: ["approval_roundtrip", "atomic_server_freshness"] }); return;
   }
-  if (command === "thread" && args[0] === "resolve") { args.shift(); exact(args, 1); const id = cloudTaskId(args[0]); output("thread.resolve", { thread_id: id, task_id: id, deep_link: `https://chatgpt.com/codex/tasks/${id}`, execution_environment: "cloud" }); return; }
+  if (command === "thread" && args[0] === "resolve") { args.shift(); exact(args, 1); const id = targetId(args[0]); output("thread.resolve", { thread_id: id, task_id: id, deep_link: `https://chatgpt.com/codex/tasks/${id}`, execution_environment: "cloud" }); return; }
   if (command === "open") {
     exact(args, 1); const id = await bound(args[0]), url = `https://chatgpt.com/codex/tasks/${id}`;
     if (process.platform !== "darwin") throw failure("Open this task URL in your browser; native browser launch is only implemented on macOS.", "CLOUD_CAPABILITY_UNSUPPORTED");
@@ -254,12 +264,48 @@ export async function mainCloud(argv) {
   const dryRun = flag(args, "--dry-run"), newTurn = flag(args, "--new-turn"), backend = option(args, "--backend", "app-server");
   const noSound = flag(args, "--no-sound"), explicitSound = flag(args, "--sound"); if (noSound && explicitSound) throw failure("--sound and --no-sound cannot be combined.");
   if (backend !== "app-server") throw failure("Cloud cannot send through Desktop UI.", "CLOUD_TARGET_CONFLICT");
-  const options = { dryRun, newTurn, supervisor, connection: "cloud", evidence: repeated(args, "--evidence") };
+  const options = { dryRun, newTurn, supervisor, connection, evidence: repeated(args, "--evidence") };
   for (const [key, name] of Object.entries({ source: "--source", kind: "--kind", basedOn: "--based-on", supersedes: "--supersedes", expiresAt: "--expires-at", checkpoint: "--checkpoint", finding: "--finding" })) { const value = option(args, name); if (value !== undefined) options[key] = value; }
-  const id = cloudTaskId(args.shift()), end = args.includes("--") ? args.indexOf("--") : args.length;
+  const id = targetId(args.shift()), end = args.includes("--") ? args.indexOf("--") : args.length;
   if (args.slice(0, end).some(arg => arg.startsWith("--"))) throw failure("Unknown send option. Use -- before instruction text starting with --.");
   const body = message(args); if (!body.trim()) throw failure("send requires a non-empty message.");
   const receipt = await sendTrackedMessage(id, body, options);
   receipt.sound = noSound ? { played: false, reason: "disabled" } : playSendSound(receipt);
   output("send", receipt);
+}
+
+async function desktopCloudCommands(command, args, { supervisor, output, bound, dependencies }) {
+  if (!["projects", "environments", "threads", "thread", "doctor", "diff", "open"].includes(command)) return false;
+  if (supervisor && ["projects", "environments", "threads", "thread"].includes(command)) throw failure("A supervisor cannot enumerate or create other tasks.", "SUPERVISOR_CONTROL_FORBIDDEN");
+  if (["projects", "environments"].includes(command)) {
+    exact(args, 1); if (args[0] !== "list") throw failure("Expected list.");
+    if (command === "projects") throw failure("Desktop project membership and Cloud environments are separate. Use environments list; --project creation is unavailable through the current official API.", "DESKTOP_CLOUD_PROJECT_UNAVAILABLE");
+    output("environments.list", await desktopCloudEnvironments()); return true;
+  }
+  if (command === "threads") {
+    if (args.shift() !== "list") throw failure("Expected threads list.");
+    const limit = Number(option(args, "--limit", "20")), cursor = option(args, "--cursor"); exact(args, 0);
+    output("threads.list", await listDesktopCloudTasks({ limit, cursor })); return true;
+  }
+  if (command === "thread") {
+    const action = args.shift();
+    if (action === "create") {
+      const environment = option(args, "--environment"), project = option(args, "--project"), title = option(args, "--title"), dryRun = flag(args, "--dry-run");
+      const end = args.includes("--") ? args.indexOf("--") : args.length;
+      if (args.slice(0, end).some(arg => arg.startsWith("--"))) throw failure("Unknown Desktop Cloud creation option.");
+      output("thread.create", await createDesktopCloudTask(environment, message(args), { project, title, dryRun })); return true;
+    }
+    exact(args, 1);
+    if (action === "receipt") { output("thread.receipt", await desktopCloudReceipt(args[0])); return true; }
+    if (action === "resolve") { const id = await bound(args[0]); output("thread.resolve", { thread_id: id, deep_link: desktopCloudLink(id) }); return true; }
+    throw failure("Expected thread create|receipt|resolve.");
+  }
+  if (command === "doctor") {
+    const target = option(args, "--thread"); exact(args, 0);
+    if (target) await observeThread(await bound(target), { connection: "desktop-cloud", limit: 1 }, dependencies);
+    else { if (supervisor) throw failure("A supervisor doctor needs its target."); await desktopCloudEnvironments(); }
+    output("doctor", { ready: true, connection_mode: "desktop-cloud", observation: target ? "verified" : "unverified", project_membership: "unavailable", approval_roundtrip: "unverified", atomic_server_freshness: "unverified" }); return true;
+  }
+  if (command === "open") { exact(args, 1); output("open", { deep_link: desktopCloudLink(await bound(args[0])) }); return true; }
+  throw failure("Desktop Cloud diff retrieval is not verified. Inspect file-change events with read --include-output.", "CAPABILITY_UNVERIFIED");
 }

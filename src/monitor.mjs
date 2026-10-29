@@ -1,3 +1,5 @@
+import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
+import { desktopCloudConnection } from "./desktop-cloud-api.mjs";
 import { setTimeout as delay } from "node:timers/promises";
 import { normalizeTaskId, isCloudTask, taskConnection } from "./task-id.mjs";
 import { cloudConnection } from "./cloud-connection.mjs";
@@ -15,9 +17,9 @@ const needsReview = new Set(["STALE_CURSOR", "CURSOR_UPGRADE_REQUIRED", "OBSERVA
 // not an acknowledgement that a supervising AI has read or acted on the output.
 export async function streamThread(threadInput, options, onChange, { discover = discoverRuntime, connect = RpcClient.connect, sleep = delay, now = () => performance.now() } = {}) {
   const threadId = normalizeTaskId(threadInput), { signal, pollMs = 1000, reconnectTimeoutMs = 60000 } = options;
-  if (isCloudTask(threadId)) {
+  if (isCloudTask(threadId) || isDesktopCloudTask(threadId)) {
     options = { ...options, connection: taskConnection(threadId, options.connection) };
-    const cloud = cloudConnection();
+    const cloud = isDesktopCloudTask(threadId) ? desktopCloudConnection() : cloudConnection();
     if (discover === discoverRuntime) discover = cloud.discover;
     if (connect === RpcClient.connect) connect = cloud.connect;
   }
