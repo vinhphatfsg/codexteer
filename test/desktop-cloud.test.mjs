@@ -12,6 +12,7 @@ import { createDesktopCloudTask, sendDesktopCloudInput, desktopCloudReceipt } fr
 import { RpcFailure } from "../src/rpc.mjs";
 import { readSnapshot, fetchThread } from "../src/observe.mjs";
 import { registerSupervisor, controlSupervisor, assertSupervisor, listSupervisors } from "../src/supervision.mjs";
+import { fail } from "../src/cli.mjs";
 const uuid = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001", id = `durable_${uuid}`, config = "fixture~asenvcfg_example", turn = "fixture-turn";
 async function profile(t) { const home = await mkdtemp(path.join(tmpdir(), "desktop-cloud-test-")); t.after(() => rm(home, { recursive: true, force: true })); return { home }; }
 const metadata = () => ({ id, turns: [], status: { type: "idle" }, historyMode: "aggregate", environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config, cwd: "/workspace" }] });
@@ -81,6 +82,32 @@ test("unknown delivery survives exit, blocks subsequent sends, and creation reta
   await assert.rejects(createDesktopCloudTask(config, "test", {}, { ...deps, environments: async () => ({ environments: [{ id: config, name: "Fixture" }] }) }), error => error.thread_id === id && error.creation_status === "created" && error.delivery_status === "unknown");
   await assert.rejects(sendDesktopCloudInput(id, "different text", { newTurn: true }, { ...storage, connect: () => assert.fail("must not reconnect/resend") }), { code: "DESKTOP_CLOUD_DELIVERY_PENDING" });
   assert.equal(calls.filter(c => c.method === "turn/start").length, 1);
+});
+test("human creation failures retain recovery IDs after title rejection or unknown initial delivery", async t => {
+  const previousExitCode = process.exitCode, lines = [];
+  t.mock.method(console, "error", line => lines.push(line));
+  try {
+    for (const phase of ["title", "initial"]) {
+      const storage = await profile(t), calls = [], rpc = client(calls, () => Object.assign(Error("Initial delivery unknown"), { uncertain: true }));
+      const request = rpc.request.bind(rpc);
+      rpc.request = (method, params) => {
+        if (phase === "title" && method === "thread/name/set") throw Object.assign(Error("Title rejected"), { code: "RPC_REJECTED", uncertain: false });
+        return request(method, params);
+      };
+      let error;
+      try { await createDesktopCloudTask(config, "DO_NOT_PRINT_PRIVATE_PROMPT", { title: "Fixture" }, { ...storage, environments: async () => ({ environments: [{ id: config, name: "Fixture" }] }), connect: async () => rpc }); }
+      catch (caught) { error = caught; }
+      assert(error); lines.length = 0; fail(error, false);
+      const output = lines.join("\n");
+      assert(output.includes(`thread_id: "${id}"`)); assert.match(output, /attempt_id: "[a-f0-9-]{36}"/);
+      assert(output.includes(`receipt_path: "${storage.home}/codex-steer/desktop-cloud-creations/`));
+      assert.match(output, /creation_status: "created"/); assert(output.includes(`delivery_status: "${phase === "title" ? "not_sent" : "unknown"}"`));
+      assert.doesNotMatch(output, /DO_NOT_PRINT_PRIVATE_PROMPT/);
+      const receipt = await desktopCloudReceipt(error.attempt_id, storage);
+      assert.equal(receipt.thread_id, id); assert.equal(calls.filter(call => call.method === "thread/start").length, 1);
+      assert.equal(calls.filter(call => call.method === "turn/start").length, phase === "title" ? 0 : 1);
+    }
+  } finally { process.exitCode = previousExitCode; }
 });
 test("common supervisor pause/stop and backend separation apply to durable tasks", async t => {
   const storage = await profile(t), session = "aaaaaaaa-aaaa-4aaa-8aaa-000000000002";

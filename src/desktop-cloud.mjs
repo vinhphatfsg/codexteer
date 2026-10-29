@@ -40,7 +40,7 @@ export async function createDesktopCloudTask(selector, prompt, options = {}, { e
     if (error.delivery_status) Object.assign(receipt, { delivery_status: error.delivery_status, sent: error.sent });
     receipt.error_code = error.code ?? "DESKTOP_CLOUD_FAILED";
     try { await save(); } catch { error.receipt_update_required = true; }
-    Object.assign(error, { creation_status: receipt.creation_status, thread_id: receipt.thread_id, attempt_id: attempt, receipt_path: receipt.receipt_path, sent: receipt.sent, delivery_status: receipt.delivery_status }); throw error;
+    Object.assign(error, { execution_environment: "cloud", creation_status: receipt.creation_status, thread_id: receipt.thread_id, attempt_id: attempt, receipt_path: receipt.receipt_path, sent: receipt.sent, delivery_status: receipt.delivery_status }); throw error;
   } finally { try { client?.close(); } catch { receipt.runtime_cleanup_required = true; } }
 }
 export async function sendDesktopCloudInput(target, text, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend } = {}, { connect = connectDesktopCloud, ...storage } = {}) {
