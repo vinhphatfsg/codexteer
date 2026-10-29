@@ -18,7 +18,7 @@ Desktop操作にはmacOS、Node.js 20以降とnpm、`/Applications/ChatGPT.app`�
 
 リポジトリのcloneやグローバルインストールなしで実行できます。npmパッケージ名とCLI名は`codexteer`です。
 
-npm公開済みの最新版は`0.17.0`です。このブランチは、リモート操作・Cloud対応などをまとめたマイナー更新`0.18.0`を準備します。公開前に使う場合は「ソースから導入する」の手順で導入してください。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
+npm公開済みの最新版は[`0.18.0`](https://www.npmjs.com/package/codexteer/v/0.18.0)です。リモート操作・Cloud対応・Desktop更新・オフライン履歴修復を含みます。変更点と各機能の条件は[CHANGELOG](CHANGELOG.md)を参照してください。
 
 ```bash
 npx -y codexteer --version
@@ -36,7 +36,7 @@ npx -y codexteer doctor --json
 <details>
 <summary>特定のバージョンで実行する場合（任意）</summary>
 
-不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。`0.18.0`の公開後にその版を選ぶ場合は、次のように指定します。
+不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。公開済みの`0.18.0`を選ぶ場合は、次のように指定します。
 
 ```bash
 npx -y codexteer@0.18.0 supervise <thread-id>
