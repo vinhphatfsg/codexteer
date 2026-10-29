@@ -35,6 +35,8 @@ test("the eight-section prompt leads with policy, uses digest and keeps exceptio
   assert.match(prompt, /checkpointを持てない送信では、指摘を解決にせず/);
   const rules = prompt.split("2. 必ず守ること")[1].split("3. 実行コマンド")[0];
   for (const rule of ["paused", "SUPERVISOR_STOPPED", "--supervisor", "--new-turn", "自動再送", "reconnecting"]) assert.ok(rules.includes(rule), rule);
+  assert.match(rules, /利用者が選択した通常のコマンド承認・自動審査.*同じ固定CLIコマンド/);
+  assert.match(rules, /操作範囲を広げる委任ではありません.*審査で拒否されたら停止/s);
 });
 
 

@@ -4,7 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fingerprintFile, collectEvidence, verifyEvidence } from "./evidence.mjs";
 import { digest } from "./observe.mjs";
-import { normalizeThreadId } from "./thread-id.mjs";
+import { normalizeTaskId } from "./task-id.mjs";
 import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
 import { runCommand } from "./runner.mjs";
 import { targetHost } from "./target.mjs";
@@ -41,13 +41,13 @@ function differences(before, after) {
 }
 
 export async function getCheckpoint(threadInput, id, storage = {}) {
-  const threadId = normalizeThreadId(threadInput), entry = await readRecord("checkpoints", id, storage);
+  const threadId = normalizeTaskId(threadInput), entry = await readRecord("checkpoints", id, storage);
   if (!entry || entry.thread_id !== threadId || entry.id !== id) throw new Error("Checkpoint not found for this task.");
   return entry;
 }
 
 export async function createCheckpoint(threadInput, name, { paths, excludes = [], cwd = process.cwd(), ...storage }) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   if (!name?.trim() || !paths?.length) throw new Error("capture requires a name and at least one --path.");
   const scope = targetHost() === "local" ? { cwd: path.resolve(cwd), roots: [...new Set(paths.map(p => path.resolve(cwd, p)))], excludes: excludes.map(p => path.resolve(cwd, p)) }
     : await remoteCheckpointScope(threadId, paths, excludes);
@@ -116,7 +116,7 @@ function watchInputs(snapshot) {
 
 export async function runCheckpoint(threadInput, id, argv, { timeoutMs = 0, execBackend, remoteShell, supervisor, connection, ...storage } = {}) {
   if (!argv.length || !argv[0] || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw new Error("A command and timeout-ms between 0 and 86400000 are required.");
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   return withStoreLock(`checkpoint-${id}`, async () => {
     const entry = await getCheckpoint(threadId, id, storage), watcher = targetHost() === "local" ? watchInputs(entry.snapshot) : await remoteWatchInputs(entry.snapshot);
     try {
@@ -159,6 +159,6 @@ export async function attachArtifacts(threadInput, id, refs, storage = {}) {
 }
 
 export async function listCheckpoints(threadInput, storage = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   return (await listRecords("checkpoints", storage)).filter(c => c?.thread_id === threadId).sort((a, b) => a.created_at.localeCompare(b.created_at)).map(entry => checkpointSummary(entry));
 }

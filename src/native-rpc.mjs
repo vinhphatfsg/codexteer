@@ -72,7 +72,7 @@ export function nativeRequest(action, args, context, callId = randomUUID()) {
 }
 
 export async function nativeRpc(endpoint, request, { timeoutMs = 30000 } = {}) {
-  const mutation = ["create_thread", "move_thread_to_project"].includes(request.params?.tool);
+  const mutation = request.method === "taskProject/assign" || ["create_thread", "move_thread_to_project"].includes(request.params?.tool);
   await inspectNativeEndpoint(endpoint.socketPath, endpoint.fingerprint);
   const body = Buffer.from(JSON.stringify(request));
   if (body.length > LIMIT) throw failure("Native request exceeds the frame limit.");

@@ -12,13 +12,13 @@ codexteer thread create --project 'サンプル' \
 
 ## 導入
 
-macOS、Node.js 20以降とnpm、`/Applications/ChatGPT.app`にインストールされたCodex Desktopが必要です。監督役に使うClaude CodeまたはCodex CLIを、PATH上の`claude`または`codex`で起動できる状態にします。
+Desktop操作にはmacOS、Node.js 20以降とnpm、`/Applications/ChatGPT.app`にインストールされたCodex Desktopが必要です。監督役に使うClaude CodeまたはCodex CLIを、PATH上の`claude`または`codex`で起動できる状態にします。クラウド操作はDesktopが不要で、上記の公式Codex CLIを別途使用します。
 
 ### npxで使う
 
 リポジトリのcloneやグローバルインストールなしで実行できます。npmパッケージ名とCLI名は`codexteer`です。
 
-npm公開済みの最新版は`0.16.0`です。このブランチは、プロジェクト名と初回指示だけでチャットを作成できるマイナー更新`0.17.0`を準備します。公開前に使う場合は「ソースから導入する」の手順で導入してください。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
+npm公開済みの最新版は`0.17.0`です。このブランチは、リモート操作・Cloud対応などをまとめたマイナー更新`0.18.0`を準備します。公開前に使う場合は「ソースから導入する」の手順で導入してください。変更点は[CHANGELOG](CHANGELOG.md)を参照してください。
 
 ```bash
 npx -y codexteer --version
@@ -36,13 +36,21 @@ npx -y codexteer doctor --json
 <details>
 <summary>特定のバージョンで実行する場合（任意）</summary>
 
-不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。`0.17.0`の公開後にその版を選ぶ場合は、次のように指定します。
+不具合の切り分けや、同じ版で監督を開始し直したい場合は、パッケージ名に`@バージョン`を付けられます。`0.18.0`の公開後にその版を選ぶ場合は、次のように指定します。
 
 ```bash
-npx -y codexteer@0.17.0 supervise <thread-id>
+npx -y codexteer@0.18.0 supervise <thread-id>
 ```
 
 </details>
+
+### DesktopのCloud環境を使う
+
+DesktopのCloud環境構成は、`codexteer --connection desktop-cloud environments list --json`で取得します。新規作成は`thread create --environment <ID_OR_EXACT_NAME>`、継続・監視・監督は`durable_`付きIDまたは`hostId=durable`付きリンクで共通コマンドを使います。所属情報と登録APIの可否は`doctor --thread ... --project ...`で区別します。公式の署名付き`thread assign`は対象がそのDesktopの実行環境を使う場合に限り利用でき、通常のCloud環境では`--project`付き作成を現在も事前拒否します。[操作・確認済み範囲と制限](docs/desktop-cloud.md)
+
+### Codex Cloudを使う
+
+CloudタスクのID・公式リンクで、同じ`supervise`・`read/watch`・`send`・`history/instructions/findings`を使えます。監督の`pause/resume/stop`や保存済みCLIも共通です。接続先をまだ選んでいない一覧と作成は`--connection cloud projects list`・`threads list`・`thread create --project <ENV_ID>`を使います。実行中のCloud送信は同じタスクの元ターンを中断して後続ターンを開始する方式です。[操作とサービス上の違い](docs/cloud.md)
 
 ### ソースから導入する
 
@@ -453,9 +461,9 @@ codexteer help supervise prompt
     "cli_mode": "saved",
     "deployment": {
       "codex_home": "/Users/me/.codex",
-      "directory": "/Users/me/.codex/codex-steer/runtimes/0.17.0-<sha256>",
-      "wrapper_path": "/Users/me/.codex/codex-steer/runtimes/0.17.0-<sha256>/bin/codexteer-wrapper.mjs",
-      "version": "0.17.0",
+      "directory": "/Users/me/.codex/codex-steer/runtimes/0.18.0-<sha256>",
+      "wrapper_path": "/Users/me/.codex/codex-steer/runtimes/0.18.0-<sha256>/bin/codexteer-wrapper.mjs",
+      "version": "0.18.0",
       "sha256": "<sha256>",
       "reused": false
     },

@@ -1,11 +1,11 @@
 # 配布と永続実行
 
 パッケージ名は `codexteer`、CLI名は `codexteer`、ライセンスはMITです。
-旧npmパッケージは`@vinhphatfsg/codex-steer`です。`codexteer@0.16.0`は公開済みで、このブランチはプロジェクトチャット作成を追加するマイナー更新`0.17.0`を準備します。GitHubのPR作成・マージはnpm公開を行う操作ではありません。公開時は`npm whoami`でnpm側のユーザーを確認してください。
+旧npmパッケージは`@vinhphatfsg/codex-steer`です。`codexteer@0.17.0`は公開済みで、このブランチはリモート操作・Cloud対応などをまとめたマイナー更新`0.18.0`を準備します。GitHubのPR作成・マージはnpm公開を行う操作ではありません。公開時は`npm whoami`でnpm側のユーザーを確認してください。
 `package.json` は `private` を持たず、`publishConfig` でnpm公式レジストリへのpublic公開を指定しています。公開可能な設定であることと、実際に公開済みであることは別です。
 
 公開後の基本的な実行形式は次のとおりです。通常はバージョン指定なしで使えます。監督開始後は保存したCLIを使い続けるため、監督中の一貫性を保つために版を明示する必要はありません。起動側と操作側の製品バージョンも、必要な通信仕様が対応していれば異なっていても使えます。
-以下の監督機能は公開済みの0.15.0から利用できます。0.16.0では通知集約と監督プロンプトを改善しました。0.17.0のチャット作成機能は公開準備中のため、公開前はこのブランチをソースから導入してください。`-y` はnpmの取得確認を省略します。
+以下の監督機能は公開済みの0.15.0から利用できます。0.16.0では通知集約と監督プロンプトを改善しました。0.18.0のチャット作成機能は公開準備中のため、公開前はこのブランチをソースから導入してください。`-y` はnpmの取得確認を省略します。
 
 ```text
 npx -y codexteer desktop start
@@ -179,7 +179,7 @@ npxから模擬Claudeと模擬Codexを起動して保存したCLIへの参照を
 
 レビュー・検証を終えた版を、npm側の公開権限を持つアカウントで公開します。手動公開には2FAを有効にしたアカウントを使ってください。
 
-公開済みのパッケージ名とバージョンの組み合わせは再公開できません。既存の`codexteer@0.16.0`は変更せず、今回の配布物は`codexteer@0.17.0`として準備します。公開は別途実行します。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
+公開済みのパッケージ名とバージョンの組み合わせは再公開できません。既存の`codexteer@0.17.0`は変更せず、今回の配布物は`codexteer@0.18.0`として準備します。公開は別途実行します。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
 
 ```bash
 npm login
@@ -188,11 +188,11 @@ npm run test:package
 npm publish --access public
 ```
 
-公開後は、公開した版と起動コマンドの登録を確認します。次は0.17.0を公開した場合の例です。
+公開後は、公開した版と起動コマンドの登録を確認します。次は0.18.0を公開した場合の例です。
 
 ```bash
-npm view codexteer@0.17.0 version bin --json
-npx -y codexteer@0.17.0 --version
+npm view codexteer@0.18.0 version bin --json
+npx -y codexteer@0.18.0 --version
 ```
 
 `EPRIVATE`はリポジトリの`package.json`に公開禁止設定が残っていることを示します。`--access public`はその禁止を解除しません。
@@ -204,9 +204,9 @@ npx -y codexteer@0.17.0 --version
 
 ここからの監督制御、指摘管理、Codex CLI起動、接続方式の選択は0.15.0で追加しました。保存済みCLIの機能自体は0.14.1から利用できます。0.16.0は通知集約と監督プロンプトの改善を含むminor更新です。`watch --stream`の既定はdigestで、`--notify all`を明示すると従来の即時出力になります。単発watchと保存済みCLIの動作は変わりません。runtime protocolと既存capabilityのv1契約は維持し、0.15.0で起動したDesktopとの通信に再起動は不要です。
 
-保存したCLIへのコマンドは、canonical CODEX_HOME、Node guard、`--supervisor <session-id>`、`--connection shared|desktop`を一緒に保持します。各プロンプト生成は新しいIDを発行しますが、生成だけでは登録しません。直接起動はエージェント起動前に登録し、終了時に停止します。コピーした本文は最初のregisterで開始します。
+保存したCLIへのコマンドは、canonical CODEX_HOME、Node guard、`--supervisor <session-id>`、`--connection shared|desktop|cloud|desktop-cloud`を一緒に保持します。各プロンプト生成は新しいIDを発行しますが、生成だけでは登録しません。直接起動はエージェント起動前に登録し、終了時に停止します。コピーした本文は最初のregisterで開始します。
 
-同じホームの`codex-steer/supervisors`はタスク別の制御、`supervisor-observations`はセッション別の最終CLI観測、`findings`は指摘・解決条件・revision・評価を保存します。既存のstoreと同じ所有者専用のディレクトリ0700・ファイル0600を使い、シンボリックリンクや不適切な所有者・権限を拒否します。観測と制御を別レコードにし、readの完了でpause/stopを上書きしません。
+同じホームの`codex-steer/supervisors`はDesktopタスク別の制御、`cloud-supervisors`はCloudタスク別の制御、`supervisor-observations`はセッション別の最終CLI観測、`findings`は指摘・解決条件・revision・評価を保存します。既存のstoreと同じ所有者専用のディレクトリ0700・ファイル0600を使い、シンボリックリンクや不適切な所有者・権限を拒否します。観測と制御を別レコードにし、readの完了でpause/stopを上書きしません。
 
 送信とpause/stopはタスクの監督ロック、指摘の変更と送信履歴はタスクのメッセージロックで直列化します。処理中の競合は`RECORD_BUSY`で明示し、未知の受付結果を自動再送しません。送信受付後に監督状態の書き込みだけが失敗した場合は、配送結果とIDを維持して`supervision_update_required: true`を返します。これは再送の指示ではありません。
 
@@ -218,9 +218,9 @@ npx -y codexteer@0.17.0 --version
 
 開発用の`npm run test:connection`は、Desktop同梱CLIを一時プロファイルのUnixソケットで起動し、ローカル偽モデルで作った合成履歴の読み取りを確認します。実Desktopへの接続・設定変更や外部モデル利用は行いません。`npm run test:protocol`は既存wrapper・偽Desktopとの送信と承認経路、`npm run test:package`は実tarball・オフラインnpx・偽Claude/Codexの起動と、別CODEX_HOME・キャッシュ削除後の観測/送信・pause/resume・重複拒否を確認します。これらの隔離検証から実Desktopの表示や直接接続での承認往復まで保証するものではありません。
 
-## 0.17.0の公開候補
+## 0.18.0の公開候補
 
-`package.json`と`package-lock.json`の版を0.17.0に揃えています。0.16.0はnpm registryで公開済みであることを確認し、同じ版への上書き公開は行いません。`projects list`と`thread create --project`、Desktopの所属登録、全フォルダと初回指示の照合を追加します。既存のruntime protocolとcapability契約はv1を維持します。
+`package.json`と`package-lock.json`の版を0.18.0に揃えています。0.17.0はnpm registryで公開済みであることを確認し、同じ版への上書き公開は行いません。`projects list`と`thread create --project`、Desktopの所属登録、全フォルダと初回指示の照合を追加します。既存のruntime protocolとcapability契約はv1を維持します。
 
 公開前に構文・全回帰・tarballとoffline install・npm/npx・publish dry-runを確認します。公開するファイルを固定する場合は、検証済みtarballのSHA-256を照合してから同じtarballを公開してください。PRのReady化やバージョン更新だけではnpmへ公開されません。
 

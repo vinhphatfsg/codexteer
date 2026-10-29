@@ -13,7 +13,21 @@
 - POSIXパスの大文字小文字を保持し、CLIの宛先はオプション値ではなく位置引数から選択します。監督の制御は登録時のtransportと一致する場合だけ受け付けます。
 - リモート作成の再照合失敗時は古い認定フラグを除去してreceiptへ記録します。実行RPCの内部エラーでは実行済みの可能性を保持し、resource leaseを解放しません。
 
-## 0.17.0 — 未公開
+## 0.18.0 — 未公開
+
+- Cloud監督の登録前診断と、初回配送の受付不明を共通履歴から照合・回復できるよう修正しました。本文・client IDが一致する保存証拠だけを採用し、自動再送は行いません。
+
+- Desktop Cloudの所属確認をdoctorへ追加し、プロジェクト一覧と環境一覧を分離しました。署名付きのthread assignは実環境・nonce・署名・保存結果を照合します。そのDesktop実行環境への結合が必要で、通常のCloud環境の拒否を成功扱いしたり別環境へ置き換えたりしません。作成後のタイトル設定・初回配送失敗時にも通常表示へ作成済みIDと復旧情報を残します。
+
+- Desktop Cloudの環境構成一覧・新規作成・継続送信・共通監視を追加しました。初回送信にも選択済み環境と遅延起動指定を保持します。環境選択とDesktopプロジェクト所属を区別し、所属登録が確認できない`--project`作成は事前拒否します。受付不明の自動再送は行いません。
+
+- Cloudの重複拒否で前回の試行IDを今回の配送履歴へ結び付けないよう修正しました。回復用IDを分離し、history checkは今回の本文・親ターンも照合して、拒否した指示の誤有効化を防ぎます。未公開の作成用--env別名も削除し、環境指定は--projectに統一しました。新規作成の本文がCloud ID/URLで始まっても、それを宛先と誤判定しません。
+
+- 共通Cloud観測で公開commentaryの途中経過を保持し、途中経過だけの更新でもMonitorへ通知します。reasoning等の非公開内容は除外し、`--backend app-server`を宛先より前に置く場合のCloud振り分けも修正しました。
+
+- Cloudタスクも共通の`supervise`・`read/watch`・`send`・`history/instructions/findings`で扱えます。監督の登録・pause/resume/stop・保存済みCLI・Monitorのdigestと復帰待ちを既存基盤へ接続し、実行中の指定ターンの中断と同一タスク内での継続、配送照合を追加しました。旧Desktop CLIとの記録互換性を保つCloud専用監督名前空間を使います。
+
+- Cloud環境・タスクの一覧と新規作成は`--connection cloud projects list`・`threads list`・`thread create`で扱います。作成試行は`thread receipt`、配送照合・予約回復は`history show/check --attempt`、試行を選ぶ差分取得は`diff --attempt`に統一しました。未公開の重複サブコマンドと専用のカーソル・watch処理を削除し、結果不明時の自動再送は行いません。公式CLIの診断は私有一時領域で処理し、ローカル差分を暗黙に送信・適用しません。
 
 - `projects list`と`thread create --project`を追加しました。プロジェクト名と初回指示だけで作成でき、既存チャット・`CODEX_THREAD_ID`・中継AIは不要です。App Serverで作成・Desktop購読・初回配送を行い、新規チャット自身の実在IDからnative RPCで所属登録し、全フォルダと初回指示を照合します。明示的な`--context-thread`は任意で、従来のnative直接作成を使います。配送不明・部分成功を保持し、自動再作成・再送を行いません。
 

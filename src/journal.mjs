@@ -1,6 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
+import { confirmDesktopCloudDelivery } from "./desktop-cloud.mjs";
+import { desktopCloudConnection } from "./desktop-cloud-api.mjs";
+import { createHash, randomUUID } from "node:crypto";
 import { sendAppServerMessage } from "./app-server.mjs";
-import { normalizeThreadId } from "./thread-id.mjs";
+import { normalizeTaskId, isCloudTask } from "./task-id.mjs";
+import { reconcileCloudSend } from "./cloud-observe.mjs";
 import { digest, fetchThread } from "./observe.mjs";
 import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
 import { discoverRuntime } from "./runtime.mjs";
@@ -10,7 +14,7 @@ import { prepareDirective } from "./directive.mjs";
 import { assertSupervisor, withSupervisedSend } from "./supervision.mjs";
 
 export async function getMessage(threadInput, id, options = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   const entry = await readRecord("messages", id, options);
   if (!entry || entry.thread_id !== threadId || entry.id !== id || entry.schema !== 1) throw new Error("Message record not found for this task.");
   return entry;
@@ -22,7 +26,7 @@ export function messageSummary(entry, includeText = false) {
 }
 
 export async function listMessages(threadInput, { includeText = false, pending = false, ...options } = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   return (await listRecords("messages", options)).filter(e => e?.thread_id === threadId && (!pending || !["applied", "dismissed"].includes(e.response?.status)))
     .sort((a, b) => a.created_at.localeCompare(b.created_at)).map(e => messageSummary(e, includeText));
 }
@@ -39,7 +43,7 @@ export function instructionStates(entries, now = Date.now()) {
 }
 
 export async function listInstructions(threadInput, { all = false, ...options } = {}) {
-  const threadId = normalizeThreadId(threadInput), entries = instructionStates(await listMessages(threadId, { ...options, includeText: true }));
+  const threadId = normalizeTaskId(threadInput), entries = instructionStates(await listMessages(threadId, { ...options, includeText: true }));
   return { thread_id: threadId, instructions: entries.filter(e => all || e.instruction_status === "active"), pending_changes: entries.filter(e => e.instruction_status === "pending_delivery") };
 }
 
@@ -53,7 +57,7 @@ async function validateReplacement(threadId, options, storage) {
 }
 
 export async function sendTrackedMessage(threadInput, body, options = {}, { send = sendAppServerMessage, ...storage } = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   if (options.supervisor && !options.basedOn) throw Object.assign(new Error("Supervised sends require --based-on from a completed read."), { code: "SUPERVISOR_OBSERVATION_REQUIRED" });
   if (options.supervisor && !options.finding && !options.retracts) throw Object.assign(new Error("Supervised sends require --finding so pending interventions can be tracked and deduplicated."), { code: "SUPERVISOR_FINDING_REQUIRED" });
   if (options.dryRun) {
@@ -80,6 +84,7 @@ export async function sendTrackedMessage(threadInput, body, options = {}, { send
       return { ...receipt, message_id: id };
     } catch (error) {
       entry = { ...entry, sent: Object.hasOwn(error, "sent") ? error.sent : error.uncertain ? null : false, delivery_status: error.delivery_status ?? (error.uncertain ? "unknown" : "not_sent"), attempt_state: "finished", updated_at: new Date().toISOString(), error_code: error.code ?? "NOT_SENT" };
+      if (isCloudTask(threadId)) Object.assign(entry, { cloud_attempt_id: error.cloud_attempt_id, cloud_parent_turn_id: error.cloud_parent_turn_id, existing_attempt_id: error.existing_attempt_id, existing_receipt_path: error.existing_receipt_path });
       try { await writeRecord("messages", id, entry, storage); } catch { error.journal_update_required = true; }
       error.client_message_id = id; error.message_id = id;
       error.delivery_status = entry.delivery_status; error.sent = entry.sent;
@@ -89,7 +94,29 @@ export async function sendTrackedMessage(threadInput, body, options = {}, { send
 }
 
 export async function reconcileMessages(threadInput, id, options = {}, { discover = discoverRuntime, connect = RpcClient.connect } = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
+  if (isCloudTask(threadId)) {
+    const entries = id ? [await getMessage(threadId, id, options)] : await listMessages(threadId, { ...options, includeText: true });
+    const result = [];
+    for (const entry of entries) {
+      const receipt = entry.cloud_attempt_id && entry.delivery_status !== "not_sent" ? await reconcileCloudSend(entry.cloud_attempt_id, {
+        taskId: threadId, expectedPromptSha256: createHash("sha256").update(entry.wire_text).digest("hex"), expectedParentTurnId: entry.cloud_parent_turn_id,
+      }) : null;
+      const verification = { status: receipt?.delivery_verification === "stored" ? "stored" : receipt?.delivery_verification === "conflict" ? "conflict" : "not_observed", checked_at: new Date().toISOString(),
+        matching_items: receipt?.delivery_verification === "stored" ? 1 : 0, turn_id: receipt?.user_turn_id ?? null, basis: "cloud-parent-and-prompt-digest" };
+      result.push(await withStoreLock(`message-${threadId}`, async () => {
+        const current = await getMessage(threadId, entry.id, options);
+        const updated = { ...current, verification, updated_at: verification.checked_at, ...(verification.status === "stored" ? { delivery_status: "accepted", sent: true, turn_id: verification.turn_id } : {}) };
+        await writeRecord("messages", entry.id, updated, options); return messageSummary(updated, options.includeText);
+      }, options));
+    }
+    return result;
+  }
+  if (isDesktopCloudTask(threadId)) {
+    const cloud = desktopCloudConnection();
+    if (discover === discoverRuntime) discover = cloud.discover;
+    if (connect === RpcClient.connect) connect = cloud.connect;
+  }
   // Validate the local target before connecting.
   if (id) await getMessage(threadId, id, options);
   const { paths, state } = await discover();
@@ -102,10 +129,11 @@ export async function reconcileMessages(threadInput, id, options = {}, { discove
       const items = thread.turns.flatMap(t => t.items.map(i => ({ ...i, turn_id: t.id })));
       const result = [];
       for (const entry of entries) {
-        const matches = items.filter(i => i.type === "userMessage" && i.clientId === entry.client_message_id);
+        const matches = items.filter(i => i.type === "userMessage" && (i.clientId === entry.client_message_id || (isDesktopCloudTask(threadId) && entry.delivery_status === "accepted" && entry.turn_id && i.turn_id === entry.turn_id && digest(i.content.filter(c => c.type === "text").map(c => c.text).join("\n")) === entry.message_sha256)));
         const matchingText = matches.length === 1 && digest(matches[0].content.filter(c => c.type === "text").map(c => c.text).join("\n")) === entry.message_sha256;
         const verification = { status: matchingText ? "stored" : matches.length ? "conflict" : "not_observed", checked_at: new Date().toISOString(), matching_items: matches.length };
         if (matchingText) Object.assign(verification, { item_id: matches[0].id, turn_id: matches[0].turn_id });
+        if (isDesktopCloudTask(threadId) && verification.status === "stored" && entry.delivery_status !== "not_sent") await confirmDesktopCloudDelivery(entry, verification, options);
         const updated = { ...entry, verification, updated_at: verification.checked_at, ...(matchingText ? { delivery_status: "accepted", sent: true, turn_id: matches[0].turn_id } : {}) };
         await writeRecord("messages", entry.id, updated, options);
         result.push(messageSummary(updated, options.includeText));
@@ -116,7 +144,7 @@ export async function reconcileMessages(threadInput, id, options = {}, { discove
 }
 
 export async function markMessage(threadInput, id, { status, note, evidence = [], by = "local", ...options }) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   if (!["acknowledged", "applied", "dismissed"].includes(status) || !note?.trim() || !by?.trim()) throw new Error("mark requires --status acknowledged|applied|dismissed and a non-empty --note.");
   if (status === "applied" && !evidence.length) throw new Error("applied requires --evidence (a test result, diff or artifact reference).");
   return withStoreLock(`message-${threadId}`, async () => {

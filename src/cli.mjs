@@ -34,25 +34,45 @@ function success(command, data, json) {
   return data;
 }
 
-function fail(error, json) {
+export function fail(error, json) {
   const message = error instanceof Error ? error.message : String(error);
   if (json) console.log(JSON.stringify({ ok: false, ...(error.watch ? { command: "watch", data: error.watch } : {}), error: {
     message, code: error.code, ...hostFields(), delivery_status: error.delivery_status,
     operation: error.operation, capability: error.capability,
+    ...((error.execution_environment === "cloud" || (typeof error.code === "string" && error.code.startsWith("CLOUD_"))) ? {
+      execution_environment: error.execution_environment, task_id: error.task_id, url: error.url,
+      submission_status: error.submission_status, uncertain: error.uncertain,
+      cli_exit_code: error.cli_exit_code, cli_signal: error.cli_signal,
+      http_status: error.http_status, retry_after_ms: error.retry_after_ms,
+    } : {}),
     sent: error.sent, thread_id: error.thread_id, rpc_code: error.rpc_code ?? error.rpcCode,
     message_id: error.message_id, client_message_id: error.client_message_id, journal_update_required: error.journal_update_required,
     existing_message_id: error.existing_message_id,
+    existing_attempt_id: error.existing_attempt_id, existing_receipt_path: error.existing_receipt_path,
     supervision_update_required: error.supervision_update_required,
     history_changed: error.history_changed, backup_path: error.backup_path, receipt_path: error.receipt_path,
     repair_stat: error.repair_stat,
     creation_status: error.creation_status, attempt_id: error.attempt_id, receipt_update_required: error.receipt_update_required,
+    reservation_cleanup_required: error.reservation_cleanup_required,
     native_call_id: error.native_call_id,
     uncertain: error.uncertain, resource: error.resource, lease_retained: error.lease_retained, remote_execution_status: error.remote_execution_status,
     remote_process_id: error.remote_process_id,
     verification_checks: error.verification_checks,
     remote_control_auth: error.remote_control_auth,
   } }));
-  else console.error(`codexteer: ${message}`);
+  else {
+    console.error(`codexteer: ${message}`);
+    if (error.execution_environment === "cloud" || (typeof error.code === "string" && error.code.startsWith("DESKTOP_CLOUD_"))) {
+      // Recovery metadata must survive an uncertain submission or a stale
+      // on-disk receipt. Never print the child error, prompt, or diagnostics.
+      for (const key of ["creation_status", "submission_status", "delivery_status", "attempt_id", "receipt_path", "existing_attempt_id", "existing_receipt_path", "task_id", "thread_id", "url"]) {
+        if (typeof error[key] === "string") console.error(`${key}: ${JSON.stringify(error[key])}`);
+      }
+      if (error.receipt_update_required) console.error("receipt_update_required: true");
+      if (error.reservation_cleanup_required) console.error("reservation_cleanup_required: true");
+      if (Number.isSafeInteger(error.retry_after_ms)) console.error(`retry_after_ms: ${error.retry_after_ms}`);
+    }
+  }
   process.exitCode = 1;
 }
 

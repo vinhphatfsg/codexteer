@@ -2,7 +2,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { prepareCodexHome } from "./distribution.mjs";
-import { normalizeThreadId, parseThreadTarget } from "./thread-id.mjs";
+import { parseThreadTarget } from "./thread-id.mjs";
+import { normalizeTaskId, taskConnection } from "./task-id.mjs";
 import { codexHome } from "./runtime.mjs";
 import { supervisorPrompt as pathSupervisorPrompt, validateSupervisionPolicy } from "./prompt.mjs";
 import { registerSupervisor, controlSupervisor } from "./supervision.mjs";
@@ -14,7 +15,8 @@ import { targetHost, targetContext, hostFields, remoteTransport } from "./target
 export { SUPERVISOR_AGENTS };
 
 export async function prepareSupervisorPrompt(threadInput, policy, { agent = "claude", connection = "shared", usePathCli = false } = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
+  connection = taskConnection(threadId, connection);
   validateSupervisionPolicy(policy);
   connectionMode(connection);
   if (!SUPERVISOR_AGENTS.includes(agent)) throw new Error("--agent must be claude or codex.");
@@ -41,7 +43,7 @@ export async function prepareSupervisorPrompt(threadInput, policy, { agent = "cl
 export async function superviseAgent(threadInput, { agent = "claude", agentArgs = [], policy, connection = "shared", usePathCli = false } = {}) {
   const { prompt, thread_id: threadId, supervisor, deployment } = await prepareSupervisorPrompt(threadInput, policy, { agent, connection, usePathCli });
   const storage = { home: deployment?.codex_home ?? await prepareCodexHome(codexHome()) };
-  await registerSupervisor(threadId, supervisor.session_id, { ...storage, owner: agent, launcherPid: process.pid, connection });
+  await registerSupervisor(threadId, supervisor.session_id, { ...storage, owner: agent, launcherPid: process.pid, connection: supervisor.connection });
   try { return await launchAgent(agent, agentArgs, prompt); }
   finally {
     try { await controlSupervisor(threadId, "stop", { ...storage, expectedSession: supervisor.session_id }); }

@@ -1,6 +1,9 @@
+import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
+import { desktopCloudConnection } from "./desktop-cloud-api.mjs";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { normalizeThreadId } from "./thread-id.mjs";
+import { normalizeTaskId, isCloudTask, taskConnection } from "./task-id.mjs";
+import { cloudConnection } from "./cloud-connection.mjs";
 import { discoverRuntime } from "./runtime.mjs";
 import { RpcClient, RpcFailure } from "./rpc.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
@@ -49,6 +52,7 @@ export function project(item, turnId) {
     event.attachments = (item.content ?? []).filter(x => x.type !== "text").map(x => ({ type: x.type, path: x.path ?? null, url: x.url ?? null }));
   } else if (item.type === "agentMessage" || item.type === "plan") {
     event.text = item.text; event.phase = item.phase ?? null;
+    if (typeof item.status === "string") event.status = item.status;
     if (item.questions) event.questions = item.questions;
   } else if (item.type === "commandExecution") {
     Object.assign(event, { command: item.command, cwd: item.cwd, status: item.status, exit_code: item.exitCode ?? null, output: item.aggregatedOutput ?? "" });
@@ -156,7 +160,13 @@ export async function readOnClient(client, threadId, options = {}) {
 }
 
 export async function observeThread(threadInput, options = {}, { discover = discoverRuntime, connect = RpcClient.connect, sleep = delay, now = () => performance.now() } = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
+  if (isCloudTask(threadId) || isDesktopCloudTask(threadId)) {
+    options = { ...options, connection: taskConnection(threadId, options.connection) };
+    const cloud = isDesktopCloudTask(threadId) ? desktopCloudConnection() : cloudConnection();
+    if (discover === discoverRuntime) discover = cloud.discover;
+    if (connect === RpcClient.connect) connect = cloud.connect;
+  }
   if (options.supervisor) await assertSupervisor(threadId, options.supervisor, { connection: options.connection });
   if (options.since) decodeCursor(options.since, threadId);
   let client;

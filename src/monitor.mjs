@@ -1,5 +1,8 @@
+import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
+import { desktopCloudConnection } from "./desktop-cloud-api.mjs";
 import { setTimeout as delay } from "node:timers/promises";
-import { normalizeThreadId } from "./thread-id.mjs";
+import { normalizeTaskId, isCloudTask, taskConnection } from "./task-id.mjs";
+import { cloudConnection } from "./cloud-connection.mjs";
 import { codexHome, discoverRuntime } from "./runtime.mjs";
 import { RpcClient } from "./rpc.mjs";
 import { decodeCursor, digest, readOnClient } from "./observe.mjs";
@@ -14,7 +17,13 @@ const needsReview = new Set(["STALE_CURSOR", "CURSOR_UPGRADE_REQUIRED", "OBSERVA
 // The consumer owns the watch lifetime. A flushed cursor is a transport boundary,
 // not an acknowledgement that a supervising AI has read or acted on the output.
 export async function streamThread(threadInput, options, onChange, { discover = discoverRuntime, connect = RpcClient.connect, sleep = delay, now = () => performance.now() } = {}) {
-  const threadId = normalizeThreadId(threadInput), { signal, pollMs = 1000, reconnectTimeoutMs = 60000 } = options;
+  const threadId = normalizeTaskId(threadInput), { signal, pollMs = 1000, reconnectTimeoutMs = 60000 } = options;
+  if (isCloudTask(threadId) || isDesktopCloudTask(threadId)) {
+    options = { ...options, connection: taskConnection(threadId, options.connection) };
+    const cloud = isDesktopCloudTask(threadId) ? desktopCloudConnection() : cloudConnection();
+    if (discover === discoverRuntime) discover = cloud.discover;
+    if (connect === RpcClient.connect) connect = cloud.connect;
+  }
   if (!Number.isInteger(pollMs) || pollMs < 250 || pollMs > 10000) throw new Error("--poll-ms must be between 250 and 10000.");
   if (!Number.isInteger(reconnectTimeoutMs) || reconnectTimeoutMs < 1 || reconnectTimeoutMs > 60000) throw new Error("Invalid reconnect timeout.");
   const notification = notificationOptions(options);
@@ -29,7 +38,7 @@ export async function streamThread(threadInput, options, onChange, { discover = 
     last_observed_at: lastObservedAt, observed_at: new Date().toISOString(), reconnect_attempts: attempts, ...extra,
   });
   const expired = () => Object.assign(new Error("Watch could not restore observation within the reconnect deadline. Check doctor before restarting from a reviewed cursor."), {
-    code: "WATCH_RECONNECT_TIMEOUT", cause_code: lastFailure?.code,
+    code: "WATCH_RECONNECT_TIMEOUT", cause_code: lastFailure?.cause_code ?? lastFailure?.code,
   });
   const cancel = () => { attempt?.abort(new Error("Watch cancelled.")); client?.close(); };
   signal?.addEventListener("abort", cancel, { once: true });
@@ -80,9 +89,11 @@ export async function streamThread(threadInput, options, onChange, { discover = 
         if (outageStarted === null) {
           outageStarted = now(); attempts = 0; backoff = 1000;
           await flush("reconnecting");
-          await onChange(connection("reconnecting", { cause_code: error.code, retry_timeout_ms: reconnectTimeoutMs }));
+          await onChange(connection("reconnecting", { cause_code: error.cause_code ?? error.code, retry_timeout_ms: reconnectTimeoutMs,
+            ...(error.retry_after_ms === undefined ? {} : { retry_after_ms: error.retry_after_ms }) }));
         }
-        await sleep(Math.max(0, Math.min(backoff, reconnectTimeoutMs - (now() - outageStarted))), undefined, { signal });
+        const retryAfter = Number.isSafeInteger(error.retry_after_ms) && error.retry_after_ms > 0 ? error.retry_after_ms : 0;
+        await sleep(Math.max(0, Math.min(Math.max(backoff, retryAfter), reconnectTimeoutMs - (now() - outageStarted))), undefined, { signal });
         if (now() - outageStarted >= reconnectTimeoutMs) throw expired();
         backoff = Math.min(backoff * 2, 10000); attempts++;
         continue;

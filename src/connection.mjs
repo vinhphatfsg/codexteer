@@ -1,3 +1,5 @@
+import { desktopCloudConnection } from "./desktop-cloud-api.mjs";
+import { cloudConnection } from "./cloud-connection.mjs";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { codexHome } from "./runtime.mjs";
@@ -10,7 +12,7 @@ import { remoteControlConnection } from "./remote-control.mjs";
 const failure = (message, code) => Object.assign(new Error(message), { code });
 const reads = new Set(["thread/loaded/list", "thread/read", "thread/turns/list", "thread/items/list"]);
 export function connectionMode(value = "shared") {
-  if (!["shared", "desktop"].includes(value)) throw new Error("--connection must be shared or desktop.");
+  if (!["shared", "desktop", "cloud", "desktop-cloud"].includes(value)) throw new Error("--connection must be shared, desktop, cloud, or desktop-cloud.");
   return value;
 }
 export function desktopReadOnly() {
@@ -104,6 +106,8 @@ export function observationConnection(mode) {
     return isControlTransport() ? remoteControlConnection() : remoteObservationConnection();
   }
   if (connectionMode(mode) === "shared") return {};
+  if (mode === "desktop-cloud") return desktopCloudConnection();
+  if (mode === "cloud") return cloudConnection();
   let selected;
   return {
     async discover(home) {

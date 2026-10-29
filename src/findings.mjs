@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { normalizeThreadId } from "./thread-id.mjs";
+import { normalizeTaskId } from "./task-id.mjs";
 import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
 import { collectEvidence } from "./evidence.mjs";
 import { decodeCursor, digest } from "./observe.mjs";
@@ -16,7 +16,7 @@ const text = (value, label, max = 8000) => {
 const contextHash = record => digest({ condition: record.condition, evidence: record.evidence });
 
 export async function getFinding(threadInput, id, storage = {}) {
-  const threadId = normalizeThreadId(threadInput), record = await readRecord("findings", id, storage);
+  const threadId = normalizeTaskId(threadInput), record = await readRecord("findings", id, storage);
   if (!record || record.schema !== 1 || record.id !== id || record.thread_id !== threadId) throw failure("Finding not found for this task.", "FINDING_NOT_FOUND");
   if (!Number.isSafeInteger(record.revision) || record.revision < 1 || !["open", "resolved", "dismissed"].includes(record.disposition)
     || !Array.isArray(record.evidence) || typeof record.condition !== "string" || !ratings.includes(record.evaluation?.rating)) throw failure("Invalid finding record.", "FINDING_INVALID");
@@ -30,7 +30,7 @@ export async function findingMessages(record, storage = {}) {
 }
 
 export async function createFinding(threadInput, { key, title, condition, evidence = [], basedOn, ...storage }) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   if (typeof key !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,150}$/.test(key)) throw failure("--key requires a stable short identifier for this concern.", "FINDING_INVALID");
   text(title, "--title", 240); text(condition, "--condition");
   const refs = await collectEvidence(evidence), observed = basedOn ? decodeCursor(basedOn, threadId) : null;
@@ -77,7 +77,7 @@ export async function findingStatus(threadInput, id, storage = {}) {
 }
 
 export async function listFindings(threadInput, { all = false, limit = 50, ...storage } = {}) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw failure("--limit must be between 1 and 1000.", "FINDING_INVALID");
   const records = (await listRecords("findings", storage)).filter(record => record?.thread_id === threadId).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   // Recheck closed resolutions too: changed inputs make them unresolved again.
@@ -90,7 +90,7 @@ export async function listFindings(threadInput, { all = false, limit = 50, ...st
 }
 
 async function changeFinding(threadInput, id, update, storage) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   return withStoreLock(`message-${threadId}`, async () => {
     const record = await getFinding(threadId, id, storage);
     const updated = { ...await update(record), updated_at: new Date().toISOString() };
@@ -124,7 +124,7 @@ export async function dismissFinding(threadInput, id, { reason, ...storage }) {
 }
 
 export async function reopenFinding(threadInput, id, { reason, evidence, basedOn, condition, ...storage }) {
-  const threadId = normalizeThreadId(threadInput);
+  const threadId = normalizeTaskId(threadInput);
   text(reason, "--reason"); if (condition !== undefined) text(condition, "--condition");
   const refs = evidence === undefined ? undefined : await collectEvidence(evidence);
   const observed = basedOn === undefined ? undefined : decodeCursor(basedOn, threadId);
@@ -145,7 +145,7 @@ export async function evaluateFinding(threadInput, id, { rating, reason, ...stor
 }
 
 export async function findingStats(threadInput, storage = {}) {
-  const threadId = normalizeThreadId(threadInput), records = (await listRecords("findings", storage)).filter(record => record?.thread_id === threadId);
+  const threadId = normalizeTaskId(threadInput), records = (await listRecords("findings", storage)).filter(record => record?.thread_id === threadId);
   const counts = Object.fromEntries(ratings.map(rating => [rating, 0]));
   let sent = 0;
   for (const entry of records) {

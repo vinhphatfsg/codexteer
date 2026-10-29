@@ -23,7 +23,7 @@ test("resource run holds and renews the lease, releases it on command failure", 
   const f = await fixture(t);
   const running = runWithResource("unity", [process.execPath, "-e", "setTimeout(()=>process.exit(3),1500)"], { ...f, owner: "codex", ttlMs: 1000 });
   await new Promise(r => setTimeout(r, 100));
-  await assert.rejects(acquireResource("unity", { ...f, owner: "claude-code" }), /held/);
+  await assert.rejects(acquireResource("unity", { ...f, owner: "claude-code" }), error => ["RESOURCE_BUSY", "RECORD_BUSY"].includes(error.code));
   await new Promise(r => setTimeout(r, 1100));
   assert.equal((await resourceStatus("unity", f)).state, "held");
   const result = await running;
