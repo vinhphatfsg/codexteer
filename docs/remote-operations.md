@@ -20,11 +20,11 @@
 | `checkpoint run`・`resource run` | defaultは接続先の`command/exec`。明示的な`thread-shell`にも対応（下記）。Macでは実行しない |
 | resourceの取得・更新・解放・一覧 | ホスト別の協調記録。OSの排他制御を作るものではない |
 | `open` | 制御側Desktopで指定したリモートチャットを表示 |
-| `desktop start`・`debug-ui` | Macの起動/Accessibility用で接続先へは未対応。ローカルで誤実行せず`REMOTE_HOST_OPERATION_UNSUPPORTED`。この版に`desktop update/update-status`はない |
-| `thread repair` | この版にはローカル修復機能もない。リモート指定は`REMOTE_REPAIR_UNSUPPORTED`で明示拒否し、保存履歴やDBを変更しない |
+| `desktop start/update/update-status`・`debug-ui` | Macの起動/更新/Accessibility用で接続先へは未対応。ローカルで誤実行せず`REMOTE_HOST_OPERATION_UNSUPPORTED` |
+| `thread repair` | 修復機能はローカル専用。リモート指定は`REMOTE_REPAIR_UNSUPPORTED`で明示拒否し、保存履歴やDBを変更しない |
 | `--backend ui` | 接続先のUI送信は未対応。明示的に拒否する |
 
-Macの起動・AccessibilityはWindowsの接続先へ提供していません。オフライン履歴修復はこの版のCLI機能に含まれません。上表は実装範囲であり、接続先APIが全操作を許可する保証でもありません。
+Macの起動・更新・Accessibilityとオフライン履歴修復は、リモート接続先へ提供していません。上表は実装範囲であり、接続先APIが全操作を許可する保証でもありません。
 
 ## 一覧と作成
 

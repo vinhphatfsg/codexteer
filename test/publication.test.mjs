@@ -47,5 +47,5 @@ test("public package excludes investigation records and local credentials or rep
   const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert(pkg.files.every(file => !/investigation|\.codex-reports|auth\.json|\.env|\.npmrc/.test(file)));
   const ignore = await readFile(new URL("../.gitignore", import.meta.url), "utf8");
-  for (const entry of [".codex-reports/", "auth.json", ".codex-global-state.json", ".env", ".npmrc"]) assert(ignore.split("\n").includes(entry));
+  for (const entry of [".codex-reports/", ".local-private/", "auth.json", ".codex-global-state.json", ".env", ".npmrc"]) assert(ignore.split("\n").includes(entry));
 });
