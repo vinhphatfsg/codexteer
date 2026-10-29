@@ -203,7 +203,7 @@ export const topics = {
     title: "Desktop Cloud",
     summary: "DesktopのCloud環境構成にCLI単体で接続します。",
     usage: ["--connection desktop-cloud environments list", "--connection desktop-cloud threads list [--limit 1..100] [--cursor CURSOR]", "--connection desktop-cloud thread create --environment ID_OR_EXACT_NAME [--title TEXT] [--dry-run] <MESSAGE...>|-", "read|status|watch <DURABLE_ID|HOST_LINK> ...", "send <DURABLE_ID|HOST_LINK> <MESSAGE...>|- [--new-turn]", "supervise [prompt] <DURABLE_ID|HOST_LINK> [POLICY]", "--connection desktop-cloud thread receipt <ATTEMPT_ID>"],
-    examples: ["codexteer --connection desktop-cloud environments list --json", "codexteer --connection desktop-cloud thread create --environment example-config '接続を確認してください' --json", "codexteer read 'codex://threads/00000000-0000-4000-8000-000000000001?hostId=durable' --json"],
+    examples: ["codexteer --connection desktop-cloud environments list --json", "codexteer --connection desktop-cloud thread create --environment example-config '接続を確認してください' --json", "codexteer read 'codex://threads/aaaaaaaa-aaaa-4aaa-8aaa-000000000001?hostId=durable' --json"],
     notes: ["Web側Cloudのtask ID・環境一覧とは別のサービスです。durable_付きIDまたはhostId=durable付きリンクで接続先を保持します。裸のUUIDからCloud宛先は推測しません。",
       "初回・継続送信は選択済み環境と遅延起動指定を保持します。既存のCLIログインをメモリ内で認証に利用し、Desktopの起動・UI操作は不要です。",
       "環境とDesktopプロジェクト所属は別です。公式APIで安全に所属を登録できないため、--projectは作成前に拒否します。--environmentだけの作成結果はproject_membership:not_requestedです。",

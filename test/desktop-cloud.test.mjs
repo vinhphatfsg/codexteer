@@ -12,7 +12,7 @@ import { createDesktopCloudTask, sendDesktopCloudInput, desktopCloudReceipt } fr
 import { RpcFailure } from "../src/rpc.mjs";
 import { readSnapshot, fetchThread } from "../src/observe.mjs";
 import { registerSupervisor, controlSupervisor, assertSupervisor, listSupervisors } from "../src/supervision.mjs";
-const uuid = "00000000-0000-4000-8000-000000000001", id = `durable_${uuid}`, config = "fixture~asenvcfg_example", turn = "fixture-turn";
+const uuid = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001", id = `durable_${uuid}`, config = "fixture~asenvcfg_example", turn = "fixture-turn";
 async function profile(t) { const home = await mkdtemp(path.join(tmpdir(), "desktop-cloud-test-")); t.after(() => rm(home, { recursive: true, force: true })); return { home }; }
 const metadata = () => ({ id, turns: [], status: { type: "idle" }, historyMode: "aggregate", environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config, cwd: "/workspace" }] });
 const client = (calls, fail) => ({ close() {}, async request(method, params) {
@@ -26,7 +26,7 @@ const client = (calls, fail) => ({ close() {}, async request(method, params) {
 } });
 test("durable identity cannot reach a local or Web Cloud backend and prompt text never selects it", () => {
   assert.equal(normalizeTaskId(desktopCloudLink(id)), id); assert.equal(desktopCloudUuid(id), uuid);
-  assert.equal(taskConnection(id), "desktop-cloud"); assert.throws(() => desktopCloudId(uuid)); assert.throws(() => taskConnection(id, "cloud")); assert.throws(() => taskConnection(uuid, "desktop-cloud"));
+  assert.equal(taskConnection(id), "desktop-cloud"); assert.throws(() => desktopCloudId(desktopCloudLink(id) + "&hostId=local")); assert.throws(() => desktopCloudId(uuid)); assert.throws(() => taskConnection(id, "cloud")); assert.throws(() => taskConnection(uuid, "desktop-cloud"));
   assert(cloudInvocation(["read", desktopCloudLink(id)])); assert(!cloudInvocation(["send", uuid, desktopCloudLink(id)]));
   assert(!cloudInvocation(["thread", "create", "--project", "fixture", id])); assert(cloudInvocation(["--connection", "desktop-cloud", "environments", "list"]));
 });
@@ -83,7 +83,7 @@ test("unknown delivery survives exit, blocks subsequent sends, and creation reta
   assert.equal(calls.filter(c => c.method === "turn/start").length, 1);
 });
 test("common supervisor pause/stop and backend separation apply to durable tasks", async t => {
-  const storage = await profile(t), session = "00000000-0000-4000-8000-000000000002";
+  const storage = await profile(t), session = "aaaaaaaa-aaaa-4aaa-8aaa-000000000002";
   await registerSupervisor(id, session, { ...storage, connection: "desktop-cloud" });
   assert.equal((await listSupervisors(storage))[0].thread_id, id);
   await controlSupervisor(id, "pause", storage);
@@ -101,7 +101,7 @@ test("supervisor prompts retain Cloud scope without Web interrupt semantics", as
 
 test("history reconciles an accepted message among several users in the same turn but never guesses an unknown turn", async t => {
   const { writeRecord, readRecord } = await import("../src/store.mjs"), { reconcileMessages } = await import("../src/journal.mjs"), { digest } = await import("../src/observe.mjs");
-  const storage = await profile(t), messageId = "00000000-0000-4000-8000-000000000003";
+  const storage = await profile(t), messageId = "aaaaaaaa-aaaa-4aaa-8aaa-000000000003";
   const entry = { schema: 1, id: messageId, client_message_id: messageId, thread_id: id, delivery_status: "accepted", turn_id: turn, wire_text: "intended", message_sha256: digest("intended") };
   await writeRecord("messages", messageId, entry, storage);
   const thread = { ...metadata(), turns: [{ id: turn, status: "completed", items: ["original", "intended"].map((text, i) => ({ type: "userMessage", id: `item-${i}`, clientId: null, content: [{ type: "text", text }] })) }] };

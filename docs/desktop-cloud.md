@@ -5,8 +5,8 @@ Desktop Cloud environment configurations use a different service from Web Cloud 
 ```sh
 codexteer --connection desktop-cloud environments list --json
 codexteer --connection desktop-cloud thread create --environment example-config 'Verify the connection without changing files' --json
-codexteer read 'codex://threads/00000000-0000-4000-8000-000000000001?hostId=durable' --include-output --json
-codexteer send durable_00000000-0000-4000-8000-000000000001 'Continue the verification' --new-turn --json
+codexteer read 'codex://threads/aaaaaaaa-aaaa-4aaa-8aaa-000000000001?hostId=durable' --include-output --json
+codexteer send durable_aaaaaaaa-aaaa-4aaa-8aaa-000000000001 'Continue the verification' --new-turn --json
 ```
 
 Authentication comes from the official CLI getAuthStatus API into memory. No credential files are read, no token is printed or persisted, no Desktop UI bridge is used, and no alternate endpoint is selected after failure. WebSocket authentication uses the service's bearer subprotocol; transport exceptions must not expose that subprotocol. Reads and writes are bounded. No approval requests are answered automatically.
