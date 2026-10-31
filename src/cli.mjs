@@ -15,7 +15,7 @@ import { acquireResource, resourceStatus, renewResource, releaseResource, listRe
 import { playSendSound } from "./sound.mjs";
 import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
 import { prepareOrchestrationPrompt, orchestrateAgent } from "./orchestrate.mjs";
-import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
+import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, assertSupervisorRegistration, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
 import { connectionMode, observationConnection, desktopReadOnly } from "./connection.mjs";
 import { repairTurns } from "./turn-repair.mjs";
@@ -141,7 +141,7 @@ function printThreads(threads) {
 function printSupervisor(data) {
   if (Array.isArray(data)) {
     if (!data.length) console.log("No supervisor sessions registered.");
-    for (const entry of data) console.log(`${entry.thread_id}  ${entry.state}  ${entry.owner}  ${entry.connection}  observed:${entry.observation?.last_observed_at ?? "none"}`);
+    for (const entry of data) console.log(`${entry.thread_id}  ${entry.state}  ${entry.owner}  ${entry.connection}  observed:${entry.observation?.last_observed_at ?? "none"}${entry.session_conflict ? `  session-conflict:${entry.session_conflict.thread_ids.join(",")}` : ""}${entry.observation_error ? `  observation-error:${entry.observation_error.code}` : ""}`);
     return;
   }
   console.log(`${data.thread_id}  ${data.state}${data.owner ? `  ${data.owner}  ${data.connection}` : ""}`);
@@ -459,11 +459,7 @@ async function mainOnTarget(argv) {
       const target = takeOption(args, "--thread", undefined);
       if (target !== undefined && backend !== "app-server") throw new Error("doctor --thread requires --backend app-server.");
       const threadId = target === undefined ? undefined : normalizeThreadId(target);
-      if (supervisor && threadId) {
-        const record = await getSupervisor(threadId);
-        if (record && record.session_id !== supervisor && record.state !== "stopped") throw Object.assign(new Error("Another supervisor is registered for this task."), { code: "SUPERVISOR_CONFLICT" });
-        if (record?.session_id === supervisor) await assertSupervisor(threadId, supervisor, { connection });
-      }
+      if (supervisor && threadId) await assertSupervisorRegistration(threadId, supervisor, { connection });
       if (args.length) throw new Error(`Unexpected argument: ${args[0]}`);
       if (targetHost() !== "local" && backend === "ui") throw remoteReadOnly();
       const report = backend === "ui" ? desktopDoctor() : await appServerDoctor({ threadId, ...connectionDependencies });

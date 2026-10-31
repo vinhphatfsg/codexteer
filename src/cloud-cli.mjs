@@ -10,7 +10,7 @@ import { observeThread, printObservation } from "./observe.mjs";
 import { monitorCommand } from "./monitor.mjs";
 import { notificationOptions } from "./notify.mjs";
 import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
-import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
+import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, assertSupervisorRegistration, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
 import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, listInstructions } from "./journal.mjs";
 import { createCloudTask, cloudTaskDiff, listCloudTasks, cloudCreationReceipt } from "./cloud.mjs";
@@ -84,9 +84,8 @@ export async function mainCloud(argv) {
   const bound = async (target, { allowUnregistered = false } = {}) => {
     const id = targetId(target);
     if (supervisor) {
-      const record = allowUnregistered ? await getSupervisor(id) : null;
-      if (!allowUnregistered || record?.session_id === supervisor) await assertSupervisor(id, supervisor, { connection });
-      else if (record && record.state !== "stopped") throw failure("Another supervisor owns this cloud task.", "SUPERVISOR_CONFLICT");
+      if (allowUnregistered) await assertSupervisorRegistration(id, supervisor, { connection });
+      else await assertSupervisor(id, supervisor, { connection });
     }
     return id;
   };
