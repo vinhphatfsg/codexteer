@@ -1,0 +1,37 @@
+{
+  "sync_commit": "dcc2f34f21b94e205e5f80bc63e4b2b4dbc1f143",
+  "covered": [
+    {
+      "file": "src/store.mjs",
+      "function": "withStoreLock"
+    },
+    {
+      "file": "src/store.mjs",
+      "function": "withRecordLock"
+    },
+    {
+      "file": "src/runtime.mjs",
+      "function": "isAlive"
+    },
+    {
+      "file": "src/store.mjs",
+      "function": "readRecord"
+    },
+    {
+      "file": "src/store.mjs",
+      "function": "directory"
+    },
+    {
+      "file": "src/store.mjs",
+      "function": "owned"
+    }
+  ],
+  "fingerprints": {
+    "src/store.mjs#withStoreLock": "42d9d121fccfb4574c9ed4e22d1204b22650fc934a75971b05cd93fa09a8183c",
+    "src/store.mjs#withRecordLock": "af2b01942cb11cbc31021a6ef3b2e2a22ced58c6246d8daf58a379a9e81414f1",
+    "src/runtime.mjs#isAlive": "1c5ea7711d8b34288a1b94d9150fc9681a13abc44d941e6a48644c95d45a8e7a",
+    "src/store.mjs#readRecord": "947f5a5dab291ac9748e3c61d19d1ef1b4b0f8be1ff78dc7c94ab30a6294a6d5",
+    "src/store.mjs#directory": "c6500208b5ecd849d8a5000ccef5651164cf34a466cb7043f6bcb4e8acccb3b6",
+    "src/store.mjs#owned": "4e0d25cbb1f86b051cc784a37bfe55b65c8277b9ab2db7175b86de6965dcac66"
+  }
+}
