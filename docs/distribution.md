@@ -2,6 +2,9 @@
 
 パッケージ名は `codexteer`、CLI名は `codexteer`、ライセンスはMITです。
 旧npmパッケージは`@vinhphatfsg/codex-steer`です。リモート操作・Cloud対応・Desktop更新・オフライン履歴修復を含む[`codexteer@0.18.0`](https://www.npmjs.com/package/codexteer/v/0.18.0)は2026-10-29にnpmへ公開済みです。GitHubのPR作成・マージはnpm公開を行う操作ではありません。次の版を公開する際も`npm whoami`でnpm側のユーザーを確認してください。
+
+`0.18.1`は、保持者と回収者の連続クラッシュでローカルロックが永久に`RECORD_BUSY`になる問題を修正します。更新前に、同じ`CODEX_HOME`を使う旧版CLIの操作と、保存済み旧CLIで動く監督を終了してください。旧版と修正版の回収方式の混在は非対応です。旧`.recover`ディレクトリは修正版では無視されます。監督は更新後のCLIで起動し直すか、プロンプトを生成し直してください。
+
 `package.json` は `private` を持たず、`publishConfig` でnpm公式レジストリへのpublic公開を指定しています。公開可能な設定であることと、実際に公開済みであることは別です。
 
 公開後の基本的な実行形式は次のとおりです。通常はバージョン指定なしで使えます。監督開始後は保存したCLIを使い続けるため、監督中の一貫性を保つために版を明示する必要はありません。起動側と操作側の製品バージョンも、必要な通信仕様が対応していれば異なっていても使えます。
@@ -220,7 +223,7 @@ npx -y codexteer@0.18.0 --version
 
 ## 0.18.0の公開結果
 
-`package.json`と`package-lock.json`の版は0.18.0です。npm registryの`latest`も0.18.0で、公開tarballが事前検証したファイルと同一であることを確認しました。0.18.0にはリモート操作・Cloud対応・Desktop更新・オフライン履歴修復を含みます。`projects list`と`thread create --project`によるDesktopのチャット作成は0.17.0から利用できます。既存のruntime protocolとcapability契約はv1を維持します。
+0.18.0公開時の`package.json`と`package-lock.json`の版、およびnpm registryの`latest`は0.18.0でした。公開tarballが事前検証したファイルと同一であることを確認しました。0.18.0にはリモート操作・Cloud対応・Desktop更新・オフライン履歴修復を含みます。`projects list`と`thread create --project`によるDesktopのチャット作成は0.17.0から利用できます。既存のruntime protocolとcapability契約はv1を維持します。
 
 公開前に構文・全回帰・tarballとoffline install・npm/npx・publish dry-runを検証しました。公開対象119ファイルの内部情報・シークレット検査と依存脆弱性監査で検出は0件でした。公開後はregistryから取得したtarballのSHA-256一致と、隔離キャッシュからのCLI起動を確認しました。次の版でも検証済みtarballを固定して公開してください。PRのReady化やバージョン更新だけではnpmへ公開されません。
 

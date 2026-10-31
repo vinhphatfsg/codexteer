@@ -13,3 +13,6 @@ auth.json
 *.pem
 *.key
 *.log
+
+# Local verification skill; keep its files untracked.
+/.claude/skills/verify-codexteer/
