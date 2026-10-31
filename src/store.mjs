@@ -1,5 +1,5 @@
 import { lstat, mkdir, readFile, writeFile, rename, rm, readdir, link } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { codexHome, isAlive } from "./runtime.mjs";
 import { hostNamespace, hostFields } from "./target.mjs";
@@ -51,22 +51,31 @@ export async function listRecords(bucket, options = {}) {
 }
 
 export async function withStoreLock(key, fn, { home = codexHome() } = {}) {
-  await directory("locks", home, true);
-  const file = storePath("locks", key, home), token = randomUUID(), temp = `${file}.${token}.tmp`;
+  return withRecordLock("locks", key, fn, { home });
+}
+
+async function withRecordLock(bucket, key, fn, { home }) {
+  await directory(bucket, home, true);
+  const file = storePath(bucket, key, home), token = randomUUID(), temp = `${file}.${token}.tmp`;
   await writeFile(temp, JSON.stringify({ token, pid: process.pid }), { mode: 0o600, flag: "wx" });
   let acquired = false;
   let outcome;
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
       try { await link(temp, file); acquired = true; break; } catch (e) { if (e.code !== "EEXIST") throw e; }
-      const old = await readRecord("locks", key, { home });
+      const old = await readRecord(bucket, key, { home });
       if (old && !isAlive(old.pid)) {
-        const recovery = `${file}.recover`;
-        try { await mkdir(recovery, { mode: 0o700 }); } catch (e) { if (e.code !== "EEXIST") throw e; break; }
-        try {
-          const current = await readRecord("locks", key, { home });
+        // Serialize deletion of this generation, including recovery of a crashed
+        // recoverer. Each nested lock has an atomically published PID + token.
+        // A finite chain of dead owners ends at an absent recovery lock.
+        // Legacy .recover directories have no owner and are unsupported/inert.
+        // Stop all old-version operations (including saved supervisor CLIs)
+        // sharing this CODEX_HOME before using this recovery protocol.
+        const recoveryKey = createHash("sha256").update(String(old.token)).digest("hex");
+        await withRecordLock("lock-recovery", recoveryKey, async () => {
+          const current = await readRecord(bucket, key, { home });
           if (current?.token === old.token && !isAlive(current.pid)) await rm(file);
-        } finally { await rm(recovery, { recursive: true }); }
+        }, { home });
       } else break;
     }
     if (!acquired) throw Object.assign(new Error("Another operation owns this local record. Retry after it finishes."), { code: "RECORD_BUSY" });
@@ -74,7 +83,7 @@ export async function withStoreLock(key, fn, { home = codexHome() } = {}) {
     return outcome;
   } finally {
     try {
-      if (acquired && (await readRecord("locks", key, { home }))?.token === token) await rm(file);
+      if (acquired && (await readRecord(bucket, key, { home }))?.token === token) await rm(file);
       await rm(temp, { force: true });
     } catch { if (outcome && typeof outcome === "object") outcome.state_cleanup_required = true; }
   }
