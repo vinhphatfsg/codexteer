@@ -86,19 +86,21 @@ RESULT: as expected
 
 The four additional regression tests use temporary homes. They exercise the supplied legacy F1 state; a live holder; a real live recovery child, including a home symlink alias, followed by SIGKILL and automatic recovery; three successive recovery-owner SIGKILLs and concurrent callers. The complete suite uses a fresh `/tmp/store-lock-test-home-*` CODEX_HOME. Local socket/watch access requires running the suite outside the restrictive sandbox. A `/private/tmp` spelling of the environment path tripped an existing Cloud error-redaction test's literal `private` assertion; using its `/tmp` alias resolves the test-environment collision without changing that unrelated test.
 
-## Supplied F1 reproduction (complete)
+## Supplied F1 reproduction (local paths redacted)
+
+The local scratch directory and generated home are shown as placeholders.
 
 Command:
 
 ```sh
-node /private/tmp/claude-501/-Users-phat-work-codex-steer/3772bc30-3ca6-44a3-904a-145bb1398502/scratchpad/f1-repro.mjs
+node "<scratch>/f1-repro.mjs"
 ```
 
 ```text
 try 1 acquired
 try 2 acquired
 try 3 acquired
-{"fn_called":true,"home":"/private/tmp/claude-501/-Users-phat-work-codex-steer/3772bc30-3ca6-44a3-904a-145bb1398502/scratchpad/f1-home-ndrlb1"}
+{"fn_called":true,"home":"<scratch>/f1-home-<suffix>"}
 ```
 
 ## Remaining limits
