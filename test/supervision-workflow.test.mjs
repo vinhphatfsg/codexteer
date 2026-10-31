@@ -25,7 +25,7 @@ test("a supervisor is bound to one task and session; pause preserves observation
   const storage = await fixture(t), session = randomUUID(), next = randomUUID();
   assert.equal((await supervisorStatus(ID, storage)).state, "unregistered");
   await registerSupervisor(ID, session, { ...storage, owner: "codex" });
-  await assert.rejects(assertSupervisor(OTHER, session, storage), { code: "SUPERVISOR_NOT_REGISTERED" });
+  await assert.rejects(assertSupervisor(OTHER, session, storage), { code: "SUPERVISOR_CONFLICT" });
   await assert.rejects(registerSupervisor(ID, next, storage), { code: "SUPERVISOR_CONFLICT" });
   await controlSupervisor(ID, "pause", storage);
   assert.equal((await registerSupervisor(ID, session, storage)).state, "paused", "Bootstrap retries must not resume intervention");
@@ -38,7 +38,7 @@ test("a supervisor is bound to one task and session; pause preserves observation
   await assert.rejects(registerSupervisor(ID, session, storage), { code: "SUPERVISOR_STOPPED" });
   await assert.rejects(controlSupervisor(ID, "resume", storage), { code: "SUPERVISOR_STOPPED" });
   await registerSupervisor(ID, next, storage);
-  await assert.rejects(assertSupervisor(ID, session, storage), { code: "SUPERVISOR_MISMATCH" });
+  await assert.rejects(assertSupervisor(ID, session, storage), { code: "SUPERVISOR_STOPPED" });
 });
 
 test("pause and sends serialize; a busy pause never falsely reports success", async t => {
