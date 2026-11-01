@@ -16,6 +16,7 @@ import { playSendSound } from "./sound.mjs";
 import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
 import { prepareOrchestrationPrompt, orchestrateAgent } from "./orchestrate.mjs";
 import { rejectRepeatedBinding } from "./prompt-command.mjs";
+import { rejectUnknownOptions } from "./unknown-options.mjs";
 import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, assertSupervisorRegistration, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
 import { connectionMode, observationConnection, desktopReadOnly } from "./connection.mjs";
@@ -50,7 +51,7 @@ export function fail(error, json, argv = []) {
     } : {}),
     sent: error.sent, thread_id: error.thread_id, rpc_code: error.rpc_code ?? error.rpcCode,
     message_id: error.message_id, client_message_id: error.client_message_id, journal_update_required: error.journal_update_required,
-    existing_message_id: error.existing_message_id,
+    existing_message_id: error.existing_message_id, unknown_options: error.unknown_options,
     existing_attempt_id: error.existing_attempt_id, existing_receipt_path: error.existing_receipt_path,
     supervision_update_required: error.supervision_update_required,
     history_changed: error.history_changed, backup_path: error.backup_path, receipt_path: error.receipt_path,
@@ -306,7 +307,7 @@ async function mainOnTarget(argv) {
       const agent = takeOption(ownArgs, "--agent", promptOnly ? undefined : "claude");
       const usePathCli = takeFlag(ownArgs, "--use-path-cli");
       if (promptOnly && ownArgs[0] === "--") ownArgs.shift();
-      else if (ownArgs.some(arg => arg.startsWith("--"))) throw usage("Unknown orchestrate option. See help orchestrate; agent arguments belong after --.");
+      else rejectUnknownOptions(ownArgs, "orchestrate", "See help orchestrate; agent arguments belong after --.", usage);
       if (ownArgs.length !== 1) throw usage("Expected: orchestrate [prompt] --project <ID-or-exact-name> <GOAL>. Quote the goal as one argument, or use - for stdin.");
       const goal = ownArgs[0] === "-" ? readFileSync(0, "utf8") : ownArgs[0];
       if (promptOnly) {
@@ -581,7 +582,7 @@ async function mainOnTarget(argv) {
           options.timeoutMs = Number(options.timeoutMs);
         }
         const literal = args.indexOf("--");
-        if (args.slice(0, literal < 0 ? args.length : literal).some(arg => arg.startsWith("--"))) throw usage("Unknown thread create option. Use -- before an instruction starting with --.");
+        rejectUnknownOptions(args.slice(0, literal < 0 ? args.length : literal), "thread create", "Put an instruction that starts with -- after --.", usage);
         const message = readMessage(args);
         const data = await (targetHost() === "local" ? createProjectThread : createRemoteProjectThread)(selector, message, options);
         success("thread.create", data, json);
@@ -649,7 +650,7 @@ async function mainOnTarget(argv) {
     const waitInput = takeOption(args, "--wait-ms", undefined);
     if (backend !== "ui" && (keepFocus || waitInput != null)) throw usage("--keep-focus and --wait-ms require --backend ui.");
     const waitMs = Number(waitInput ?? "1500");
-    if (args.slice(0, args.includes("--") ? args.indexOf("--") : args.length).some(arg => arg.startsWith("--"))) throw usage("Unknown send option. Use -- before instruction text starting with --.");
+    rejectUnknownOptions(args.slice(0, args.includes("--") ? args.indexOf("--") : args.length), "send", "Put instruction text that starts with -- after --.", usage);
     const threadInput = args.shift();
     if (!threadInput) throw usage("send requires a thread ID or codex://threads URL.");
     const message = readMessage(args);

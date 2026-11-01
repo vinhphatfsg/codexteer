@@ -13,6 +13,7 @@ import { monitorCommand } from "./monitor.mjs";
 import { notificationOptions } from "./notify.mjs";
 import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
 import { rejectRepeatedBinding } from "./prompt-command.mjs";
+import { rejectUnknownOptions } from "./unknown-options.mjs";
 import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, assertSupervisorRegistration, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
 import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, resolveUnknownDelivery, listInstructions } from "./journal.mjs";
@@ -240,7 +241,7 @@ export async function mainCloud(argv) {
     args.shift(); if (supervisor) throw failure("A bound supervisor cannot create another task.", "SUPERVISOR_CONTROL_FORBIDDEN");
     const project = option(args, "--project"), requestedBranch = option(args, "--branch"), dryRun = flag(args, "--dry-run");
     if (project === undefined) throw failure("Cloud creation requires --project with an environment ID or exact name.");
-    const end = args.includes("--") ? args.indexOf("--") : args.length; if (args.slice(0, end).some(arg => arg.startsWith("--"))) throw failure("Unknown cloud creation option; explicit model/title/permission overrides are not implemented yet.");
+    const end = args.includes("--") ? args.indexOf("--") : args.length; rejectUnknownOptions(args.slice(0, end), "cloud creation", "Explicit model/title/permission overrides are not implemented yet.", failure);
     const body = message(args); if (!body.trim()) throw failure("A non-empty initial instruction is required.");
     const rows = (await cloudEnvironments()).environments, selector = project, matches = rows.filter(e => e.id === selector || e.name === selector);
     if (matches.length !== 1) throw failure("The cloud environment selector must match one accessible ID or exact name.");
@@ -286,7 +287,7 @@ export async function mainCloud(argv) {
   const options = { dryRun, newTurn, supervisor, connection, evidence: repeated(args, "--evidence") };
   for (const [key, name] of Object.entries({ source: "--source", kind: "--kind", basedOn: "--based-on", supersedes: "--supersedes", expiresAt: "--expires-at", checkpoint: "--checkpoint", finding: "--finding" })) { const value = option(args, name); if (value !== undefined) options[key] = value; }
   const id = targetId(args.shift()), end = args.includes("--") ? args.indexOf("--") : args.length;
-  if (args.slice(0, end).some(arg => arg.startsWith("--"))) throw failure("Unknown send option. Use -- before instruction text starting with --.");
+  rejectUnknownOptions(args.slice(0, end), "send", "Put instruction text that starts with -- after --.", failure);
   const body = message(args); if (!body.trim()) throw failure("send requires a non-empty message.");
   const receipt = await sendTrackedMessage(id, body, options);
   receipt.sound = noSound ? { played: false, reason: "disabled" } : playSendSound(receipt);
@@ -311,7 +312,7 @@ async function desktopCloudCommands(command, args, { supervisor, output, bound, 
     if (action === "create") {
       const environment = option(args, "--environment"), project = option(args, "--project"), title = option(args, "--title"), dryRun = flag(args, "--dry-run");
       const end = args.includes("--") ? args.indexOf("--") : args.length;
-      if (args.slice(0, end).some(arg => arg.startsWith("--"))) throw failure("Unknown Desktop Cloud creation option.");
+      rejectUnknownOptions(args.slice(0, end), "Desktop Cloud creation", "Put an instruction that starts with -- after --.", failure);
       output("thread.create", await createDesktopCloudTask(environment, message(args), { project, title, dryRun })); return true;
     }
     if (action === "assign") { const project = option(args, "--project"); exact(args, 1); const data = await assignDesktopCloudProject(await bound(args[0]), project); output("thread.assign", data); if (data.verification_status !== "verified") process.exitCode = 1; return true; }
