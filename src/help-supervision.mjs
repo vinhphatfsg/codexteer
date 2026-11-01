@@ -89,7 +89,7 @@ const SAVED_CLI_NOTES = [
   "既定ではCLI一式と依存をCODEX_HOME/codex-steer/runtimes/<version>-<sha256>へ検証して保存し、そのコピーを本文のコマンドに使う。",
   "同じ内容の保存先があれば検証して再利用する。既存のコピーは上書き・自動削除しない。",
   "保存・検証に失敗すると本文を出力せず、エージェントも起動しない。",
-  "本文の実行コマンドは起動ファイルCODEX_HOME/codex-steer/bin/codexteer-s-<hash>（orchestrateはcodexteer-p-<hash>）のパス1語。生成時に検証したCODEX_HOMEの実体パス、Nodeの実体の絶対パス、--require-node-version、保存したCLI、監督ID・接続を固定する。",
+  "本文の実行コマンドは起動ファイルCODEX_HOME/codex-steer/bin/codexteer-s-<hash>（orchestrateはcodexteer-p-<hash>）のパス1語（空白等を含むホームでは引用する）。生成時に検証したCODEX_HOMEの実体パス、Nodeの実体の絶対パス、--require-node-version、保存したCLI、監督ID・接続を固定する。",
   "起動ファイルは本人専用（0700）のシェルスクリプトで、名前は内容のハッシュ。同じ内容なら検証して再利用し、上書きしない。生成時に一度実行して使えることを確かめる。",
   "監督役のCODEX_HOMEや作業ディレクトリが違っても、生成元の接続先と履歴を使う。別のプロファイルを監督するときはそこで生成し直す。",
   "Node本体はコピーしない。版が変わるとNODE_VERSION_MISMATCHで操作前に止まる。同じ版のNodeの差し替えや共有ライブラリは固定しない。",
@@ -161,7 +161,7 @@ export const topics = {
       { name: "--use-path-cli", text: `${PATH_CLI_TEXT}--supervisor・--connectionと監督制御は維持する。生成時は何も書き込まない。` },
       ...REMOTE_OPTIONS,
     ],
-    returns: "通常は本文だけを標準出力へ返す。--json: data.thread_id、data.prompt、data.command（本文の実行コマンド。既定は起動ファイルのパス）、data.cli_mode（saved|path）、data.deployment（codex_home・directory・wrapper_path・version・sha256・reused）、data.node（path・version）、data.supervisor（session_id・owner・connection）。--use-path-cliではdeploymentとnodeはnull。リモートではhost_id・remote_transport・observation_onlyも返す。",
+    returns: "通常は本文だけを標準出力へ返す。--json: data.thread_id、data.prompt、data.command（本文の実行コマンド。既定は起動ファイルのパスで、空白等を含むホームでは引用済み）、data.cli_mode（saved|path）、data.deployment（codex_home・directory・wrapper_path・version・sha256・reused）、data.node（path・version）、data.supervisor（session_id・owner・connection）。--use-path-cliではdeploymentとnodeはnull。リモートではhost_id・remote_transport・observation_onlyも返す。",
     errors: [...GENERATION_ERRORS, ...SAVED_CLI_ERRORS, ...SESSION_ERRORS],
     examples: [
       "codexteer supervise prompt <THREAD>",
