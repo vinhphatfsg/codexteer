@@ -139,6 +139,7 @@ test("a saved project prompt creates a bound child prompt after the original sou
   assert.equal(childData.deployment.reused, true);
   assert.equal(childData.supervisor.owner, "codex");
   assert.ok(childData.prompt.includes(ORCHESTRATED_SUPERVISION_POLICY));
+  for (const rule of [/--new-turn[^。]*監督方針で再開/, /--new-turnでの再開[^。]*idle/, /監督方針の終了条件/, /監視の終了条件[^。]*全体の完了/]) assert.match(childData.prompt, rule, "The child prompt carries its own resume delegation and end condition");
   const bootstrap = childData.prompt.split("\n").find(line => line.includes(` supervise register ${ID} `));
   assert.ok(bootstrap.includes(`--supervisor '${childData.supervisor.session_id}'`));
   const registered = spawnSync("/bin/sh", ["-c", bootstrap], receiving);
