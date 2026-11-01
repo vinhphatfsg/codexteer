@@ -1,7 +1,7 @@
-import { NODE_VERSION_MISMATCH, SUPERVISOR_NOT_REGISTERED, SUPERVISOR_ORPHANED, SUPERVISOR_PAUSED, SUPERVISOR_STOPPED } from "./help-errors.mjs";
+import { NODE_VERSION_MISMATCH, OPTIONS_INVALID, STORE_UNSAFE, SUPERVISOR_NOT_REGISTERED, SUPERVISOR_ORPHANED, SUPERVISOR_PAUSED, SUPERVISOR_STOPPED } from "./help-errors.mjs";
 const THREAD_OPTION = { name: "THREAD", text: "対象タスク。ローカルUUID、codex://threads/<UUID>[?hostId=...]、Cloudのtask_ IDか公式タスクURL、Desktop Cloudのdurable_ IDかhostId=durableのリンク。正規化して本文に埋め込む。" };
-const MESSAGE_OPTION = { name: "MESSAGE", default: "標準方針", text: "監督方針。指定すると標準方針全体を置き換える。引用して一つの引数で渡す。空白だけはINVALID_SUPERVISION_POLICY、--で始まる文は引数エラー。" };
-const AGENT_IDENTITY = "監督IDのowner（register --owner）と本文のsend --source（claudeはclaude-code）にもなる。claude/codex以外は生成前に拒否する（エラーコードなし）。";
+const MESSAGE_OPTION = { name: "MESSAGE", default: "標準方針", text: "監督方針。指定すると標準方針全体を置き換える。引用して一つの引数で渡す。空白だけはINVALID_SUPERVISION_POLICY、--で始まる文はOPTIONS_INVALID。" };
+const AGENT_IDENTITY = "監督IDのowner（register --owner）と本文のsend --source（claudeはclaude-code）にもなる。claude/codex以外は生成前にOPTIONS_INVALIDで拒否する。";
 const CONNECTION_OPTION = { name: "--connection shared|desktop|cloud|desktop-cloud", default: "shared", text: "本文の全コマンドに埋め込む接続。sharedは既存wrapper、desktopは既存の共有制御ソケットで観測専用。省略時、task_ IDはcloud、durable_ IDはdesktop-cloudを選び、同じ監督・送信・観測を使う。明示値がIDと合わなければ拒否し、切り替えない。詳細はhelp connection・help cloud。" };
 const PATH_CLI_TEXT = "本文のコマンドをPATH上のcodexteerにする。CLIの保存・Nodeの固定・CODEX_HOMEの埋め込みをせず、各コマンドは実行環境のPATHとCODEX_HOMEを使う。CLIの更新は次の実行から反映される。";
 const AGENT_ARGS_OPTION = { name: "-- <AGENT-ARGS...>", text: "最初の -- 以降はすべて起動するエージェントの引数。codexteerは--help/--version/--jsonも解釈しない。MESSAGE/GOALとcodexteer自身のオプションは -- より前に置く。" };
@@ -13,7 +13,7 @@ const REMOTE_OPTIONS = [
 const PROJECT_OPTION = { name: "--project ID|NAME", text: "必須。対象プロジェクトのIDか完全一致名。生成時は照合せず、本文を受けたオーケストレーターがprojects listで照合する。" };
 const GOAL_TEXT = "達成したい目標。引用した一つの引数か、標準入力を読む -。改行・引用符・プレースホルダーは評価せずそのまま本文に入れる。";
 
-const LAUNCH_RETURNS = "起動したエージェントの標準入力・標準出力・標準エラーと終了コードをそのまま引き継ぎ、codexteerの出力は混ぜない。シグナル終了は128+シグナル番号。起動失敗と引数エラーは標準エラーに「codexteer: 理由」だけを出し（エラーコードは出ない）、終了コード1。";
+const LAUNCH_RETURNS = "起動したエージェントの標準入力・標準出力・標準エラーと終了コードをそのまま引き継ぎ、codexteerの出力は混ぜない。シグナル終了は128+シグナル番号。起動失敗と引数エラーは標準エラーに「codexteer: 理由」だけを出し（エラーコードは出ない）、終了コード1。--jsonを付けた場合だけ、その拒否をJSONのOPTIONS_INVALIDで返す。";
 
 const SESSION_ERRORS = [
   { code: "SUPERVISOR_CONFLICT", when: "registerした対象に別のactive/paused監督がいる（異常終了で残った登録を含む）。または同じ監督IDが別タスクに登録済み。", action: "置き換えずユーザーに知らせる。不要な旧監督はユーザーがsupervise stopしてから、新しい本文で始める。" },
@@ -21,9 +21,11 @@ const SESSION_ERRORS = [
   { code: "SUPERVISOR_MISMATCH", when: "コマンドの監督ID・--connection・remote transportが登録と違う（古い本文や別セッション）。", action: "その監督を終了する。生成されたコマンドを変えずに使っていたか確認する。" },
   SUPERVISOR_NOT_REGISTERED,
   SUPERVISOR_PAUSED,
-  { code: "SUPERVISOR_CONTROL_FORBIDDEN", when: "監督ID付きでsupervise list/pause/resume/stopを実行した。", action: "制御はユーザーが端末から--supervisorなしで行う。監督は自分の状態を変えない。" },
+  { code: "SUPERVISOR_CONTROL_FORBIDDEN", when: "監督ID付きでsupervise list/pause/resume/stop、またはsupervise・supervise promptを実行した。", action: "制御と新しい監督の生成はユーザーが端末から--supervisorなしで行う。監督は自分の状態を変えず、代わりのセッションを作らない。" },
   { code: "SUPERVISOR_INVALID", when: "監督IDがUUID形式でない、--ownerが「英数字で始まる英数字._-の1〜80文字」でない、または保存された監督記録が不正。", action: "生成された値をそのまま使う。記録が不正なら介入を止めてユーザーに報告する。" },
   { code: "RECORD_BUSY", when: "送信などで同じタスクの監督記録がロック中にpause/resume/stopした。", action: "配送結果を確認してから制御を再実行する。成功するまで停止済みと扱わない。" },
+  OPTIONS_INVALID,
+  STORE_UNSAFE,
 ];
 const LAUNCHER_ERRORS = [
   SUPERVISOR_ORPHANED,
@@ -49,6 +51,7 @@ const ORCHESTRATION_ERRORS = [
   { code: "INVALID_ORCHESTRATION_PROJECT", when: "--projectに制御文字がある。", action: "制御文字のないIDか名前を指定する。" },
   { code: "INVALID_ORCHESTRATION_GOAL", when: "GOALが空、または空白だけ。", action: "目標を一つの引数か標準入力の - で渡す。" },
   { code: "INVALID_ORCHESTRATION_AGENT", when: "--agentがclaude/codex以外。", action: "claudeかcodexを指定する。orchestrate promptでは省略もできる。" },
+  { ...OPTIONS_INVALID, when: "未知のオプション、GOALが1つでない、orchestrate（promptなし）に--jsonを付けた。" },
   { code: "SUPERVISOR_CONTROL_FORBIDDEN", when: "--supervisor付きで実行した。監督IDは既存の1タスクに束縛されている。", action: "監督IDを外し、ユーザーの端末から実行する。" },
   { code: "DESKTOP_READ_ONLY", when: "--connection desktopを指定した。", action: "--connectionを省略する（shared）。" },
   { code: "CLOUD_CAPABILITY_UNSUPPORTED", when: "--connection cloudかdesktop-cloudを指定した。Cloud経路にorchestrateはない。", action: "--connectionを省略する。Cloudの作業はhelp cloud / help desktop-cloud。" },
@@ -69,7 +72,7 @@ const SESSION_NOTES = [
   "pauseは送信だけを止め、read/watchは続けられる。resumeで送信を再開する。stopはその監督IDの観測と送信を止める。",
   "pause/stopはCodexタスクもエージェントのプロセスも止めない。エージェントを終えるには、そのエージェントに終了を指示する。",
   "list/pause/resume/stopはユーザーの端末から--supervisorなしで実行する。監督IDを付けられる監督サブコマンドはregisterとstatusだけ。",
-  "監督IDを付けたsupervise/supervise promptは拒否する。監督は代わりのセッションを作れない。",
+  "監督IDを付けたsupervise/supervise promptはSUPERVISOR_CONTROL_FORBIDDENで拒否する。監督は代わりのセッションを作れない。",
   "activeは登録状態であり、AIが読んだことや監視を続けていることの証明ではない。",
   "--supervisorのないコマンド（以前の版の本文を含む）にはpause/stopが効かない。監督IDは秘密ではなく、同じOSユーザーの別操作は防がない。",
   "desktop接続とnativeリモートの本文は観測専用。送信手順を含まず、方針に送信の指示があっても送信しない。",

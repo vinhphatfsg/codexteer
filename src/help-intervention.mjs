@@ -1,4 +1,4 @@
-import { DUPLICATE_INTERVENTION, SUPERVISOR_PAUSED, SUPERVISOR_STOPPED } from "./help-errors.mjs";
+import { DUPLICATE_INTERVENTION, OPTIONS_INVALID, STORE_UNSAFE, SUPERVISOR_PAUSED, SUPERVISOR_STOPPED } from "./help-errors.mjs";
 const C_UNKNOWN_DELIVERY = "delivery_status:unknownは受付未確認。自動再送せず、history check <THREAD> <MESSAGE-ID>で照合する。";
 const C_NOT_PROOF = "history checkのnot_observedは未配送の証明ではない。storedもCodexが理解・反映した証明ではない。";
 const C_SUPERVISED_SEND = "--supervisor付きの送信は--based-onと--findingが必須（SUPERVISOR_OBSERVATION_REQUIRED/SUPERVISOR_FINDING_REQUIRED）。instructions retractは--finding不要。";
@@ -11,6 +11,7 @@ const C_PAIRED_SHELL = "pairedで--exec-backend thread-shell --shell powershell|
 const C_NO_AUTO_SWITCH = "pairedでcommand/execが拒否されてもthread-shellへ自動で切り替えない。";
 const C_SUPERVISED_SHELL = "--supervisor付きのthread-shellは送信と同じく監督の状態を確認し、pause中はSUPERVISOR_PAUSEDで実行しない。受付後のコマンドはpause・stopでは止まらない。";
 const C_REMOTE_DOC = "pairedの実行・監視の詳細はhelp remoteとdocs/remote-operations.md。";
+const C_INTERRUPTED_RUN = "ローカルのrunがSIGINT/SIGTERMで止まると、結果のerrorに\"Command interrupted.\"が入りvalid:false・終了コード1になる（エラーコードは付かない）。";
 const C_OUTPUT_TAIL = "出力は末尾32768文字までローカルに保存し、--include-output指定時だけ表示する。";
 
 const C_OPT_DRY_RUN = { name: "--dry-run", text: "送信予定（方式・文字数・メタデータ）だけ返す。根拠ファイルの読取りと入力検証は行うが、接続・鮮度確認・記録・送信はしない。" };
@@ -31,6 +32,10 @@ const C_E_FINDING_CLOSED = { code: "FINDING_CLOSED", when: "send --findingの指
 const C_E_STALE_FINDING = { code: "STALE_FINDING", when: "送信直前に指摘のrevisionが変わった、または閉じられた", action: "findings showで現状を確認し、再評価してから送る。" };
 const C_E_RECORD_BUSY = { code: "RECORD_BUSY", when: "同じ記録（同じタスクの送信・履歴・指摘、同じcheckpoint、同じ資源）を別のプロセスが使用中。この操作は実行していない", action: "その操作が終わってから再実行する。" };
 const C_E_REMOTE_SHELL_TASK_BUSY = { code: "REMOTE_SHELL_TASK_BUSY", when: "thread-shellの対象チャットがidleでない", action: "対象タスクがidleになってから実行する。" };
+const C_E_MESSAGE_NOT_FOUND = { code: "MESSAGE_NOT_FOUND", when: "指定したMESSAGE-ID（--supersedes・retractの対象を含む）がこのタスクの送信記録にない", action: "history list <THREAD>で同じタスクのmessage_idを確かめて指定し直す。" };
+const C_E_INSTRUCTION_NOT_REPLACEABLE = { code: "INSTRUCTION_NOT_REPLACEABLE", when: "--supersedes・retractの対象がactive/expiredでない、または配送未確認の置換・撤回が残っている。未送信", action: "instructions list <THREAD> --allで状態を確かめる。pending_changesがあればhistory checkで照合してから判断する。" };
+const C_E_CHECKPOINT_NOT_FOUND = { code: "CHECKPOINT_NOT_FOUND", when: "指定したcheckpoint IDがこのタスクの記録にない", action: "checkpoint list <THREAD>でIDを確かめて指定し直す。" };
+const C_E_DESKTOP_CLOUD_DELIVERY_PENDING = { code: "DESKTOP_CLOUD_DELIVERY_PENDING", when: "Desktop Cloudの同じチャットに、受付不明（unknown）で未解除の前回送信がある。error.existing_message_idがその送信", action: "自動再送しない。history check <TARGET> <existing_message_id>で照合する。照合できなければ介入を止めてユーザーに報告する。解除はユーザーだけがhistory mark --resolve-unknownで行う（help history）。" };
 
 export const topics = {
   send: {
@@ -44,7 +49,7 @@ export const topics = {
     ],
     options: [
       { name: "THREAD", text: "ローカルのタスクUUIDかcodex://threads/リンク、CloudのタスクIDかURL、Desktop CloudのIDかリンク。接続はIDから自動判定する（help connection）。" },
-      { name: "MESSAGE...|-", text: "残りの引数を空白でつないで本文にする。- だけなら標準入力を読む。本文は引用して1つの引数で渡す。オプション名と同じ語が独立した引数になる本文は、オプションを前に置き、THREADの直後に -- を置いてから書く。" },
+      { name: "MESSAGE...|-", text: "残りの引数を空白でつないで本文にする。- だけなら標準入力を読む。本文は引用して1つの引数で渡す。--で始まる語が独立した引数になる本文は、オプションを前に置き、THREADの直後に -- を置いてから書く。" },
       C_OPT_NEW_TURN,
       C_OPT_DRY_RUN,
       { name: "--no-sound", text: "今回だけ送信音を鳴らさない（sound.reason:disabled）。" },
@@ -70,19 +75,28 @@ export const topics = {
       C_E_STALE_FINDING,
       C_E_STALE_OBSERVATION,
       C_E_STALE_CURSOR,
-      { code: "STALE_EVIDENCE", when: "根拠ファイル（--evidenceまたは指摘の根拠）が記録後に変わった・消えた", action: "ファイルを読み直して判断し直す。指摘の根拠ならfindings reopen <THREAD> <ID> --reason TEXT --evidence FILEで更新してから送る。" },
+      { code: "STALE_EVIDENCE", when: "根拠ファイル（--evidenceまたは指摘の根拠）が記録後または読取り中に変わった・消えた", action: "編集が終わってからファイルを読み直して判断し直す。指摘の根拠ならfindings reopen <THREAD> <ID> --reason TEXT --evidence FILEで更新してから送る。" },
       { code: "STALE_CHECKPOINT", when: "--checkpointが送信直前の照合でvalidでない", action: "checkpoint verifyで原因を確認し、必要ならcaptureかrunをやり直す。" },
       { code: "EXPIRED_DIRECTIVE", when: "--expires-atの期限が送信前に過ぎた", action: "必要なら新しい期限で送り直すか判断する。" },
       SUPERVISOR_PAUSED,
       SUPERVISOR_STOPPED,
-      { code: "NOT_SENT", when: "送っていない（実行中ターンがない、--new-turnでidleでない、同じタスクの送信ロックが残っている等）", action: "messageの理由を確認し、readで状態を読み直してから判断する。idleのタスクへの再開はユーザーの依頼がある場合だけ。" },
+      { code: "TASK_IDLE", when: "通常sendで、送れる実行中ターンがない（タスクがidle・停止中など）。未送信", action: "readで状態を読み直す。idleのタスクの再開はユーザーの依頼がある場合だけ--new-turnで送る。" },
+      { code: "TASK_BUSY", when: "--new-turnで、タスクがidleでない、または再開処理中に実行中になった。未送信", action: "--new-turnを外す。readで実行中のターンを確かめてから通常sendで送るか判断する。" },
+      { code: "NOT_SENT", when: "他のコードのない送信前の失敗（同じタスクの送信ロックが残っている等）。未送信", action: "error.messageの理由を確認し、readで状態を読み直してから判断する。送信ロックが残るなら、配送をhistory checkで確かめてからユーザーに報告する。" },
+      OPTIONS_INVALID,
+      C_E_MESSAGE_NOT_FOUND,
+      C_E_INSTRUCTION_NOT_REPLACEABLE,
+      C_E_CHECKPOINT_NOT_FOUND,
       { code: "TIMEOUT", when: "App Serverの応答待ちが時間切れ（PROTOCOL_ERROR・CONNECTION_FAILEDなどの通信異常も同じ扱い）。送信要求（turn/steer・turn/start）中ならdelivery_status:unknown、それより前ならnot_sent", action: "error.delivery_statusを見る。unknownなら自動再送せずhistory check <THREAD> <MESSAGE-ID>で照合する。" },
       { code: "RUNTIME_CHANGED", when: "送信直前にApp Serverの実行環境が入れ替わった（未送信）", action: "readで対象を読み直してから判断する。" },
       { code: "CAPABILITY_UNVERIFIED", when: "接続先が送信に必要な機能を確認できない（CAPABILITY_UNSUPPORTED、RUNTIME_PROTOCOL_UNSUPPORTED/UNVERIFIEDも同じ扱い）。未送信", action: "doctor --jsonのruntime_compatibilityを確認する。互換のあるCLIかwrapperで実行する。" },
       C_E_DESKTOP_READ_ONLY,
       { code: "CLOUD_DUPLICATE_SEND", when: "Cloudタスクに受付済みか受付不明の前回送信がある", action: "再送しない。history check <TASK> --attempt <error.existing_attempt_id>で照合する（help cloud）。" },
-      { code: "DESKTOP_CLOUD_DELIVERY_PENDING", when: "Desktop Cloudタスクに受付不明の前回送信がある", action: "自動再送しない。history checkで照合する（help desktop-cloud）。" },
+      C_E_DESKTOP_CLOUD_DELIVERY_PENDING,
+      { code: "DESKTOP_UI_NOT_READY", when: "--backend uiで、UI送信の前提（macOS・ChatGPT.app・同梱AppleScript・Accessibility権限）が欠けている。未送信", action: "doctor --backend uiで欠けている項目を確かめ、ユーザーに対応を依頼する。app-server方式へ自動で切り替えない。" },
+      { code: "DESKTOP_UI_FAILED", when: "--backend uiで、Desktopを開く・画面を操作する・入力を送る処理が失敗した", action: "UI送信は配送を確認できない。再送する前にreadで反映を確かめる。" },
       C_E_RECORD_BUSY,
+      STORE_UNSAFE,
     ],
     examples: [
       "codexteer send <THREAD> '失敗したテストの原因を先に確認してください' --dry-run --json",
@@ -92,7 +106,7 @@ export const topics = {
     ],
     notes: [
       "-- 以降はオプションとして解釈しない。--dry-runや--jsonも本文として送られる。本文の途中に置いた -- は本文に残る。",
-      "ローカルタスクへのsendでは未知の--オプションもエラーにならず本文に入る。オプション名を誤らないよう--dry-runで文字数を確かめる。",
+      "-- より前の未知の--オプションや値のないオプションはOPTIONS_INVALID（Cloud・Desktop CloudはCLOUD_OPTIONS_INVALID）で拒否し、何も送らない。",
       "--source・--kind・--evidence・--based-on・--supersedes・--expires-at・--checkpoint・--findingか--supervisorがあると本文の前に見出し行を付け、どれもなければ本文だけを送る。",
       "見出しは[codexteer <message_id>]・送信者（既定external）・種類（既定review）と、指定に応じた根拠・観測ターン・置換/撤回対象・期限・checkpoint・指摘と解決条件の行。",
       "decisionは送信者による分類で、新しいユーザー承認を作らない。元のユーザー指示を根拠として示す。",
@@ -155,7 +169,11 @@ export const topics = {
       C_E_DUPLICATE,
       C_E_FINDING_CLOSED,
       C_E_STALE_FINDING,
+      { code: "STALE_EVIDENCE", when: "create・reopenで、--evidenceのファイルが読取り中に変わった", action: "編集が終わってから同じコマンドを実行し直す。" },
+      C_E_CHECKPOINT_NOT_FOUND,
+      OPTIONS_INVALID,
       C_E_RECORD_BUSY,
+      STORE_UNSAFE,
     ],
     examples: [
       "codexteer findings create <THREAD> --key timeout --title '待機の終了条件' --condition '指定時間で終了する回帰テストが通る' --evidence src/monitor.mjs --json",
@@ -188,37 +206,45 @@ export const topics = {
 
   history: {
     title: "送った指示の配送・受信履歴との照合・対応状況を確認し記録する",
-    when: "送信結果がunknownのとき、送った指示が受信履歴に残ったか確かめるとき、対応結果を記録するとき、未対応の送信を洗い出すとき。未解決の指摘一覧はfindings list。",
+    when: "送信結果がunknownのとき、送った指示が受信履歴に残ったか確かめるとき、対応結果を記録するとき、未対応の送信を洗い出すとき。Desktop Cloudの受付不明を照合で確かめられず、ユーザーが送信の保留を解除するとき（--resolve-unknown）。未解決の指摘一覧はfindings list。",
     usage: [
       "history list <THREAD> [--pending] [--include-text]",
       "history show <THREAD> <MESSAGE-ID> [--include-text]",
       "history check <THREAD> [MESSAGE-ID] [--include-text]",
       "history show|check <CLOUD_TASK_ID|URL> --attempt <ATTEMPT_ID>",
       "history mark <THREAD> <MESSAGE-ID> --status acknowledged|applied|dismissed --note TEXT [--evidence REF ...] [--by NAME]",
+      "history mark <DURABLE_ID|HOST_LINK> <MESSAGE-ID> --resolve-unknown --note TEXT",
     ],
     options: [
       { name: "MESSAGE-ID", text: "send結果のmessage_id（=client_message_id）。unknownや失敗でも記録される。同じタスクの記録だけ指定できる。checkで省略するとそのタスクの全記録を照合する。" },
       { name: "--pending", text: "listでresponse.statusがapplied・dismissed以外の記録（not_sentも含む）だけ返す。" },
       { name: "--include-text", text: "本文（body）と実際に送った文（wire_text）も返す。" },
       { name: "--status acknowledged|applied|dismissed", text: "markで記録する対応状況。" },
-      { name: "--note TEXT", text: "markで必須。" },
+      { name: "--note TEXT", text: "markで必須。--resolve-unknownでは解除の理由として記録する。" },
+      { name: "--resolve-unknown", text: "Desktop Cloud専用・ユーザー専用。受付不明の送信の配送予約を解除し、同じチャットへの次の送信を許す。--status・--evidence・--byとは併用できない。" },
       { name: "--evidence REF ...", text: "markの根拠参照。文字列のまま記録し、内容は照合しない。appliedでは必須。" },
       { name: "--by NAME", default: "local", text: "markの記録者名。" },
       { name: "--attempt ATTEMPT_ID", text: "Cloud専用。send結果のcloud_attempt_id（失敗時はerror.attempt_id）。MESSAGE-IDとは併用しない。Desktop Cloudでは使えない。" },
     ],
-    returns: "list・check（MESSAGE-ID指定でも）は配列、show・mark・--attempt付きのshow/checkは1件。各記録はdelivery_status（accepted/unknown/not_sent＝受付）、verification.status（stored/conflict/not_observed＝受信履歴との照合）、response.status（unreported/acknowledged/applied/dismissed＝記録者の申告）を別々に返す。--attemptのshowはローカルの試行記録、checkはそれにdelivery_verificationとretry_safeを付けて返す。",
+    returns: "list・check（MESSAGE-ID指定でも）は配列、show・mark・--attempt付きのshow/checkは1件。各記録はdelivery_status（accepted/unknown/not_sent＝受付）、verification.status（stored/conflict/not_observed＝受信履歴との照合）、response.status（unreported/acknowledged/applied/dismissed＝記録者の申告）を別々に返す。--attemptのshowはローカルの試行記録、checkはそれにdelivery_verificationとretry_safeを付けて返す。--resolve-unknownは更新した1件を返し、resolution（by:user・at・note）が付きdelivery_statusはunknownのまま。",
     errors: [
       { code: "CAPABILITY_UNSUPPORTED", when: "接続先がcheckに必要な読み取り機能に対応しない（RUNTIME_PROTOCOL_UNSUPPORTEDも同じ扱い）", action: "doctor --jsonのruntime_compatibilityを確認する。照合できないまま再送しない。" },
       { code: "CLOUD_RECEIPT_NOT_FOUND", when: "--attemptの試行記録がない", action: "send結果のcloud_attempt_idかerror.attempt_idを確認する。" },
       { code: "CLOUD_TARGET_CONFLICT", when: "--attemptの試行が別のCloudタスクのもの、または--connectionがタスクIDと合わない", action: "error.expected_connectionと対象タスクIDを確認して指定し直す。" },
-      { code: "CLOUD_OPTIONS_INVALID", when: "--attemptがUUIDでない、list・markやDesktop Cloudに--attemptを付けた", action: "show/checkとCloudタスクIDだけで使う。Desktop CloudはMESSAGE-IDでcheckする。" },
+      { code: "CLOUD_OPTIONS_INVALID", when: "--attemptがUUIDでない、list・markやDesktop Cloudに--attemptを付けた。Cloud経路で引数の数や組み合わせが不正なときも出る", action: "show/checkとCloudタスクIDだけで使う。Desktop CloudはMESSAGE-IDでcheckする。" },
+      C_E_MESSAGE_NOT_FOUND,
+      { code: "SUPERVISOR_CONTROL_FORBIDDEN", when: "--supervisor付きでhistory mark --resolve-unknownを実行した", action: "監督は自分の送信の保留を解除しない。介入を止めてユーザーに報告し、解除はユーザーが端末から--supervisorなしで行う。" },
+      { code: "DESKTOP_CLOUD_OPTIONS_INVALID", when: "--resolve-unknownで--noteが空、またはその送信が未解除の受付不明（unknown）でない", action: "history show <TARGET> <MESSAGE-ID>でdelivery_statusとresolutionを確かめる。acceptedや解除済みなら解除は不要。" },
+      OPTIONS_INVALID,
       C_E_RECORD_BUSY,
+      STORE_UNSAFE,
     ],
     examples: [
       "codexteer history list <THREAD> --pending --json",
       "codexteer history check <THREAD> <MESSAGE-ID> --json",
       "codexteer history check task_example --attempt <ATTEMPT_ID> --json",
       "codexteer history mark <THREAD> <MESSAGE-ID> --status applied --note '対象の回帰テストが通過' --evidence test-results.xml --by reviewer --json",
+      "codexteer history mark durable_<UUID> <MESSAGE-ID> --resolve-unknown --note 'Desktopで未着を確認した' --json",
     ],
     notes: [
       C_JOURNAL_SCOPE,
@@ -235,8 +261,13 @@ export const topics = {
       "Cloudのcheckはnot_sentの記録を前回の配送を根拠にacceptedへ更新しない。",
       "markのappliedには--evidenceが必須。根拠の妥当性は自動で認定しない。",
       "markのappliedを記録すると、その送信に結び付いた指摘のstatusはawaiting_verificationになる（help findings）。",
+      "Desktop Cloudの受付不明の送信は、history checkでstoredになるか、ユーザーが--resolve-unknownで解除するまで同じチャットへの次の送信を止める。",
+      "checkで見つからない（not_observed）ことでは送信の保留は解除されない。",
+      "--resolve-unknownは--supervisorなしでユーザーが実行する。監督は実行しない。",
+      "--resolve-unknownは配送の有無を確定しない。delivery_statusはunknownのままで、履歴の記録とDesktop Cloudの送信記録にresolutionを付ける。",
+      "--resolve-unknownは同じチャットの送信の保留だけを解除する。結び付いた指摘では、その送信はunknownのまま扱われる（help findings）。",
     ],
-    see: ["send", "instructions", "findings", "cloud"],
+    see: ["send", "instructions", "findings", "cloud", "desktop-cloud"],
   },
 
   instructions: {
@@ -262,6 +293,8 @@ export const topics = {
     errors: [
       C_E_SUPERVISOR_OBSERVATION,
       C_E_STALE_OBSERVATION,
+      C_E_MESSAGE_NOT_FOUND,
+      C_E_INSTRUCTION_NOT_REPLACEABLE,
       C_E_DESKTOP_READ_ONLY,
     ],
     examples: [
@@ -311,7 +344,11 @@ export const topics = {
       { code: "REMOTE_SHELL_REQUIRED", when: "thread-shellで--shellがない", action: "--shell powershell|posixを明示する。" },
       C_E_REMOTE_SHELL_TASK_BUSY,
       { code: "REMOTE_COMMAND_UNKNOWN", when: "pairedのrunで完了を確認できない（runのstatus:unknown）", action: "同じコマンドを自動で再実行しない。接続先で結果を確かめてから判断する。" },
+      C_E_CHECKPOINT_NOT_FOUND,
+      { code: "STALE_CHECKPOINT", when: "runの開始時に入力がcapture時と違う（コマンドは実行していない）、またはattach時に最新runがvalidでない", action: "runならcheckpoint captureし直してから新しいIDでrunする。attachならcheckpoint verifyで原因を確かめ、runし直してからattachする。" },
+      OPTIONS_INVALID,
       C_E_RECORD_BUSY,
+      STORE_UNSAFE,
     ],
     examples: [
       "codexteer checkpoint capture <THREAD> tests --path src --path test --path package.json --path package-lock.json --json",
@@ -323,12 +360,13 @@ export const topics = {
     notes: [
       "入力はファイルとディレクトリだけ。ファイルのシンボリックリンクはリンク先の内容で記録し、ディレクトリのリンクは拒否する（実体を--pathに指定）。",
       "runはcapture時の作業ディレクトリで、argvをシェル展開せずそのまま実行する。",
-      "run開始時に入力がcapture時と違えば実行しない。captureし直す。",
+      "run開始時に入力がcapture時と違えばSTALE_CHECKPOINTで実行しない。captureし直す。",
       "実行前後のハッシュと実行中のファイル監視を記録する。途中の編集や監視エラーがあればinputs_unchanged:falseで、validにならない。",
       "runのvalidは終了コード0・エラーなし・timeoutなし・入力不変。verifyはさらに現在の入力の一致と、最新runに付けた成果物の一致を求める。",
       "割り込み・timeout時は自分が起動したプロセスグループを終了する（SIGTERM、1秒後にSIGKILL）。",
+      C_INTERRUPTED_RUN,
       "厳密に固定するには、実行中に他から編集されない隔離した入力を使う。",
-      "attachは最新runがvalidなときだけでき、成果物をそのrunに結び付ける。runし直したら成果物もattachし直す。",
+      "attachは最新runがvalidなときだけでき（それ以外はSTALE_CHECKPOINT）、成果物をそのrunに結び付ける。runし直したら成果物もattachし直す。",
       "attachは成果物の生成元を自動では証明しない。アプリはZIP等のファイルで指定する。",
       "validは選んだ入力とコマンド結果の整合性だけを示し、テスト範囲の十分性や配布許可は認定しない。",
       C_OUTPUT_TAIL,
@@ -349,17 +387,17 @@ export const topics = {
     when: "複数のAIが画面操作・ビルド・コミットなどを同時に行わないよう、同じCODEX_HOMEを使う参加者間で順番を取るとき。",
     usage: [
       "resource acquire <NAME> --owner NAME [--ttl-ms N] [--thread THREAD] [--reason TEXT] [--condition TEXT]",
-      "resource status <NAME>",
-      "resource list",
-      "resource renew <NAME> --token TOKEN [--ttl-ms N]",
-      "resource release <NAME> --token TOKEN",
+      "resource status <NAME> [--thread THREAD]",
+      "resource list [--thread THREAD]",
+      "resource renew <NAME> --token TOKEN [--ttl-ms N] [--thread THREAD]",
+      "resource release <NAME> --token TOKEN [--thread THREAD]",
       "resource run <NAME> --owner NAME [--ttl-ms N] [--timeout-ms N] [--include-output] [--condition TEXT] [--reason TEXT] [--thread THREAD] [--cwd PATH] [--exec-backend app-server|thread-shell] [--shell powershell|posix] -- <COMMAND> [ARGS...]",
     ],
     options: [
       { name: "NAME", text: "資源名（1行・200文字以内）。同じ名前を使う参加者の間でだけ排他になる。" },
       { name: "--owner NAME", text: "acquire・runで必須。所有者名（例: claude-code、codex）。" },
       { name: "--ttl-ms N", default: "600000", text: "リースの期間（1000〜86400000）。renewでは今からの新しい期間。" },
-      { name: "--thread THREAD", text: "関連タスク。--supervisor付きのrunとthread-shellでは必須。" },
+      { name: "--thread THREAD", text: "関連タスク。--supervisor付きでは全サブコマンドで必須（ないとSUPERVISOR_CONTROL_FORBIDDEN）。thread-shellでも必須。サブコマンドの前にも置ける。" },
       { name: "--reason TEXT", text: "利用理由のメモ。" },
       { name: "--condition TEXT", text: "許可済みの利用条件のメモ。" },
       { name: "--token TOKEN", text: "renew・releaseで必須。acquire結果のtoken。" },
@@ -376,7 +414,14 @@ export const topics = {
       { code: "REMOTE_SHELL_REQUIRED", when: "thread-shellで--shellか--threadがない", action: "--shell powershell|posixと--thread <THREAD>を明示する。" },
       C_E_REMOTE_SHELL_TASK_BUSY,
       { code: "REMOTE_COMMAND_UNKNOWN", when: "pairedのrunで完了を確認できない（error.lease_retained:true）", action: "リースは期限まで保持される。同じコマンドを再実行・競合実行せず、接続先で結果を確かめる。" },
+      { code: "CANCELLED", when: "pairedのrunで、コマンドを接続先へ送る前にリースの自動更新が失敗して取り消された。コマンドは実行していない", action: "statusでリースを確かめ、acquireできる状態になってから実行し直す。" },
+      { code: "RESOURCE_NOT_OWNED", when: "renew・releaseのtokenがリースを所有していない（期限切れ・解放済み・別の所有者・tokenの誤り）", action: "他の所有者のリースは消えていない。statusで現状を確かめ、必要ならacquireし直す。" },
+      { code: "SUPERVISOR_CONTROL_FORBIDDEN", when: "--supervisor付きで--threadを指定しなかった", action: "生成された本文のとおり、担当タスクを--threadで指定する。" },
+      { ...SUPERVISOR_PAUSED, when: "pause中の監督がacquire・renew・runを実行した。", action: "実行しない。status・list・releaseは使える。resumeはユーザーだけが行い、監督は自分で解除しない。" },
+      SUPERVISOR_STOPPED,
+      OPTIONS_INVALID,
       C_E_RECORD_BUSY,
+      STORE_UNSAFE,
     ],
     examples: [
       "codexteer resource acquire screen --owner claude-code --ttl-ms 120000 --condition 'ユーザーが今回の2分間の画面利用を許可済み' --json",
@@ -387,7 +432,7 @@ export const topics = {
       "同じCODEX_HOMEで同じ資源名を使う参加者間だけの協調用リース。OSの画面やUnity自体はロックしない。",
       "tokenはstatus・listにも表示される。所有の取り違え防止用で、秘密や認可ではない。",
       "acquireしたリースはプロセス終了後も期限まで残る。tokenでrenew・releaseする。",
-      "tokenが一致しないrenew・releaseは失敗し、新しい所有者のリースを消さない。期限切れのリースはrenewできず、acquireし直す。",
+      "tokenが一致しないrenew・releaseはRESOURCE_NOT_OWNEDで失敗し、新しい所有者のリースを消さない。期限切れのリースはrenewできず、acquireし直す。",
       "runは取得してからttlの1/3ごとに自動更新し、コマンド終了時に解放する。",
       "runの自動更新に失敗したら、自分が起動したコマンドを終了してlease_errorを返す。",
       "runのコマンドはシェル展開せず引数どおりに実行する。",
@@ -399,10 +444,13 @@ export const topics = {
       C_PAIRED_SHELL,
       "resourceのthread-shellでは--threadで対象チャットを指定する。",
       C_NO_AUTO_SWITCH,
-      C_SUPERVISED_SHELL,
+      "--supervisor付きでは全サブコマンドで監督の登録を確認し、SUPERVISOR_STOPPED・SUPERVISOR_MISMATCH・SUPERVISOR_NOT_REGISTEREDなどで拒否する。",
+      "pause中の監督はacquire・renew・runをSUPERVISOR_PAUSEDで拒否される（--exec-backendによらない）。status・list・releaseはできる。",
+      "実行を始めたrunのコマンドはpause・stopでは止まらない。",
+      C_INTERRUPTED_RUN,
       C_REMOTE_DOC,
     ],
-    see: ["checkpoint", "remote"],
+    see: ["checkpoint", "remote", "supervise"],
   },
 
   diff: {
@@ -425,6 +473,7 @@ export const topics = {
       { code: "CLOUD_OUTPUT_LIMIT", when: "出力が16 MiBを超えた", action: "openでブラウザから確認する。" },
       { code: "CLOUD_OPTIONS_INVALID", when: "タスクID、--attempt、--timeout-msの形式・範囲が不正", action: "値を直して再実行する。" },
       { code: "CAPABILITY_UNVERIFIED", when: "Desktop CloudのID・リンクを指定した", action: "read <THREAD> --include-outputのファイル変更イベントで確認する。" },
+      { code: "OPTIONS_INVALID", when: "ローカルUUID・codex://threadsリンク・リモートDesktopのタスクを指定した（--host・--connection desktopを含む）。接続も送信もしていない", action: "diffは使わない。read <THREAD> --include-outputのコマンド結果とファイル変更イベントで確かめる。" },
     ],
     examples: [
       "codexteer diff task_example --json",
@@ -435,7 +484,7 @@ export const topics = {
       "diff_available:falseになるのは、--attempt省略時に公式CLIがパッチなしで終わり、終了済みタスクに差分・PRの出力がないと確認できた場合だけ。",
       "公式codex cloud diffを非公開の一時ディレクトリで実行し、生の診断や標準エラーは表示しない。",
       "ChatGPTログインなどCloud共通の前提と認証エラーはhelp cloud。",
-      "ローカルのタスクには使えない。diff <ローカルID>は送信の省略形として解釈され、Invalid local Codex thread IDで失敗する。",
+      "Web Cloud以外のタスク（ローカル・リモートDesktop）はOPTIONS_INVALIDで拒否し、接続も送信もしない。",
     ],
     see: ["cloud", "read", "open"],
   },

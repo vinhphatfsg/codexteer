@@ -1,4 +1,4 @@
-import { RUNTIME_NOT_READY, RUNTIME_UNAVAILABLE } from "./help-errors.mjs";
+import { OPTIONS_INVALID, RUNTIME_NOT_READY, RUNTIME_UNAVAILABLE } from "./help-errors.mjs";
 const RESTART_SHARED = "ユーザーが作業を終えてDesktopを終了し、codexteer desktop startで起動し直す。codexteerは自動で起動・再起動しない。";
 
 const sharedRuntimeErrors = [
@@ -22,6 +22,12 @@ const remoteHostUnsupportedError = {
   code: "REMOTE_HOST_OPERATION_UNSUPPORTED",
   when: "--hostまたはhostId付きリンクでリモートホストを指定した",
   action: "Mac上のDesktopを直接操作するコマンドで、リモートには使えない。ローカルDesktopを対象にするときだけ--hostなしで実行する。何も実行されていない。",
+};
+
+const desktopUiFailedError = {
+  code: "DESKTOP_UI_FAILED",
+  when: "Desktopを開く・画面を操作する処理（open・osascript）が失敗した",
+  action: "error.messageを確かめ、ユーザーにDesktopの状態と端末のAccessibility権限の確認を依頼する。自動で再試行しない。",
 };
 
 const remoteContextError = {
@@ -115,6 +121,8 @@ export const topics = {
       "help自体も--jsonに対応する。引数なしのcodexteerとcodexteer helpはこのoverviewを表示する。",
       "各トピックには使い所・オプションと既定値・出力・エラーと対処・例・制約を載せている。",
       "--connection・--host・--remote-transport・--context-threadは、どのコマンドでも -- より前に置ける。",
+      "ローカル経路の引数の誤りはerror.code=OPTIONS_INVALIDで、送信やコマンド実行の前に止まる。CloudはCLOUD_OPTIONS_INVALID。",
+      "CODEX_HOME/codex-steer/の記録の所有者・権限・種類が安全でなければSTORE_UNSAFEで止まり、自動修復しない。",
     ],
   },
 
@@ -191,6 +199,7 @@ export const topics = {
       { code: "CAPABILITY_UNVERIFIED", when: "機能の宣言が不正で、対応を確認できない", action: "runtime_compatibility.featuresを確認し、supportedの操作だけを使う。" },
       { code: "DESKTOP_SUBSCRIPTION_UNAVAILABLE", when: "desktop_subscription.codeに出る。新規ターン用のDesktop購読エンドポイントがない", action: "send_new_turnだけunsupportedになる。観測と通常送信はoperationsの判定どおり使える。" },
       desktopReadOnlyError,
+      OPTIONS_INVALID,
     ],
     examples: [
       "codexteer doctor --json",
@@ -242,9 +251,14 @@ export const topics = {
       { code: "UPDATE_TIMEOUT", when: "update-statusのerror.code。期限内に更新・再起動が終わらなかった", action: "Codexと更新画面のダイアログを確認する。プロセスは強制終了されていない。" },
       { code: "UPDATE_QUIT_TIMEOUT", when: "update-statusのerror.code。更新後のDesktopが30秒以内に正常終了しなかった", action: RESTART_SHARED },
       { code: "UPDATE_WRAPPER_UNVERIFIED", when: "update-statusのerror.code。更新後のdoctorでshared接続・同梱Node・CLI版一致を確認できなかった", action: "doctor --jsonで原因を確かめる。" },
+      { code: "DESKTOP_START_UNSUPPORTED", when: "startをmacOS以外で実行した、またはCODEX_APP_SERVER_WS_URLが設定されている", action: "macOSで、CODEX_APP_SERVER_WS_URLを外した環境から実行する。何も起動していない。" },
+      { code: "DESKTOP_ALREADY_RUNNING", when: "startの時点でDesktopが起動している", action: "起動中のDesktopは終了させない。ユーザーに作業を終えてDesktopを終了してもらい、desktop startを実行し直す。" },
+      { code: "DESKTOP_START_FAILED", when: "startでDesktopの起動確認（ps）か起動（open）が失敗した", action: "ユーザーの端末からdesktop startを実行し直してもらう。Dockからの通常起動はできるが、その場合sharedは使えない（観測だけならhelp connection）。" },
+      { ...RUNTIME_NOT_READY, when: "startでDesktopは起動したが、shared App Serverが準備完了にならなかった" },
       supervisorForbiddenError,
       remoteHostUnsupportedError,
       desktopReadOnlyError,
+      OPTIONS_INVALID,
     ],
     examples: [
       "codexteer desktop start --dry-run --json",
@@ -254,6 +268,7 @@ export const topics = {
     ],
     notes: [
       "macOS専用。CODEX_APP_SERVER_WS_URLが設定された環境ではstartもupdateも拒否する。",
+      "start --dry-runは環境・Desktopの起動状態を確かめずに返す。",
       "startは起動中のDesktopを終了させない。起動中ならエラーで止まる。通常起動へ戻すには、終了後にDockなどから開き直す。",
       "startは呼び出した配布物をCODEX_HOME/codex-steer/runtimes/<version>-<sha256>へ検証して置き、そのwrapperをCODEX_CLI_PATHに指定してDesktopを開く。",
       "配置先の所有者・権限・リンク・内容を検証し、既存の配置は上書きしない。同じ内容なら検証して再利用する（deployment.reused）。",
@@ -332,6 +347,7 @@ export const topics = {
     returns: "threadsとcount。ローカルはthread_id・updated_at・created_at・cwd・originator・deep_link。pairedはtitle・project_id・hostId付きdeep_link・next_cursor・has_moreも返す。cloudはtask_id・title・status・url・cursor・has_more。ローカル・pairedのテキストは1行1件（ID・更新日時・作業場所）。",
     errors: [
       { code: "REMOTE_READ_ONLY", when: "既定nativeのリモート（--host）で一覧した", action: "--remote-transport pairedを明示する。専用登録とペアリングが必要（help remote-device）。経路は自動で切り替えない。" },
+      OPTIONS_INVALID,
     ],
     examples: [
       "codexteer threads list --desktop-only --limit 20 --json",
@@ -358,7 +374,7 @@ export const topics = {
       "--connection cloud thread receipt <ATTEMPT_ID>",
       "--connection desktop-cloud thread create --environment ID|NAME [--title TEXT] [--dry-run] <MESSAGE...>|-",
       "--connection desktop-cloud thread assign TARGET --project ID|NAME",
-      "--connection desktop-cloud thread receipt <ATTEMPT_ID>",
+      "--connection desktop-cloud thread receipt <ATTEMPT_ID> [--resolve-unknown --note TEXT]",
     ],
     options: [
       { name: "--project ID|NAME", text: "作成先。projects listのproject_id、desktop_project_idsのID、または完全一致の名前。cloudでは環境IDか名前。" },
@@ -390,6 +406,7 @@ export const topics = {
       remoteContextError,
       supervisorForbiddenError,
       desktopReadOnlyError,
+      OPTIONS_INVALID,
     ],
     examples: [
       "codexteer thread create --project 'サンプル' '関連リポジトリを読み、調査結果を報告してください' --json",
@@ -417,6 +434,7 @@ export const topics = {
       "thread verifyはcreated・accepted済みのreceiptだけを照合し、更新するのはcodexteerのreceiptだけ。Desktopは読み取りのみで、作成・移動・再送・AIターンは起きない。",
       "verifyは初回本文のSHA256・文字数とstandaloneの初回turn IDも照合する。native一覧の最新50件と全pinnedに対象がなければ、成功と推測せず失敗にする。",
       "Cloudのthread receiptは作成結果のローカル記録を返すだけ。タスクIDが不明でも試行IDで確かめられ、再作成・外部照会はしない。",
+      "Desktop Cloudのthread receipt・thread assignは受付不明の割当試行をDesktopの状態で確かめ直す。ユーザーだけが--resolve-unknownで解除できる（help desktop-cloud）。",
       "resolveはID書式だけを検査してthread_idとdeep_linkを返す。タスクの存在確認はstatusを使う。",
       "repairはローカル保存履歴の検査。後続の独立したターン開始があり、終了記録がない古いターンだけを候補にする。最新の未完了ターンは修復しない。",
       "--applyは稼働中・検査不能なら拒否し、プロセスを終了させない。完了するまでCodexを起動しない。macOS専用。",
@@ -445,6 +463,7 @@ export const topics = {
       { code: "REMOTE_MANAGEMENT_TRANSPORT_REQUIRED", when: "リモートのタスクを既定nativeまたはcontrolで開こうとした", action: "--remote-transport pairedを明示する。" },
       remoteContextError,
       { code: "HOST_MISMATCH", when: "リンクのhostIdと--hostが違う、またはDesktopが選んだホストのタスクを一意に特定できない", action: "正しいホストのリンクを使う。タスクは開かれていない。" },
+      { ...desktopUiFailedError, when: "ローカルのタスクをDesktopで開くopenコマンドが失敗した" },
     ],
     examples: [
       "codexteer open <THREAD>",
@@ -469,8 +488,11 @@ export const topics = {
     ],
     returns: "thread_id・backend:desktop-ui・accessibility_mode（manual/enhanced/unchanged）・diagnostic（ウィンドウ名、フォーカス要素のrole等、テキスト領域・入力欄・Webエリアの数）。テキストはdiagnosticだけ。",
     errors: [
+      { code: "DESKTOP_UI_NOT_READY", when: "UI操作の前提（macOS・ChatGPT.app・同梱AppleScript・端末のAccessibility権限）が欠けている。画面は操作していない", action: "doctor --backend ui --jsonで欠けている項目を確かめ、ユーザーに対応を依頼する。" },
+      desktopUiFailedError,
       desktopReadOnlyError,
       remoteHostUnsupportedError,
+      OPTIONS_INVALID,
     ],
     examples: [
       "codexteer debug-ui <THREAD> --wait-ms 1500",
@@ -479,7 +501,7 @@ export const topics = {
     notes: [
       "画面を操作する: 対象チャットの入力欄を開くリンクでDesktopを前面に出し、フォーカス中の要素を読む。送信はしない。",
       "調べる間だけDesktopのAccessibility属性を有効にし、終了時に元へ戻す。",
-      "先にdoctor --backend uiと同じ前提（macOS・ChatGPT.app・同梱AppleScript・端末のAccessibility権限）を確かめ、欠けていればエラーで止まる。",
+      "先にdoctor --backend uiと同じ前提（macOS・ChatGPT.app・同梱AppleScript・端末のAccessibility権限）を確かめ、欠けていればDESKTOP_UI_NOT_READYで止まる。",
     ],
     see: ["doctor", "send", "open"],
   },

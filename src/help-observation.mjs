@@ -1,4 +1,4 @@
-import { DUPLICATE_INTERVENTION, NODE_VERSION_MISMATCH, RUNTIME_NOT_READY, RUNTIME_UNAVAILABLE, SUPERVISOR_NOT_REGISTERED, SUPERVISOR_ORPHANED, SUPERVISOR_PAUSED, SUPERVISOR_STOPPED } from "./help-errors.mjs";
+import { DUPLICATE_INTERVENTION, NODE_VERSION_MISMATCH, OPTIONS_INVALID, RUNTIME_NOT_READY, RUNTIME_UNAVAILABLE, SUPERVISOR_NOT_REGISTERED, SUPERVISOR_ORPHANED, SUPERVISOR_PAUSED, SUPERVISOR_STOPPED } from "./help-errors.mjs";
 import { supervisionSteps, DIGEST_GUIDANCE } from "./prompt.mjs";
 
 const THREAD_OPTION = { name: "<THREAD>", text: "DesktopのUUIDかcodex://threads/…、Web Cloudのtask_IDか公式タスクURL、Desktop Cloudのdurable_IDかhostId=durable付きリンク。hostId付きリンクはそのホストを観測する。" };
@@ -26,11 +26,14 @@ const WATCH_OPTIONS = [
 
 const STREAM_RETURNS = "--streamはJSON Linesを出す。data.type=observationは差分（events・cursor・has_more。digest時はdigest.reason・held_ms・counts・from_cursor付き）。data.type=connectionは接続状態（watching・reconnecting・recovered）とresume_cursor。異常終了時は最終行がok:falseでdata.stateがneeds_reviewかfailed、終了コード1。SIGINT/SIGTERMでの停止は終了コード0。";
 
+const CURSOR_TOO_LARGE_ERROR = { code: "CURSOR_TOO_LARGE", when: "高速方式のcursorに入れる実行中項目が多すぎて上限（1 MiB）を超えた", action: "--full-historyを付けて読む（v1 cursorになり、続きも--full-historyで読む）。" };
 const OBSERVATION_CHANGED_ERROR = { code: "OBSERVATION_CHANGED", when: "読み取り中に新しいターンが始まり、自動の再試行1回でも揃わなかった", action: "同じコマンド（同じ--since）をもう一度実行する。--sinceを外して履歴を飛ばさない。" };
 const CURSOR_ERRORS = [
   { code: "STALE_CURSOR", when: "cursorが壊れている、別のタスク・ホスト・transportのもの、または履歴の巻き戻しや追跡位置の不一致を検出した", action: "原因を確認し、--sinceを外して現状を読み直す。送信前に再評価する。" },
   { code: "CURSOR_UPGRADE_REQUIRED", when: "高速方式のタスクに旧v1 cursorを--full-historyなしで渡した", action: "未読差分を続けるなら--full-historyを付ける。高速方式へ移るなら--sinceなしで読み直して新しいcursorを保存する。" },
   OBSERVATION_CHANGED_ERROR,
+  CURSOR_TOO_LARGE_ERROR,
+  OPTIONS_INVALID,
 ];
 const STREAM_ERRORS = [
   { code: "WATCH_RECONNECT_TIMEOUT", when: "--streamで観測成功後の一時切断が60秒以内に復帰しなかった（data.state=failed）", action: "doctorで接続を確認し、自分が読了したcursorを--sinceに指定して明示的に再開する。" },
@@ -53,7 +56,7 @@ const TARGET_ERRORS = [
 const SUPERVISOR_NOTE = "--supervisor付きでは登録済みの監督か確認してから観測し、観測時刻を監督記録に残す。pausedでも観測はできる。";
 const HAS_MORE_NOTE = "has_more:trueならchanged:falseでも、返されたcursorで続きを読み切ってから判断・送信する。";
 const NOTIFICATION_NOTES = [
-  "単発watchで--notify digest・--settle-ms・--max-hold-msを指定するとエラーになる。",
+  "単発watchで--notify digest・--settle-ms・--max-hold-msを指定するとOPTIONS_INVALIDになる。",
   "digestで即時に出すもの: ユーザー入力、ターンの追加と状態変化、plan、最終回答、質問、空でないか変化したattention、タスク状態の変化、読み取り専用以外のコマンド失敗、ファイル変更の失敗。",
   "途中の発言や成功したコマンド・ファイル変更などの通常イベントは、最後の通常イベントから--settle-ms後に出す。",
   "通常イベントが続いても、保留を始めてから--max-hold-msで出す。",
@@ -128,6 +131,7 @@ export const topics = {
       HAS_MORE_NOTE,
       "readと同じ差分取得を使う。--full-historyは毎回の全取得になるので、通常の監視では使わない。cursorの種類と移行はhelp read。",
       "単発watchは接続失敗を再試行せず、そのままエラーで終わる。",
+      "--until・--timeout-ms・--poll-msの値は接続前に検査し、範囲外ならOPTIONS_INVALIDで止まる。",
       ...NOTIFICATION_NOTES,
       ...STREAM_NOTES,
       "平常時は差分行だけを出し、定期的な生存通知は出さない。",
@@ -160,7 +164,7 @@ export const topics = {
       "history_scope=fullは全取得。ページ化されていない古い形式のタスクとCloud・Desktop Cloudのタスクは常に全取得になる。",
       "リモートのnative経路ではhistory_scope=desktop-native-public-historyになる。",
       "v1 cursor（全取得）とv2 cursor（高速方式）は混在できない。",
-      "v2 cursorに--full-historyを付けるとエラー。--full-historyを外して続けるか、--sinceなしで全取得を始める。",
+      "v2 cursorに--full-historyを付けるとOPTIONS_INVALID。--full-historyを外して続けるか、--sinceなしで全取得を始める。",
       "omitted_older_events:nullは省略した古い項目の件数が未集計という意味。件数のための全取得はしない。",
       "cursorは対象タスク・ホスト・remote transportに結び付く。別の対象に渡すとSTALE_CURSOR。",
       "観測対象は履歴APIに現れた項目だけ。",
@@ -180,7 +184,7 @@ export const topics = {
       { name: "--full-history", text: "readの--full-historyと同じ全取得方式で状態とcursorを得る。返るcursorはv1。" },
     ],
     returns: "data.status（active・idle・notLoaded・systemErrorなど。取得できなければunknown）、active_turn_id、attention、running_commands、cursor、history_scope。eventsは返さない。--jsonなしは状態行・実行中ターン・cursor行。",
-    errors: [OBSERVATION_CHANGED_ERROR, ...SUPERVISOR_ERRORS, ...RUNTIME_ERRORS, ...TARGET_ERRORS],
+    errors: [OBSERVATION_CHANGED_ERROR, CURSOR_TOO_LARGE_ERROR, ...SUPERVISOR_ERRORS, ...RUNTIME_ERRORS, ...TARGET_ERRORS, OPTIONS_INVALID],
     examples: ["codexteer status <THREAD> --json"],
     notes: [
       "--sinceなしのreadと同じ取得方式で状態だけを返す。返したcursorからread --sinceへ進める。",
