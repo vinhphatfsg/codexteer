@@ -182,3 +182,17 @@ test("bound supervisors cannot launch Desktop updates", () => {
     assert.equal(result.result.error.code, "SUPERVISOR_CONTROL_FORBIDDEN");
   }
 });
+
+test("local send rejects unknown options before the -- separator and sends text after it literally", t => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "ct-send-options-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { CODEX_HOME: home };
+  for (const args of [["send", ID, "--bogus", "hi"], ["send", ID, "--kidn", "review", "hi"], ["send", "--bogus", ID, "hi"], [ID, "--bogus", "hi"], [`codex://threads/${ID}`, "hi", "--kidn", "review"], ["send", ID, "hi", "--kind"]]) {
+    const { status, result } = cli([...args, "--dry-run"], undefined, env);
+    assert.equal(status, 1, args.join(" ")); assert.equal(result.error.code, "OPTIONS_INVALID", args.join(" "));
+  }
+  for (const args of [["send", ID, "--dry-run", "--", "--force", "--dry-run"], [ID, "--dry-run", "--", "--force", "--dry-run"]]) {
+    const { status, result } = cli(args, undefined, env);
+    assert.equal(status, 0, args.join(" ")); assert.equal(result.data.dry_run, true); assert.equal(result.data.message_characters, "--force --dry-run".length);
+  }
+});

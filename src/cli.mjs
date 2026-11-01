@@ -77,11 +77,13 @@ export function fail(error, json) {
   process.exitCode = 1;
 }
 
+const usage = message => Object.assign(new Error(message), { code: "OPTIONS_INVALID" });
+
 function takeOption(args, name, defaultValue) {
   const index = args.indexOf(name);
   if (index === -1 || (args.includes("--") && index > args.indexOf("--"))) return defaultValue;
   const value = args[index + 1];
-  if (value == null || value.startsWith("--")) throw new Error(`${name} requires a value.`);
+  if (value == null || value.startsWith("--")) throw usage(`${name} requires a value.`);
   args.splice(index, 2);
   return value;
 }
@@ -641,6 +643,7 @@ async function mainOnTarget(argv) {
     const waitInput = takeOption(args, "--wait-ms", undefined);
     if (backend !== "ui" && (keepFocus || waitInput != null)) throw new Error("--keep-focus and --wait-ms require --backend ui.");
     const waitMs = Number(waitInput ?? "1500");
+    if (args.slice(0, args.includes("--") ? args.indexOf("--") : args.length).some(arg => arg.startsWith("--"))) throw usage("Unknown send option. Use -- before instruction text starting with --.");
     const threadInput = args.shift();
     if (!threadInput) throw new Error("send requires a thread ID or codex://threads URL.");
     const message = readMessage(args);
