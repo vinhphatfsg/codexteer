@@ -13,6 +13,8 @@
 - `--supervisor`・`--connection`・`--require-node-version`・`--host`・`--remote-transport`・`--context-thread`を`--`より前に重ねて指定すると、全経路で`OPTIONS_INVALID`になります。生成した実行コマンドに付け直しても束縛は変わりません。以前の版が生成した長い実行コマンドはそのまま使えます。`--use-path-cli`の実行コマンドと動作は変わりません。
 - `read`・`watch`・`status`が返すcursorを、タスクのターン数で長くならない`c1`で始まる形式にしました。全ターンの一覧の代わりにターン列のSHA-256を持ち、`--since`・`--based-on`では従来どおり現在のターン列・項目と照合するため、`STALE_CURSOR`・`STALE_OBSERVATION`の判定は変わりません。200ターンのタスクでは約18,600文字から約190文字になります。以前の版が出力したcursor（`eyJ`で始まる）も引き続き使え、続きは新しい形式で返します。保存済みの指摘・送信履歴の記録は変わりません。保存済みCLIなど以前の版に新しいcursorを渡すと`STALE_CURSOR`になるため、`--since`なしで読み直してください。
 - 失敗した呼び出しは`error.help`に該当トピック、`error.action`にそのトピックに記載した対処を返し、引数エラー（`OPTIONS_INVALID`・`CLOUD_OPTIONS_INVALID`・`DESKTOP_CLOUD_OPTIONS_INVALID`）は`error.usage`に失敗したサブコマンドの使い方も返します。テキスト出力では標準エラーに`使い方:`・`対処:`の行を足します。代わりに`help <topic>`はテキストでも`--json`でもエラー一覧を載せず、`help <topic> --errors`を示す1行だけにしました（`--json`の`errors`配列は`errors_command`に置き換わります）。一覧は`help <topic> --errors`で取得できます。`help send`は約4,300から約2,300 o200kに減ります。エラーコード・メッセージ・終了コードは変わりません。
+- `findings`の`create`・`reopen`・`show`・`list`・`resolve`・`dismiss`・`evaluate`（`revisions`を含む）と`history list`・`show`・`check`・`mark`、`instructions list`は、`based_on`のcursorをそのまま返す代わりに、cursorのSHA-256の先頭16桁を`based_on_sha256`として返します。保存済みの記録は全文のcursorを保持し、以前の記録もそのまま読めます。
+- 生成プロンプトは、会話の要約・再起動の後に保存した本文を読み直し、保存していない場合だけ`help monitor`を読むよう指示します。単発の`watch --until change`の行の後に、完了まで待つ`--until idle`と本文を短くする`--max-chars N`（既定2000）も示します。
 - 生成済みの本文は変わりません。更新後のCLIで生成し直してください。
 
 ## 0.19.0 — 2026-11-01公開
