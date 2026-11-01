@@ -337,12 +337,14 @@ async function mainOnTarget(argv) {
       return;
     }
     if (command === "resource") {
-      const action = args.shift(); let data;
+      const threadId = takeOption(args, "--thread", undefined), action = args.shift(); let data;
+      if (supervisor && threadId === undefined) throw Object.assign(new Error("A supervisor resource command requires its --thread target."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+      // Like read/watch, inspecting leases and giving one up stay available while intervention is paused.
+      if (supervisor) await assertSupervisor(threadId, supervisor, { connection, sending: ["acquire", "renew", "run"].includes(action) });
       if (["acquire", "run"].includes(action)) {
-        const options = { owner: takeOption(args, "--owner", undefined), ttlMs: Number(takeOption(args, "--ttl-ms", "600000")), reason: takeOption(args, "--reason", ""), condition: takeOption(args, "--condition", ""), threadId: takeOption(args, "--thread", undefined), cwd: takeOption(args, "--cwd", undefined) };
+        const options = { owner: takeOption(args, "--owner", undefined), ttlMs: Number(takeOption(args, "--ttl-ms", "600000")), reason: takeOption(args, "--reason", ""), condition: takeOption(args, "--condition", ""), threadId, cwd: takeOption(args, "--cwd", undefined) };
         if (action === "run") {
           const timeoutMs = Number(takeOption(args, "--timeout-ms", "0")), includeOutput = takeFlag(args, "--include-output"), execBackend = takeOption(args, "--exec-backend", "app-server"), remoteShell = takeOption(args, "--shell", undefined);
-          if (supervisor) await assertSupervisor(options.threadId, supervisor, { connection, sending: execBackend === "thread-shell" });
           if (args[1] !== "--" || args.length < 3) throw new Error("Expected: resource run <NAME> --owner NAME -- <COMMAND> [ARGS...]");
           data = await runWithResource(args[0], args.slice(2), { ...options, timeoutMs, execBackend, remoteShell, supervisor, connection });
           if (!includeOutput) delete data.output_tail;
