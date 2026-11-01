@@ -60,6 +60,6 @@ test("dry run does not touch the desktop", () => {
 test("rejects invalid wait time", () => {
   assert.throws(
     () => sendDesktopMessage(THREAD_ID, "test", { dryRun: true, waitMs: -1 }),
-    /--wait-ms/,
+    { code: "OPTIONS_INVALID" },
   );
 });

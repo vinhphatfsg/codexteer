@@ -61,7 +61,7 @@ export function openDesktopThread(threadId, { focusComposer = false, prompt, bac
   const deepLink = focusComposer ? threadComposerDeepLink(threadId, prompt) : threadDeepLink(threadId);
   const result = run(OPEN, buildOpenArgs(deepLink, { background }));
   if (result.status !== 0) {
-    throw new Error(result.stderr.trim() || `Failed to open ${deepLink}`);
+    throw Object.assign(new Error(result.stderr.trim() || `Failed to open ${deepLink}`), { code: "DESKTOP_UI_FAILED" });
   }
   return {
     thread_id: threadId,
@@ -74,7 +74,7 @@ export function openDesktopThread(threadId, { focusComposer = false, prompt, bac
 
 function validateWaitMs(waitMs) {
   if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > 30000) {
-    throw new Error("--wait-ms must be an integer between 0 and 30000.");
+    throw Object.assign(new Error("--wait-ms must be an integer between 0 and 30000."), { code: "OPTIONS_INVALID" });
   }
 }
 
@@ -85,7 +85,7 @@ function requireReadyDesktop() {
     .filter(([, ok]) => !ok)
     .map(([name]) => name)
     .join(", ");
-  throw new Error(`Desktop backend is not ready: ${missing}. ${doctor.remediation ?? ""}`.trim());
+  throw Object.assign(new Error(`Desktop backend is not ready: ${missing}. ${doctor.remediation ?? ""}`.trim()), { code: "DESKTOP_UI_NOT_READY" });
 }
 
 function frontmostProcessId() {
@@ -96,7 +96,7 @@ function frontmostProcessId() {
   if (result.error) throw result.error;
   const processId = Number.parseInt(result.stdout.trim(), 10);
   if (result.status !== 0 || !Number.isInteger(processId) || processId < 1) {
-    throw new Error(result.stderr.trim() || "Could not identify the previously focused application.");
+    throw Object.assign(new Error(result.stderr.trim() || "Could not identify the previously focused application."), { code: "DESKTOP_UI_FAILED" });
   }
   return processId;
 }
@@ -105,7 +105,7 @@ function enableDesktopAccessibility() {
   const result = run(OSASCRIPT, [ACCESSIBILITY_SCRIPT, "enable"], { timeout: 5000 });
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(result.stderr.trim() || "Could not enable the Codex accessibility tree.");
+    throw Object.assign(new Error(result.stderr.trim() || "Could not enable the Codex accessibility tree."), { code: "DESKTOP_UI_FAILED" });
   }
   return result.stdout.trim() || "unchanged";
 }
@@ -115,7 +115,7 @@ function restoreDesktopAccessibility(mode) {
   const result = run(OSASCRIPT, [ACCESSIBILITY_SCRIPT, "restore", mode], { timeout: 5000 });
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(result.stderr.trim() || "Could not restore the Codex accessibility state.");
+    throw Object.assign(new Error(result.stderr.trim() || "Could not restore the Codex accessibility state."), { code: "DESKTOP_UI_FAILED" });
   }
 }
 
@@ -134,7 +134,7 @@ export function inspectDesktopUi(threadId, { waitMs = 1500 } = {}) {
   }
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(result.stderr.trim() || "Could not inspect the Codex Desktop UI.");
+    throw Object.assign(new Error(result.stderr.trim() || "Could not inspect the Codex Desktop UI."), { code: "DESKTOP_UI_FAILED" });
   }
   return {
     thread_id: threadId,
@@ -181,7 +181,7 @@ export function sendDesktopMessage(
   { dryRun = false, waitMs = 1500, newTurn = false, keepFocus = false } = {},
 ) {
   if ((parseThreadTarget(threadId).hostId ?? targetHost()) !== "local") throw remoteReadOnly();
-  if (message.trim() === "") throw new Error("Message must not be empty.");
+  if (message.trim() === "") throw Object.assign(new Error("Message must not be empty."), { code: "OPTIONS_INVALID" });
   validateWaitMs(waitMs);
 
   const desktopSettings = readDesktopSettings();
@@ -202,7 +202,7 @@ export function sendDesktopMessage(
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(result.stderr.trim() || "Codex Desktop did not accept the steering message.");
+    throw Object.assign(new Error(result.stderr.trim() || "Codex Desktop did not accept the steering message."), { code: "DESKTOP_UI_FAILED" });
   }
 
   return { ...plan, dry_run: false, sent: null, delivery_status: "submitted_unverified" };

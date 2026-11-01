@@ -13,8 +13,8 @@ test("leases exclude another owner and record conditions without interpreting th
   now += 1001;
   assert.equal((await resourceStatus("screen", { ...f, now: () => now })).state, "expired");
   const b = await acquireResource("screen", { ...f, now: () => now, owner: "codex" });
-  await assert.rejects(releaseResource("screen", a.token, f), /does not match/);
-  await assert.rejects(renewResource("screen", a.token, f), /no longer owned/);
+  await assert.rejects(releaseResource("screen", a.token, f), { code: "RESOURCE_NOT_OWNED" });
+  await assert.rejects(renewResource("screen", a.token, f), { code: "RESOURCE_NOT_OWNED" });
   await releaseResource("screen", b.token, f);
   assert.equal((await resourceStatus("screen", f)).state, "released");
 });
@@ -59,4 +59,36 @@ test("unknown remote execution retains its lease instead of allowing a competing
   }), error => error.lease_retained === true && error.remote_execution_status === "unknown");
   assert.equal((await resourceStatus("unknown", f)).state, "held");
   await assert.rejects(acquireResource("unknown", { ...f, owner: "other" }), { code: "RESOURCE_BUSY" });
+});
+
+test("a bound supervisor's resource commands require its --thread and the same supervisor state as run", async t => {
+  const { spawnSync } = await import("node:child_process"), { existsSync } = await import("node:fs");
+  const { registerSupervisor, controlSupervisor } = await import("../src/supervision.mjs");
+  const f = await fixture(t), THREAD = "33333333-3333-4333-8333-333333333333", OTHER = "11111111-1111-4111-8111-000000000044";
+  const SESSION = "22222222-2222-4222-8222-000000000055", STRANGER = "22222222-2222-4222-8222-000000000066";
+  const cli = args => { const r = spawnSync(process.execPath, ["bin/codexteer.mjs", "--json", ...args], { encoding: "utf8", env: { ...process.env, CODEX_HOME: f.home } }); return { status: r.status, ...JSON.parse(r.stdout) }; };
+  const marker = `${f.home}/ran`, run = [process.execPath, "-e", "require('fs').writeFileSync(process.argv[1],'x')", marker];
+  const commands = token => ({ acquire: ["acquire", "lock", "--owner", "sup"], renew: ["renew", "lock", "--token", token], release: ["release", "lock", "--token", token], status: ["status", "lock"], list: ["list"], run: ["run", "other-lock", "--owner", "sup", "--", ...run] });
+  const as = (session, thread, command) => cli(["--supervisor", session, "resource", ...(thread ? ["--thread", thread] : []), ...command]);
+  await registerSupervisor(THREAD, SESSION, f);
+  for (const command of Object.values(commands("fixture-token"))) assert.equal(as(SESSION, undefined, command).error?.code, "SUPERVISOR_CONTROL_FORBIDDEN", command.join(" "));
+  const acquired = as(SESSION, THREAD, commands().acquire);
+  assert.equal(acquired.ok, true); assert.equal(acquired.data.thread_id, THREAD);
+  const token = acquired.data.token, active = commands(token);
+  for (const name of ["renew", "status", "list"]) assert.equal(as(SESSION, THREAD, active[name]).ok, true, name);
+  for (const [session, thread, code] of [[STRANGER, THREAD, "SUPERVISOR_MISMATCH"], [STRANGER, OTHER, "SUPERVISOR_NOT_REGISTERED"], [SESSION, OTHER, "SUPERVISOR_CONFLICT"]]) {
+    for (const [name, command] of Object.entries(active)) assert.equal(as(session, thread, command).error?.code, code, `${code} ${name}`);
+  }
+  await controlSupervisor(THREAD, "pause", f);
+  for (const name of ["acquire", "renew", "run"]) assert.equal(as(SESSION, THREAD, active[name]).error?.code, "SUPERVISOR_PAUSED", name);
+  assert.equal(existsSync(marker), false);
+  assert.equal((await resourceStatus("other-lock", f)).state, "available");
+  for (const name of ["status", "list", "release"]) assert.equal(as(SESSION, THREAD, active[name]).ok, true, name);
+  assert.equal((await resourceStatus("lock", f)).state, "released");
+  await controlSupervisor(THREAD, "resume", f);
+  assert.equal(as(SESSION, THREAD, active.run).ok, true); assert.equal(existsSync(marker), true);
+  const held = as(SESSION, THREAD, active.acquire).data.token;
+  await controlSupervisor(THREAD, "stop", f);
+  for (const [name, command] of Object.entries(commands(held))) assert.equal(as(SESSION, THREAD, command).error?.code, "SUPERVISOR_STOPPED", name);
+  assert.equal((await resourceStatus("lock", f)).state, "held");
 });

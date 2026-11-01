@@ -46,7 +46,7 @@ for (const status of ["idle", "notLoaded", "systemError"]) {
   test(`steer rejects ${status} without mutating`, async () => {
     const calls = [];
     const client = { async request(method) { calls.push(method); return { thread: thread(status) }; } };
-    await assert.rejects(sendOnClient(client, ID, "test"), /active turn/);
+    await assert.rejects(sendOnClient(client, ID, "test"), { code: "TASK_IDLE" });
     assert.deepEqual(calls, ["thread/read", "thread/read"]);
   });
 }
@@ -321,12 +321,12 @@ test("missing or only historical active turns across pages never send", async ()
     const turns = Array.from({ length: 101 }, (_, i) => ({ id: `turn-${i}`, status: i < 2 ? "inProgress" : "completed" }));
     turns.at(-1).status = latestStatus;
     const { client, calls } = pagedServer({ turns });
-    await assert.rejects(sendOnClient(client, ID, "must not send"), /active turn/);
+    await assert.rejects(sendOnClient(client, ID, "must not send"), { code: "TASK_IDLE" });
     assert.equal(calls.filter(call => call.method.startsWith("turn/")).length, 0);
   }
   for (const turns of [[], [{ id: "old", status: "inProgress" }, { id: "latest", status: "completed" }]]) {
     const { client, calls } = pagedServer({ turns });
-    await assert.rejects(sendOnClient(client, ID, "must not send"), /active turn/);
+    await assert.rejects(sendOnClient(client, ID, "must not send"), { code: "TASK_IDLE" });
     assert.equal(calls.filter(call => call.method.startsWith("turn/")).length, 0);
   }
 });
@@ -346,7 +346,7 @@ test("legacy ambiguity still fails before mutation", async () => {
   const ambiguous = { ...thread(), turns: [{ id: "old", status: "inProgress" }, { id: TURN, status: "inProgress" }] };
   await assert.rejects(sendOnClient({ async request(method) {
     assert.equal(method, "thread/read"); return { thread: ambiguous };
-  } }, ID, "must not send"), /active turn/);
+  } }, ID, "must not send"), { code: "TASK_IDLE" });
 });
 
 test("orphan workaround never retries, falls back, or starts after rejection or unknown acknowledgement", async t => {
@@ -413,10 +413,10 @@ test("paged new-turn validates both sides of Desktop subscription without full h
     assert.deepEqual(calls.filter(call => call.method.startsWith("turn/")).map(call => call.method), ["turn/start"]);
   }
   const { client, metadata, calls } = pagedServer({ status: "idle", turns: [] });
-  await assert.rejects(sendOnClient(client, ID, "must not start", { newTurn: true, subscribe: async () => { metadata.status.type = "active"; } }), /became active/);
+  await assert.rejects(sendOnClient(client, ID, "must not start", { newTurn: true, subscribe: async () => { metadata.status.type = "active"; } }), { code: "TASK_BUSY" });
   assert.equal(calls.filter(call => call.method.startsWith("turn/")).length, 0);
   const inconsistent = pagedServer({ status: "idle" });
-  await assert.rejects(sendOnClient(inconsistent.client, ID, "must not resume", { newTurn: true, subscribe: () => assert.fail("active turn must prevent resume") }), /idle/);
+  await assert.rejects(sendOnClient(inconsistent.client, ID, "must not resume", { newTurn: true, subscribe: () => assert.fail("active turn must prevent resume") }), { code: "TASK_BUSY" });
 });
 
 test("paged sends require pagination capability and stop on rejected page reads", async t => {

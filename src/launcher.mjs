@@ -121,19 +121,19 @@ export function desktopLaunchArgs(home, wrapper) {
 export async function startDesktop({ dryRun = false, run = spawnSync, prepare = prepareDeployment, discover = discoverRuntime, connect = RpcClient.connect } = {}) {
   const home = codexHome();
   if (dryRun) return { backend: "app-server", dry_run: true, started: false, command: "desktop.start" };
-  if (process.platform !== "darwin") throw new Error("Desktop startup requires macOS.");
-  if (process.env.CODEX_APP_SERVER_WS_URL?.trim()) throw new Error("An existing CODEX_APP_SERVER_WS_URL override conflicts with shared Desktop startup. Remove it from this launch environment first.");
+  if (process.platform !== "darwin") throw Object.assign(new Error("Desktop startup requires macOS."), { code: "DESKTOP_START_UNSUPPORTED" });
+  if (process.env.CODEX_APP_SERVER_WS_URL?.trim()) throw Object.assign(new Error("An existing CODEX_APP_SERVER_WS_URL override conflicts with shared Desktop startup. Remove it from this launch environment first."), { code: "DESKTOP_START_UNSUPPORTED" });
   await access(BUNDLED_CLI, constants.X_OK);
   await access(BUNDLED_NODE, constants.X_OK);
   // No Accessibility APIs, focus changes, process termination, or -n (new instance).
   const processes = run("/bin/ps", ["-axo", "comm="], { encoding: "utf8", timeout: 3000 });
-  if (processes.status !== 0) throw new Error("Cannot check whether Desktop is running. Run desktop start from your terminal.");
+  if (processes.status !== 0) throw Object.assign(new Error("Cannot check whether Desktop is running. Run desktop start from your terminal."), { code: "DESKTOP_START_FAILED" });
   if (processes.stdout.split("\n").some(line => line.trim() === `${APP_PATH}/Contents/MacOS/ChatGPT`)) {
-    throw new Error("Desktop is already running. Finish current tasks and quit Desktop, then run: codexteer desktop start");
+    throw Object.assign(new Error("Desktop is already running. Finish current tasks and quit Desktop, then run: codexteer desktop start"), { code: "DESKTOP_ALREADY_RUNNING" });
   }
   const deployment = await prepare(home);
   const launched = run("/usr/bin/open", desktopLaunchArgs(home, deployment.wrapper_path), { encoding: "utf8", timeout: 5000 });
-  if (launched.status !== 0) throw new Error("Desktop launch failed. Normal startup from the Dock is still available.");
+  if (launched.status !== 0) throw Object.assign(new Error("Desktop launch failed. Normal startup from the Dock is still available."), { code: "DESKTOP_START_FAILED" });
   let lastError;
   for (let attempt = 0; attempt < 100; attempt++) {
     try {
@@ -149,5 +149,5 @@ export async function startDesktop({ dryRun = false, run = spawnSync, prepare = 
     }
     await delay(200);
   }
-  throw new Error(`Desktop started, but its shared App Server is not ready. ${lastError?.message ?? ""}`);
+  throw Object.assign(new Error(`Desktop started, but its shared App Server is not ready. ${lastError?.message ?? ""}`), { code: "RUNTIME_NOT_READY" });
 }

@@ -3,7 +3,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 export function parseThreadTarget(input) {
   if (typeof input !== "string" || input.trim() === "") {
-    throw new Error("Thread ID is required.");
+    throw Object.assign(new Error("Thread ID is required."), { code: "OPTIONS_INVALID" });
   }
 
   let value = input.trim(), hostId;
@@ -12,19 +12,19 @@ export function parseThreadTarget(input) {
     try {
       url = new URL(value);
     } catch {
-      throw new Error(`Invalid Codex thread URL: ${input}`);
+      throw Object.assign(new Error(`Invalid Codex thread URL: ${input}`), { code: "OPTIONS_INVALID" });
     }
     if (url.hostname !== "threads") {
-      throw new Error(`Expected codex://threads/<thread-id>: ${input}`);
+      throw Object.assign(new Error(`Expected codex://threads/<thread-id>: ${input}`), { code: "OPTIONS_INVALID" });
     }
     const hosts = url.searchParams.getAll("hostId");
-    if (hosts.length > 1) throw new Error("A thread link must have only one hostId.");
+    if (hosts.length > 1) throw Object.assign(new Error("A thread link must have only one hostId."), { code: "OPTIONS_INVALID" });
     if (hosts.length) hostId = validateHostId(hosts[0]);
     value = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
   }
 
   if (!UUID_PATTERN.test(value)) {
-    throw new Error(`Invalid local Codex thread ID: ${input}`);
+    throw Object.assign(new Error(`Invalid local Codex thread ID: ${input}`), { code: "OPTIONS_INVALID" });
   }
   return { threadId: value.toLowerCase(), hostId };
 }

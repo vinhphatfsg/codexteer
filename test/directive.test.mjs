@@ -18,8 +18,8 @@ test("unannotated sends preserve exact text; annotated sends distinguish hypothe
   await p.beforeSend(state());
   await writeFile(`${home}/result.txt`, "changed");
   await assert.rejects(p.beforeSend(state()), { code: "STALE_EVIDENCE" });
-  await assert.rejects(prepareDirective(ID, "x", { kind: "approval" }, "id"), /kind/);
-  await assert.rejects(prepareDirective(ID, "x", { source: "bad\nname" }, "id"), /source/);
+  await assert.rejects(prepareDirective(ID, "x", { kind: "approval" }, "id"), { code: "OPTIONS_INVALID" });
+  await assert.rejects(prepareDirective(ID, "x", { source: "bad\nname" }, "id"), { code: "OPTIONS_INVALID" });
 });
 
 test("based-on permits progress but rejects new user input or another active turn before mutation", async () => {

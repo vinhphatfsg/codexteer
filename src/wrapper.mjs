@@ -104,12 +104,12 @@ export function serverArguments(args, socketPath) {
     if (arg === "--stdio") continue;
     if (arg === "--listen" || arg.startsWith("--listen=")) {
       const value = arg === "--listen" ? args[++i] : arg.slice(9);
-      if (value !== "stdio://") throw new Error("Desktop requested a conflicting App Server transport.");
+      if (value !== "stdio://") throw Object.assign(new Error("Desktop requested a conflicting App Server transport."), { code: "OPTIONS_INVALID" });
       continue;
     }
     transformed.push(arg);
     if (values.has(arg) || ["--code-mode-host", "--ws-auth", "--ws-token-file", "--ws-token-sha256", "--ws-shared-secret-file", "--ws-issuer", "--ws-audience", "--ws-max-clock-skew-seconds"].includes(arg)) {
-      if (args[i + 1] == null) throw new Error("Incomplete App Server startup arguments.");
+      if (args[i + 1] == null) throw Object.assign(new Error("Incomplete App Server startup arguments."), { code: "OPTIONS_INVALID" });
       transformed.push(args[++i]);
     }
   }
