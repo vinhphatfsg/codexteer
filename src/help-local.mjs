@@ -1,8 +1,9 @@
+import { RUNTIME_NOT_READY, RUNTIME_UNAVAILABLE } from "./help-errors.mjs";
 const RESTART_SHARED = "ユーザーが作業を終えてDesktopを終了し、codexteer desktop startで起動し直す。codexteerは自動で起動・再起動しない。";
 
 const sharedRuntimeErrors = [
-  { code: "RUNTIME_UNAVAILABLE", when: "既定sharedのwrapper（desktop startで起動するもの）が見つからない", action: RESTART_SHARED },
-  { code: "RUNTIME_NOT_READY", when: "wrapperの記録はあるが、wrapper・App ServerのプロセスまたはDesktopとの接続が生きていない", action: RESTART_SHARED },
+  RUNTIME_UNAVAILABLE,
+  RUNTIME_NOT_READY,
 ];
 
 const desktopReadOnlyError = {

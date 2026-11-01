@@ -1,3 +1,4 @@
+import { DUPLICATE_INTERVENTION, SUPERVISOR_PAUSED, SUPERVISOR_STOPPED } from "./help-errors.mjs";
 const C_UNKNOWN_DELIVERY = "delivery_status:unknownは受付未確認。自動再送せず、history check <THREAD> <MESSAGE-ID>で照合する。";
 const C_NOT_PROOF = "history checkのnot_observedは未配送の証明ではない。storedもCodexが理解・反映した証明ではない。";
 const C_SUPERVISED_SEND = "--supervisor付きの送信は--based-onと--findingが必須（SUPERVISOR_OBSERVATION_REQUIRED/SUPERVISOR_FINDING_REQUIRED）。instructions retractは--finding不要。";
@@ -25,7 +26,7 @@ const C_E_STALE_OBSERVATION = { code: "STALE_OBSERVATION", when: "--based-onのc
 const C_E_STALE_CURSOR = { code: "STALE_CURSOR", when: "cursorが壊れている、別タスク・別hostのもの、または履歴が変わった", action: "--sinceなしでreadし直し、新しいcursorを使う。" };
 const C_E_SUPERVISOR_OBSERVATION = { code: "SUPERVISOR_OBSERVATION_REQUIRED", when: "--supervisor付きの送信に--based-onがない", action: "readで差分を読み切り、そのcursorを--based-onに付ける。" };
 const C_E_DESKTOP_READ_ONLY = { code: "DESKTOP_READ_ONLY", when: "--connection desktopで送信・撤回しようとした（観測専用）", action: "接続を自動で切り替えず、監督中に--connectionを外して回避しない。送信はshared接続を明示して別途行う（help connection）。" };
-const C_E_DUPLICATE = { code: "DUPLICATE_INTERVENTION", when: "send --findingで、その指摘の同じrevisionにaccepted/unknownの送信がある（dry-runでも判定）", action: "再送しない。error.existing_message_idをhistory checkし、対応を待つ。新しい根拠か条件変更があるときだけfindings reopen。" };
+const C_E_DUPLICATE = DUPLICATE_INTERVENTION;
 const C_E_FINDING_CLOSED = { code: "FINDING_CLOSED", when: "send --findingの指摘がresolvedまたはdismissed", action: "新しい根拠か要件の変更があるときだけfindings reopenしてから送る。" };
 const C_E_STALE_FINDING = { code: "STALE_FINDING", when: "送信直前に指摘のrevisionが変わった、または閉じられた", action: "findings showで現状を確認し、再評価してから送る。" };
 const C_E_RECORD_BUSY = { code: "RECORD_BUSY", when: "同じ記録（同じタスクの送信・履歴・指摘、同じcheckpoint、同じ資源）を別のプロセスが使用中。この操作は実行していない", action: "その操作が終わってから再実行する。" };
@@ -72,8 +73,8 @@ export const topics = {
       { code: "STALE_EVIDENCE", when: "根拠ファイル（--evidenceまたは指摘の根拠）が記録後に変わった・消えた", action: "ファイルを読み直して判断し直す。指摘の根拠ならfindings reopen <THREAD> <ID> --reason TEXT --evidence FILEで更新してから送る。" },
       { code: "STALE_CHECKPOINT", when: "--checkpointが送信直前の照合でvalidでない", action: "checkpoint verifyで原因を確認し、必要ならcaptureかrunをやり直す。" },
       { code: "EXPIRED_DIRECTIVE", when: "--expires-atの期限が送信前に過ぎた", action: "必要なら新しい期限で送り直すか判断する。" },
-      { code: "SUPERVISOR_PAUSED", when: "監督がpause中に送信した", action: "送信しない。観測は続けられる。再開（resume）はユーザーだけが行う。" },
-      { code: "SUPERVISOR_STOPPED", when: "停止済みの監督IDで送信した", action: "送信しない。停止済みIDは復活しない（help supervise）。" },
+      SUPERVISOR_PAUSED,
+      SUPERVISOR_STOPPED,
       { code: "NOT_SENT", when: "送っていない（実行中ターンがない、--new-turnでidleでない、同じタスクの送信ロックが残っている等）", action: "messageの理由を確認し、readで状態を読み直してから判断する。idleのタスクへの再開はユーザーの依頼がある場合だけ。" },
       { code: "TIMEOUT", when: "App Serverの応答待ちが時間切れ（PROTOCOL_ERROR・CONNECTION_FAILEDなどの通信異常も同じ扱い）。送信要求（turn/steer・turn/start）中ならdelivery_status:unknown、それより前ならnot_sent", action: "error.delivery_statusを見る。unknownなら自動再送せずhistory check <THREAD> <MESSAGE-ID>で照合する。" },
       { code: "RUNTIME_CHANGED", when: "送信直前にApp Serverの実行環境が入れ替わった（未送信）", action: "readで対象を読み直してから判断する。" },

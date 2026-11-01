@@ -1,3 +1,4 @@
+import { NODE_VERSION_MISMATCH, SUPERVISOR_NOT_REGISTERED, SUPERVISOR_ORPHANED, SUPERVISOR_PAUSED, SUPERVISOR_STOPPED } from "./help-errors.mjs";
 const THREAD_OPTION = { name: "THREAD", text: "対象タスク。ローカルUUID、codex://threads/<UUID>[?hostId=...]、Cloudのtask_ IDか公式タスクURL、Desktop Cloudのdurable_ IDかhostId=durableのリンク。正規化して本文に埋め込む。" };
 const MESSAGE_OPTION = { name: "MESSAGE", default: "標準方針", text: "監督方針。指定すると標準方針全体を置き換える。引用して一つの引数で渡す。空白だけはINVALID_SUPERVISION_POLICY、--で始まる文は引数エラー。" };
 const AGENT_IDENTITY = "監督IDのowner（register --owner）と本文のsend --source（claudeはclaude-code）にもなる。claude/codex以外は生成前に拒否する（エラーコードなし）。";
@@ -16,16 +17,16 @@ const LAUNCH_RETURNS = "起動したエージェントの標準入力・標準�
 
 const SESSION_ERRORS = [
   { code: "SUPERVISOR_CONFLICT", when: "registerした対象に別のactive/paused監督がいる（異常終了で残った登録を含む）。または同じ監督IDが別タスクに登録済み。", action: "置き換えずユーザーに知らせる。不要な旧監督はユーザーがsupervise stopしてから、新しい本文で始める。" },
-  { code: "SUPERVISOR_STOPPED", when: "停止済みの監督IDでregister・観測・送信した。またはstoppedの監督をpause/resumeした。", action: "その監督を終了する。停止済みIDは復活しないため、必要なら新しい本文を生成する。" },
+  SUPERVISOR_STOPPED,
   { code: "SUPERVISOR_MISMATCH", when: "コマンドの監督ID・--connection・remote transportが登録と違う（古い本文や別セッション）。", action: "その監督を終了する。生成されたコマンドを変えずに使っていたか確認する。" },
-  { code: "SUPERVISOR_NOT_REGISTERED", when: "register前に監督ID付きで観測・送信した。または未登録のタスクをpause/resume/stopした。", action: "本文の開始手順どおりsupervise registerしてから操作する。" },
-  { code: "SUPERVISOR_PAUSED", when: "pause中に監督ID付きで送信した。", action: "観測だけ続け、ユーザーがresumeするまで送信しない。自分で解除しない。" },
+  SUPERVISOR_NOT_REGISTERED,
+  SUPERVISOR_PAUSED,
   { code: "SUPERVISOR_CONTROL_FORBIDDEN", when: "監督ID付きでsupervise list/pause/resume/stopを実行した。", action: "制御はユーザーが端末から--supervisorなしで行う。監督は自分の状態を変えない。" },
   { code: "SUPERVISOR_INVALID", when: "監督IDがUUID形式でない、--ownerが「英数字で始まる英数字._-の1〜80文字」でない、または保存された監督記録が不正。", action: "生成された値をそのまま使う。記録が不正なら介入を止めてユーザーに報告する。" },
   { code: "RECORD_BUSY", when: "送信などで同じタスクの監督記録がロック中にpause/resume/stopした。", action: "配送結果を確認してから制御を再実行する。成功するまで停止済みと扱わない。" },
 ];
 const LAUNCHER_ERRORS = [
-  { code: "SUPERVISOR_ORPHANED", when: "直接起動したsuperviseのプロセスが終了したのに、登録がactive/pausedのまま残っている。", action: "その監督を終了する。ユーザーがsupervise statusで確認してstopし、新しく始める。" },
+  SUPERVISOR_ORPHANED,
   { code: "PERMISSION_DENIED", when: "sandboxが起動元プロセスの生存確認を拒否した（status/list・監督ID付きコマンド）。", action: "生存を推測しない。ユーザーの端末か、通常のコマンド承認で同じコマンドを実行する。" },
 ];
 const GENERATION_ERRORS = [
@@ -41,7 +42,7 @@ const SAVED_CLI_ERRORS = [
   { code: "DEPLOYMENT_MODIFIED", when: "保存済みCLIの中身が実行中の配布物と一致しない、または不完全。", action: "本文は出力されない。自動で上書き・削除しないため、ユーザーに報告する。" },
   { code: "DEPLOYMENT_UNSAFE", when: "CODEX_HOME・保存先・配布物の所有者・権限・リンク・種類が安全条件を満たさない。", action: "権限等を直してから再実行する。自動修復はしない。" },
   { code: "SUPERVISION_PATH_UNSAFE", when: "埋め込むパス（CODEX_HOME・Node・保存先など）に制御文字がある。", action: "制御文字のないパスの環境から生成し直す。" },
-  { code: "NODE_VERSION_MISMATCH", when: "保存済みCLI方式の本文のコマンドを、生成時と違う版のNodeで実行した。", action: "介入を止めて報告し、使うNodeから本文を生成し直す。" },
+  NODE_VERSION_MISMATCH,
 ];
 const ORCHESTRATION_ERRORS = [
   { code: "PROJECT_REQUIRED", when: "--projectがない、または空白だけ。", action: "プロジェクトIDか完全一致名を指定する（一覧はprojects list）。" },

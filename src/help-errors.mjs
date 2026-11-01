@@ -1,0 +1,8 @@
+export const SUPERVISOR_STOPPED = { code: "SUPERVISOR_STOPPED", when: "停止済みの監督IDで登録・観測・送信した。またはstoppedの監督をpause/resumeした。", action: "その監督を終了する。停止済みIDは復活しないので、続けるならユーザーに新しい本文の生成を頼む。" };
+export const SUPERVISOR_NOT_REGISTERED = { code: "SUPERVISOR_NOT_REGISTERED", when: "監督IDがこのタスクにまだ登録されていない。または未登録のタスクをpause/resume/stopした。", action: "本文の開始手順どおりsupervise registerしてから操作する。" };
+export const SUPERVISOR_PAUSED = { code: "SUPERVISOR_PAUSED", when: "pause中の監督が送信した。", action: "送信しない。観測は続けられる。resumeはユーザーだけが行い、監督は自分で解除しない。" };
+export const SUPERVISOR_ORPHANED = { code: "SUPERVISOR_ORPHANED", when: "superviseで直接起動した監督のプロセスが終了したのに、登録がactive/pausedのまま残っている。", action: "その監督を終了する。ユーザーにsupervise statusでの確認とstopを頼み、必要なら新しく始めてもらう。" };
+export const NODE_VERSION_MISMATCH = { code: "NODE_VERSION_MISMATCH", when: "保存済みCLI方式の本文のコマンドを、生成時と違う版のNodeで実行した。", action: "介入を止めて報告し、使うNodeから本文を生成し直す。" };
+export const RUNTIME_UNAVAILABLE = { code: "RUNTIME_UNAVAILABLE", when: "既定sharedの接続先（desktop startで起動する共有App Server）の実行記録やソケットが見つからない。", action: "doctorで確認してユーザーへ報告する。作業中のDesktopを終了・再起動しない。復旧（作業後にDesktopを終了してdesktop start）はユーザーが行う。" };
+export const RUNTIME_NOT_READY = { code: "RUNTIME_NOT_READY", when: "共有App Serverの記録はあるが、そのプロセスかDesktopとの接続が生きていない。", action: "doctorで確認してユーザーへ報告する。作業中のDesktopを終了・再起動しない。復旧（作業後にDesktopを終了してdesktop start）はユーザーが行う。" };
+export const DUPLICATE_INTERVENTION = { code: "DUPLICATE_INTERVENTION", when: "send --findingで、その指摘の同じrevisionにaccepted/unknownの送信がある（dry-runでも判定）。", action: "再送しない。error.existing_message_idをhistory checkして対応を待つ。新しい根拠か解決条件の変更があるときだけfindings reopenする。" };

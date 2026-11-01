@@ -1,3 +1,4 @@
+import { DUPLICATE_INTERVENTION, NODE_VERSION_MISMATCH, RUNTIME_NOT_READY, RUNTIME_UNAVAILABLE, SUPERVISOR_NOT_REGISTERED, SUPERVISOR_ORPHANED, SUPERVISOR_PAUSED, SUPERVISOR_STOPPED } from "./help-errors.mjs";
 import { supervisionSteps, DIGEST_GUIDANCE } from "./prompt.mjs";
 
 const THREAD_OPTION = { name: "<THREAD>", text: "DesktopのUUIDかcodex://threads/…、Web Cloudのtask_IDか公式タスクURL、Desktop Cloudのdurable_IDかhostId=durable付きリンク。hostId付きリンクはそのホストを観測する。" };
@@ -35,15 +36,14 @@ const STREAM_ERRORS = [
   { code: "WATCH_RECONNECT_TIMEOUT", when: "--streamで観測成功後の一時切断が60秒以内に復帰しなかった（data.state=failed）", action: "doctorで接続を確認し、自分が読了したcursorを--sinceに指定して明示的に再開する。" },
 ];
 const SUPERVISOR_ERRORS = [
-  { code: "SUPERVISOR_NOT_REGISTERED", when: "--supervisorのIDがこのタスクにまだ登録されていない", action: "生成された本文のsupervise registerを先に実行する。" },
-  { code: "SUPERVISOR_STOPPED", when: "--supervisorのIDが停止済み", action: "監督を終了する。停止済みIDは復活しない。" },
+  SUPERVISOR_NOT_REGISTERED,
+  SUPERVISOR_STOPPED,
   { code: "SUPERVISOR_MISMATCH", when: "別の監督セッションがタスクを持つ、または登録時と接続・remote transportが違う", action: "監督を終了してユーザーに知らせる。--supervisorや接続を変えて続けない。" },
-  { code: "SUPERVISOR_ORPHANED", when: "superviseで起動した監督のlauncherが終了している", action: "ユーザーにsupervise stopを依頼し、必要なら新しい監督を始めてもらう。" },
+  SUPERVISOR_ORPHANED,
 ];
-const RUNTIME_ACTION = "doctorで確認してユーザーへ報告する。作業中のDesktopを終了・再起動しない。復旧（作業終了後にDesktopを終了しdesktop start）はユーザーが行う。";
 const RUNTIME_ERRORS = [
-  { code: "RUNTIME_UNAVAILABLE", when: "shared接続で共有App Serverの実行記録やソケットが見つからない", action: RUNTIME_ACTION },
-  { code: "RUNTIME_NOT_READY", when: "shared接続で共有App Serverのプロセスが動いていないか、Desktopが接続していない", action: RUNTIME_ACTION },
+  RUNTIME_UNAVAILABLE,
+  RUNTIME_NOT_READY,
   { code: "PERMISSION_DENIED", when: "sandbox等でApp Serverのプロセスや実行記録を確認できない", action: "利用者のコマンド承認に同じコマンドと理由を提示できる。拒否されたら停止し、sandbox無効化や別経路での回避はしない。" },
 ];
 const TARGET_ERRORS = [
@@ -88,9 +88,9 @@ export const topics = {
     returns: STREAM_RETURNS,
     errors: [
       ...CURSOR_ERRORS, ...STREAM_ERRORS, ...SUPERVISOR_ERRORS,
-      { code: "SUPERVISOR_PAUSED", when: "pausedの監督が送信した", action: "観測だけを続け、ユーザーがresumeするまで送信しない。自分でresumeしない。" },
-      { code: "DUPLICATE_INTERVENTION", when: "同じ指摘のrevisionに対応待ちか受付済みの介入がある", action: "historyとfindingsを確認して待つ。新しい根拠か解決条件の変更がある場合だけfindings reopenする。" },
-      { code: "NODE_VERSION_MISMATCH", when: "保存済みCLIの本文を開始時と別のNode版で実行した", action: "介入を止めて理由を報告し、使うNodeから本文を生成し直す。" },
+      SUPERVISOR_PAUSED,
+      DUPLICATE_INTERVENTION,
+      NODE_VERSION_MISMATCH,
       ...RUNTIME_ERRORS,
     ],
     examples: [
