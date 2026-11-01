@@ -30,7 +30,7 @@ export function runCommand(argv, { cwd, timeoutMs = 0, onStart = async () => {},
       clearTimeout(timer); clearTimeout(killer); process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);
       abortSignal?.removeEventListener("abort", interrupt);
       await startUpdate;
-      const result = { pid: child.pid ?? null, exit_code: code, signal, timed_out: timedOut, started_at: started, completed_at: new Date().toISOString(), output_tail: output, output_truncated: truncated, error: failure?.message ?? null };
+      const result = { pid: child.pid ?? null, exit_code: code, signal, timed_out: timedOut, started_at: started, completed_at: new Date().toISOString(), output_tail: output, output_truncated: truncated, error: failure?.message ?? null, error_code: failure ? failure.code ?? null : null };
       resolve(result);
     });
   });

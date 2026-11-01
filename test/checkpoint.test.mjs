@@ -53,6 +53,15 @@ test("failed commands, missing executables and timeouts never validate or attach
   await assert.rejects(getCheckpoint("aaaaaaaa-aaaa-4aaa-8aaa-000000000002", f.id, f), { code: "CHECKPOINT_NOT_FOUND" });
 });
 
+test("an interrupted command reports CANCELLED as its error code", async t => {
+  const f = await fixture(t), controller = new AbortController();
+  const running = runCommand([process.execPath, "-e", "setTimeout(() => {}, 30000)"], { ...f, signal: controller.signal });
+  setTimeout(() => controller.abort(), 100);
+  const result = await running;
+  assert.equal(result.error_code, "CANCELLED");
+  assert.equal((await runCommand([process.execPath, "-e", ""], f)).error_code, null);
+});
+
 test("runner preserves literal arguments without shell expansion and bounds captured output", async t => {
   const f = await fixture(t);
   const result = await runCommand([process.execPath, "-e", "console.log(process.argv[1]);", "$(touch not-created)"], f);

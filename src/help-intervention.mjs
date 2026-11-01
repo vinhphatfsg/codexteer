@@ -11,7 +11,7 @@ const C_PAIRED_SHELL = "pairedで--exec-backend thread-shell --shell powershell|
 const C_NO_AUTO_SWITCH = "pairedでcommand/execが拒否されてもthread-shellへ自動で切り替えない。";
 const C_SUPERVISED_SHELL = "--supervisor付きのthread-shellは送信と同じく監督の状態を確認し、pause中はSUPERVISOR_PAUSEDで実行しない。受付後のコマンドはpause・stopでは止まらない。";
 const C_REMOTE_DOC = "pairedの実行・監視の詳細はhelp remoteとdocs/remote-operations.md。";
-const C_INTERRUPTED_RUN = "ローカルのrunがSIGINT/SIGTERMで止まると、結果のerrorに\"Command interrupted.\"が入りvalid:false・終了コード1になる（エラーコードは付かない）。";
+const C_INTERRUPTED_RUN = "ローカルのrunがSIGINT/SIGTERMで止まると、結果のerror_codeがCANCELLEDになりvalid:false・終了コード1になる。";
 const C_OUTPUT_TAIL = "出力は末尾32768文字までローカルに保存し、--include-output指定時だけ表示する。";
 
 const C_OPT_DRY_RUN = { name: "--dry-run", text: "送信予定（方式・文字数・メタデータ）だけ返す。根拠ファイルの読取りと入力検証は行うが、接続・鮮度確認・記録・送信はしない。" };
@@ -164,7 +164,7 @@ export const topics = {
       { code: "FINDING_INVALID", when: "keyの形式、必須テキストの欠落・長さ超過、--rating・--limitの値、resolveの--checkpoint欠落", action: "引数を直して再実行する。" },
       { code: "FINDING_NOT_FOUND", when: "IDがこのタスクの指摘ではない", action: "findings list <THREAD> --allでIDを確認する。" },
       { code: "FINDING_UNCHANGED", when: "reopenで根拠も解決条件も変わっていない", action: "新しい根拠か変更した解決条件を指定する。cursorやreasonだけでは再介入できない。" },
-      { code: "FINDING_DELIVERY_UNKNOWN", when: "現revisionに受付不明（unknown）の送信が残ったままresolve・dismiss・reopenした", action: "history check <THREAD> <MESSAGE-ID>で照合してから再実行する。" },
+      { code: "FINDING_DELIVERY_UNKNOWN", when: "現revisionに受付不明（unknown）の送信が残ったままresolve・dismiss・reopenした", action: "history check <THREAD> <MESSAGE-ID>で照合してから再実行する。Desktop Cloudで照合できなければ、ユーザーがhistory mark --resolve-unknownで解除する。" },
       { code: "STALE_CHECKPOINT", when: "resolveに指定したcheckpointが現在validでない", action: "checkpoint verifyで原因を確認し、必要ならrunし直してからresolveする。" },
       C_E_DUPLICATE,
       C_E_FINDING_CLOSED,
@@ -265,7 +265,7 @@ export const topics = {
       "checkで見つからない（not_observed）ことでは送信の保留は解除されない。",
       "--resolve-unknownは--supervisorなしでユーザーが実行する。監督は実行しない。",
       "--resolve-unknownは配送の有無を確定しない。delivery_statusはunknownのままで、履歴の記録とDesktop Cloudの送信記録にresolutionを付ける。",
-      "--resolve-unknownは同じチャットの送信の保留だけを解除する。結び付いた指摘では、その送信はunknownのまま扱われる（help findings）。",
+      "--resolve-unknownで解除した送信は、結び付いた指摘でも受付不明として扱わない。その指摘は送り直し・resolve・dismiss・reopenできる。",
     ],
     see: ["send", "instructions", "findings", "cloud", "desktop-cloud"],
   },

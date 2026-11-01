@@ -146,6 +146,22 @@ test("unknown delivery and a journaled crash reservation cannot be silently retr
   await assert.rejects(sendTrackedMessage(ID, "recover", { finding: crashed.id }, { ...storage, send: async () => assert.fail("must not send") }), { code: "DUPLICATE_INTERVENTION" });
 });
 
+test("a user-resolved unknown delivery no longer blocks its finding", async t => {
+  const storage = await fixture(t), finding = await create(storage), id = randomUUID();
+  const entry = { schema: 1, id, thread_id: ID, created_at: new Date().toISOString(), metadata: { finding_id: finding.id, finding_revision: 1 }, delivery_status: "unknown", attempt_state: "finished" };
+  await writeRecord("messages", id, { ...entry, resolution: { by: "user", at: new Date().toISOString(), note: "checked in Desktop; not delivered" } }, storage);
+  assert.notEqual((await findingStatus(ID, finding.id, storage)).status, "delivery_unknown");
+  await dismissFinding(ID, finding.id, { ...storage, reason: "superseded" });
+  const other = await create(storage, "other"), unresolved = randomUUID();
+  await writeRecord("messages", unresolved, { ...entry, id: unresolved, metadata: { finding_id: other.id, finding_revision: 1 } }, storage);
+  await assert.rejects(dismissFinding(ID, other.id, { ...storage, reason: "x" }), { code: "FINDING_DELIVERY_UNKNOWN" });
+  let sent = 0;
+  const retry = await create(storage, "retry"), resolved = randomUUID();
+  await writeRecord("messages", resolved, { ...entry, id: resolved, metadata: { finding_id: retry.id, finding_revision: 1 }, resolution: { by: "user", at: new Date().toISOString(), note: "not delivered" } }, storage);
+  await sendTrackedMessage(ID, "fix again", { finding: retry.id }, { ...storage, send: async () => { sent++; return { sent: true, delivery_status: "accepted" }; } });
+  assert.equal(sent, 1);
+});
+
 test("rejected sends remain retryable, previews do not reserve findings, and keys reuse the same concern", async t => {
   const storage = await fixture(t), finding = await create(storage);
   assert.equal((await create(storage)).id, finding.id);
