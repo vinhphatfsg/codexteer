@@ -65,7 +65,7 @@ test("history outputs name the observed cursor by based_on_sha256, and checking 
   for (const [name, output] of Object.entries(outputs)) {
     const text = JSON.stringify(output);
     assert.equal(text.includes(token) || text.includes('"based_on"'), false, `${name} must not echo the cursor`);
-    assert.equal((Array.isArray(output) ? output[0] : output).metadata.based_on_sha256, createHash("sha256").update(token).digest("hex").slice(0, 16), name);
+    assert.equal((Array.isArray(output) ? output[0] : output).metadata.based_on_sha256, createHash("sha256").update(token).digest("hex"), name);
   }
   assert.equal(outputs.checkAll[0].verification.status, "stored");
   const stored = await readRecord("messages", messageId, storage);
