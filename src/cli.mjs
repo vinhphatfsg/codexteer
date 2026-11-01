@@ -6,7 +6,7 @@ import { listLocalThreads } from "./thread-store.mjs";
 import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, listInstructions } from "./journal.mjs";
 import { launchDesktopUpdate, desktopUpdateStatus } from "./update.mjs";
 import { appServerDoctor, startDesktop } from "./launcher.mjs";
-import { VERSION, helpData, renderHelp, errorRemedy, topicFor } from "./help.mjs";
+import { VERSION, helpData, renderHelp, renderErrors, errorRemedy, topicFor } from "./help.mjs";
 import { observeThread, printObservation } from "./observe.mjs";
 import { monitorCommand } from "./monitor.mjs";
 import { notificationOptions } from "./notify.mjs";
@@ -213,9 +213,10 @@ async function mainOnTarget(argv) {
     }
     if (args.length === 0 || takeFlag(args, "--help") || args[0] === "help") {
       if (args[0] === "help") args.shift();
-      const data = helpData(topicFor(args) ?? args[0] ?? "overview");
+      const errors = takeFlag(args, "--errors");
+      const data = helpData(topicFor(args) ?? args[0] ?? "overview", { errors });
       success("help", data, json);
-      if (!json) console.log(renderHelp(data));
+      if (!json) console.log(errors ? renderErrors(data) : renderHelp(data));
       return;
     }
 

@@ -5,7 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { topics, helpData, renderHelp } from "../src/help.mjs";
+import { topics, helpData, renderHelp, renderErrors } from "../src/help.mjs";
 import { OPTIONS_INVALID, SUPERVISOR_PAUSED } from "../src/help-errors.mjs";
 import { registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
 
@@ -25,9 +25,30 @@ test("every topic is served by the CLI as JSON and text with the fixed fields", 
     for (const key of ["title", "when", "returns"]) assert.equal(typeof data[key], "string", `${name}.${key}`);
     for (const key of ["usage", "examples", "notes"]) assert.ok(Array.isArray(data[key]), `${name}.${key}`);
     for (const option of data.options ?? []) assert.equal(typeof option.text, "string", `${name} option ${option.name}`);
-    for (const error of data.errors ?? []) assert.ok(error.code && error.when && error.action, `${name} error ${error.code}`);
     assert.doesNotMatch(renderHelp(data), /undefined|\[object Object\]/, name);
+    assert.equal(data.errors, undefined, name);
   }
+});
+
+test("help pages point to their error list, which --errors prints alone", () => {
+  for (const [name, topic] of Object.entries(topics)) {
+    const words = ["help", ...name.split(" ")], documented = topic.errors ?? [], data = helpData(name);
+    assert.equal(data.errors_command, documented.length ? `codexteer ${words.join(" ")} --errors` : undefined, name);
+    const page = renderHelp(data);
+    for (const { code, action } of documented) assert.ok(!page.includes(`→ ${action}`), `${name} page still lists ${code}`);
+    if (documented.length) assert.ok(page.includes(`一覧: codexteer ${words.join(" ")} --errors`), name);
+    const list = JSON.parse(spawnSync(process.execPath, [BIN, ...words, "--errors", "--json"], { encoding: "utf8" }).stdout).data;
+    assert.deepEqual(Object.keys(list).sort(), ["errors", "topic", "version"], name);
+    assert.deepEqual(list.errors, JSON.parse(JSON.stringify(documented)), name);
+    for (const error of list.errors) assert.ok(error.code && error.when && error.action, `${name} error ${error.code}`);
+    const text = renderErrors(list);
+    for (const { code, action } of documented) assert.ok(text.includes(`  ${code}: `) && text.includes(`→ ${action}`), `${name} --errors ${code}`);
+    assert.ok(!text.includes("使い方:"), name);
+  }
+  const page = spawnSync(process.execPath, [BIN, "help", "send"], { encoding: "utf8" }).stdout;
+  assert.equal(page, `${renderHelp(helpData("send"))}\n`);
+  const errors = spawnSync(process.execPath, [BIN, "send", "--help", "--errors"], { encoding: "utf8" }).stdout;
+  assert.equal(errors, `${renderErrors(helpData("send", { errors: true }))}\n`);
 });
 
 test("related topics exist and the overview reaches every topic", () => {

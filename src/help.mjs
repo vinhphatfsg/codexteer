@@ -86,10 +86,12 @@ export function errorRemedy(argv, code) {
   return { help: topic, ...(/OPTIONS_INVALID$/.test(code) ? { usage: failingUsage(topic, argv) } : {}), ...(entry ? { action: entry.action } : {}) };
 }
 
-export function helpData(topic = "overview") {
+export function helpData(topic = "overview", { errors = false } = {}) {
   const data = topics[topic];
   if (!data) throw new Error(`Unknown help topic: ${topic}. Run codexteer help.`);
-  return { version: VERSION, topic, ...data };
+  const { errors: list = [], ...page } = data;
+  if (errors) return { version: VERSION, topic, errors: list };
+  return { version: VERSION, topic, ...page, ...(list.length ? { errors_command: `codexteer help ${topic} --errors` } : {}) };
 }
 
 export function renderHelp(data) {
@@ -105,10 +107,15 @@ export function renderHelp(data) {
     ...section("オプション", (data.options ?? []).map(o => `  ${o.name}${o.default === undefined ? "" : `（既定: ${o.default}）`}\n      ${o.text}`)),
     "",
     `確認できること: ${data.returns}`,
-    ...section("エラーと対処", (data.errors ?? []).map(e => `  ${e.code}: ${e.when}\n      → ${e.action}`)),
+    ...section("エラーと対処", data.errors_command ? [`  失敗時の対処はerror.action（テキスト出力では「対処:」の行）に返ります。一覧: ${data.errors_command}`] : []),
     ...section("手順", data.procedure ?? []),
     ...section("例", data.examples.map(x => `  ${x}`)),
     ...section("補足", data.notes.map(x => `• ${x}`)),
     ...section("関連", data.see?.length ? [`  ${data.see.map(t => `codexteer help ${t}`).join(" / ")}`] : []),
   ].join("\n");
+}
+
+export function renderErrors(data) {
+  const lines = data.errors.length ? data.errors.map(e => `  ${e.code}: ${e.when}\n      → ${e.action}`) : ["  このトピックに記載したエラーはありません。"];
+  return [`codexteer ${data.version} — help ${data.topic} のエラーと対処`, "", ...lines].join("\n");
 }
