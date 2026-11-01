@@ -52,10 +52,51 @@ test("an executor mismatch or missing catalog stops before assignment and never 
   await assert.rejects(assignDesktopCloudProject(id, "Fixture", { ...f.deps, catalog: async (_api, actual) => { assert.equal(actual, environment); throw Object.assign(Error("not ready"), { code: "DESKTOP_CLOUD_PROJECT_UNAVAILABLE" }); } }));
   assert.equal(f.calls.length, 0);
 });
-test("lost or invalid acknowledgement reserves the target against another assignment", async t => {
-  const f = await fixture(t);
-  await assert.rejects(assignDesktopCloudProject(id, project, { ...f.deps, call: async () => { throw Object.assign(Error("disconnected"), { uncertain: true }); } }), error => error.delivery_status === "unknown" && !!error.attempt_id);
-  await assert.rejects(assignDesktopCloudProject(id, project, { ...f.deps, connect: () => assert.fail("no replay") }), { code: "DESKTOP_CLOUD_PROJECT_PENDING" });
+const lost = async f => { let attempt; await assert.rejects(assignDesktopCloudProject(id, project, { ...f.deps, call: async (_endpoint, request) => { f.calls.push(request); throw Object.assign(Error("disconnected"), { uncertain: true }); } }), error => { attempt = error.attempt_id; return error.delivery_status === "unknown" && !!attempt; }); return attempt; };
+const absent = async () => ({ assignment: null, host_id: null, projectless: false });
+const pending = (f, attempt, readState) => assert.rejects(assignDesktopCloudProject(id, project, { ...f.deps, readState, connect: () => assert.fail("no replay") }), error => error.code === "DESKTOP_CLOUD_PROJECT_PENDING" && error.existing_attempt_id === attempt);
+test("lost or invalid acknowledgement reserves the target while Desktop state does not show it", async t => {
+  const f = await fixture(t), attempt = await lost(f);
+  await pending(f, attempt, absent);
+  await pending(f, attempt, async () => { throw Object.assign(Error("missing"), { code: "ENOENT" }); });
+  await pending(f, attempt, async () => ({ assignment: { projectKind: "local", projectId: "another-project" }, host_id: "durable", projectless: false }));
+  await pending(f, attempt, async () => ({ assignment: { projectKind: "local", projectId: project }, host_id: "local", projectless: false }));
+  assert.equal(f.calls.length, 1);
+});
+const cli = async (home, ...args) => {
+  const { execFile } = await import("node:child_process"), { promisify } = await import("node:util");
+  let result; try { result = await promisify(execFile)(process.execPath, [new URL("../bin/codexteer.mjs", import.meta.url).pathname, "--connection", "desktop-cloud", ...args, "--json"], { env: { ...process.env, HOME: home, CODEX_HOME: home, PATH: "/no-official-cli" } }); } catch (error) { result = error; }
+  return JSON.parse(result.stdout);
+};
+test("thread receipt confirms an unknown assignment only when Desktop profile state shows it", async t => {
+  const f = await fixture(t), attempt = await lost(f), file = path.join(f.home, ".codex-global-state.json");
+  const state = projectId => writeFile(file, JSON.stringify({ "thread-project-assignments": { [uuid]: { projectKind: "local", projectId } }, "thread-project-membership-host-ids": { [uuid]: "durable" } }), { mode: 0o600 });
+  assert.equal((await cli(f.home, "thread", "receipt", attempt)).data.delivery_status, "unknown");
+  await state("another-project");
+  assert.equal((await cli(f.home, "thread", "receipt", attempt)).data.delivery_status, "unknown");
+  await pending(f, attempt, readDesktopProjectState);
+  await state(project);
+  const receipt = await cli(f.home, "thread", "receipt", attempt);
+  assert.equal(receipt.data.delivery_status, "accepted"); assert.equal(receipt.data.verification_status, "verified");
+  assert.equal((await desktopCloudProjectReceipt(attempt, { home: f.home })).delivery_status, "accepted");
+  assert.equal((await assignDesktopCloudProject(id, project, { ...f.deps, readState: readDesktopProjectState })).delivery_status, "accepted"); assert.equal(f.calls.length, 2);
+});
+test("assignment confirms an unknown attempt from Desktop profile state before refusing", async t => {
+  const f = await fixture(t), attempt = await lost(f);
+  const result = await assignDesktopCloudProject(id, project, f.deps);
+  assert.equal(result.verification_status, "verified"); assert.notEqual(result.attempt_id, attempt); assert.equal(f.calls.length, 2);
+  const earlier = await desktopCloudProjectReceipt(attempt, { home: f.home, readState: absent });
+  assert.equal(earlier.delivery_status, "accepted"); assert.equal(earlier.verification_status, "verified");
+});
+test("only the user's noted resolution releases an unknown assignment; a supervisor cannot", async t => {
+  const f = await fixture(t), attempt = await lost(f), note = "Desktop shows no project; the user chose to assign again";
+  assert.equal((await cli(f.home, "--supervisor", "aaaaaaaa-aaaa-4aaa-8aaa-000000000002", "thread", "receipt", attempt, "--resolve-unknown", "--note", note)).error.code, "SUPERVISOR_CONTROL_FORBIDDEN");
+  assert.equal((await cli(f.home, "thread", "receipt", attempt, "--resolve-unknown")).error.code, "DESKTOP_CLOUD_OPTIONS_INVALID");
+  await pending(f, attempt, absent);
+  const resolved = await cli(f.home, "thread", "receipt", attempt, "--resolve-unknown", "--note", note);
+  assert.equal(resolved.ok, true); assert.equal(resolved.data.delivery_status, "unknown"); assert.equal(resolved.data.resolution.by, "user"); assert.equal(resolved.data.resolution.note, note); assert(Date.parse(resolved.data.resolution.at));
+  assert.deepEqual((await desktopCloudProjectReceipt(attempt, { home: f.home, readState: absent })).resolution, resolved.data.resolution);
+  assert.equal((await assignDesktopCloudProject(id, project, { ...f.deps, readState: absent })).delivery_status, "accepted"); assert.equal(f.calls.length, 2);
 });
 test("parameter rejection is not_sent and accepted assignment does not certify a different persisted host", async t => {
   const f = await fixture(t);

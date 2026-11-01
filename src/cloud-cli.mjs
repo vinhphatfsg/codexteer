@@ -1,4 +1,4 @@
-import { desktopCloudProjectDoctor, assignDesktopCloudProject, desktopCloudProjectReceipt } from "./desktop-cloud-project.mjs";
+import { desktopCloudProjectDoctor, assignDesktopCloudProject, desktopCloudProjectReceipt, resolveDesktopCloudProjectAttempt } from "./desktop-cloud-project.mjs";
 import { listProjects as listDesktopProjects } from "./projects.mjs";
 import { isDesktopCloudTask, desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
 import { desktopCloudConnection, desktopCloudEnvironments } from "./desktop-cloud-api.mjs";
@@ -313,7 +313,8 @@ async function desktopCloudCommands(command, args, { supervisor, output, bound, 
       output("thread.create", await createDesktopCloudTask(environment, message(args), { project, title, dryRun })); return true;
     }
     if (action === "assign") { const project = option(args, "--project"); exact(args, 1); const data = await assignDesktopCloudProject(await bound(args[0]), project); output("thread.assign", data); if (data.verification_status !== "verified") process.exitCode = 1; return true; }
-    exact(args, 1);
+    const resolveUnknown = action === "receipt" && flag(args, "--resolve-unknown"), note = resolveUnknown ? option(args, "--note") : undefined; exact(args, 1);
+    if (resolveUnknown) { output("thread.receipt", await resolveDesktopCloudProjectAttempt(args[0], { note })); return true; }
     if (action === "receipt") { let data; try { data = await desktopCloudReceipt(args[0]); } catch (error) { if (error.code !== "DESKTOP_CLOUD_CREATION_RECEIPT_NOT_FOUND") throw error; data = await desktopCloudProjectReceipt(args[0]); } output("thread.receipt", data); return true; }
     if (action === "resolve") { const id = await bound(args[0]); output("thread.resolve", { thread_id: id, deep_link: desktopCloudLink(id) }); return true; }
     throw failure("Expected thread create|assign|receipt|resolve.");
