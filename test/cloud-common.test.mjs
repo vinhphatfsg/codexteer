@@ -10,6 +10,7 @@ import { sendCloudInput } from "../src/cloud-send.mjs";
 import { listCloudTasks } from "../src/cloud.mjs";
 import { streamThread } from "../src/monitor.mjs";
 import { readSnapshot } from "../src/observe.mjs";
+import { SUPERVISOR_PAUSED } from "../src/help-errors.mjs";
 
 const task = "task_fixture_common", first = `${task}~assttrn_fixture_1`, user = `${task}~usertrn_fixture_1`;
 
@@ -163,7 +164,7 @@ test("common Cloud commands preserve supervisor controls, findings, active inter
   let read=await managed("read",task,"--include-output");assert.equal(read.status,"idle");
   const finding=await managed("findings","create",task,"--key","fixture_first","--title","Fixture","--condition","Observe fixture answer","--based-on",read.cursor);
   await run(["supervise","pause",task]);
-  await assert.rejects(managed("send",task,"fixture follow-up","--new-turn","--finding",finding.id,"--based-on",read.cursor),e=>e.result?.error.code==="SUPERVISOR_PAUSED");
+  await assert.rejects(managed("send",task,"fixture follow-up","--new-turn","--finding",finding.id,"--based-on",read.cursor),e=>e.result?.error.code==="SUPERVISOR_PAUSED"&&e.result.error.help==="send"&&e.result.error.action===SUPERVISOR_PAUSED.action);
   assert.equal(JSON.parse(await readFile(f.state)).posts,0);assert.equal((await managed("read",task)).status,"idle");
   await run(["supervise","resume",task]);
   const sent=await managed("send",task,"fixture follow-up","--new-turn","--finding",finding.id,"--based-on",read.cursor);assert.equal(sent.delivery_status,"accepted");

@@ -398,6 +398,9 @@ codexteer help send
 codexteer send --help
 codexteer help send --json
 
+# そのコマンドのエラーと対処の一覧（通常のヘルプには載せず、失敗時はerror.actionに返る）
+codexteer help send --errors
+
 # Claude CodeのMonitorとの連携
 codexteer help monitor
 
@@ -406,6 +409,8 @@ codexteer --version
 ```
 
 引数なしの`codexteer`と`codexteer --help`でも全体のヘルプを表示します。
+
+失敗した呼び出しは`--json`の`error.help`に該当トピックを、`error.action`にそのトピックに記載した対処を返します。引数エラー（`OPTIONS_INVALID`など）は`error.usage`に失敗したサブコマンドの使い方も返します。テキスト出力では標準エラーの`使い方:`・`対処:`の行に出ます。
 
 #### 監督役の起動
 

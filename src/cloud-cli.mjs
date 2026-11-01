@@ -3,7 +3,7 @@ import { listProjects as listDesktopProjects } from "./projects.mjs";
 import { isDesktopCloudTask, desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
 import { desktopCloudConnection, desktopCloudEnvironments } from "./desktop-cloud-api.mjs";
 import { createDesktopCloudTask, listDesktopCloudTasks, desktopCloudReceipt } from "./desktop-cloud.mjs";
-import { isCloudTask } from "./task-id.mjs";
+import { isCloudTask, selectedCloudInvocation } from "./task-id.mjs";
 import { cloudTaskId } from "./cloud-id.mjs";
 import { normalizeThreadId } from "./thread-id.mjs";
 import { connectionMismatch } from "./connection-error.mjs";
@@ -27,7 +27,6 @@ import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, ve
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code, execution_environment: "cloud" });
-const values = new Set("--environment --connection --supervisor --require-node-version --host --remote-transport --context-thread --thread --backend --source --kind --evidence --based-on --finding --expires-at --supersedes --checkpoint --limit --max-chars --since --poll-ms --timeout-ms --until --notify --settle-ms --max-hold-ms --owner --key --condition --note --rating --reason --root --path --exclude --command --cwd --artifact --status --by --token --ttl-ms --agent --project --env --branch --title --model --thinking --cursor --attempt".split(" "));
 function option(args, name, fallback) {
   const index = args.indexOf(name), stop = args.indexOf("--");
   if (index < 0 || (stop >= 0 && index > stop)) return fallback;
@@ -42,26 +41,6 @@ function flag(args, name) {
 const repeated = (args, name) => { const result = []; let value; while ((value = option(args, name)) !== undefined) result.push(value); return result; };
 const message = args => { if (args[0] === "--") args.shift(); return args.length === 1 && args[0] === "-" ? readFileSync(0, "utf8") : args.join(" "); };
 function exact(args, count) { if (args.length !== count || args.some(arg => arg.startsWith("--"))) throw failure("Unexpected arguments. See the command's help."); }
-
-function selectedCloudInvocation(argv) {
-  const end = argv.indexOf("--"), own = end < 0 ? argv : argv.slice(0, end);
-  const connection = own.indexOf("--connection");
-  const positional = [];
-  for (let i = 0; i < own.length; i++) {
-    if (values.has(own[i])) { i++; continue; }
-    if (!own[i].startsWith("--")) positional.push(own[i]);
-  }
-  const [command, action] = positional;
-  if (["help", "--help", "--version"].includes(command) || own.includes("--help") || own.includes("--version")) return false;
-  if (connection >= 0 && ["cloud", "desktop-cloud"].includes(own[connection + 1])) return own[connection + 1];
-  const thread = own.indexOf("--thread");
-  if (["doctor", "resource"].includes(command) && thread >= 0) return isDesktopCloudTask(own[thread + 1]) ? "desktop-cloud" : isCloudTask(own[thread + 1]) ? "cloud" : false;
-  if (command === "thread" && action === "create") return false;
-  const nested = ["history", "instructions", "findings", "checkpoint", "thread"].includes(command)
-    || (command === "supervise" && ["prompt", "register", "status", "pause", "resume", "stop", "list"].includes(action));
-  const target = isCloudTask(command) || isDesktopCloudTask(command) ? command : positional[nested ? 2 : 1];
-  return isDesktopCloudTask(target) ? "desktop-cloud" : isCloudTask(target) ? "cloud" : false;
-}
 
 export const cloudInvocation = argv => !!selectedCloudInvocation(argv);
 

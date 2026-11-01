@@ -5,5 +5,5 @@ import { cloudInvocation, mainCloud } from "../src/cloud-cli.mjs";
 
 const args = process.argv.slice(2);
 if (cloudInvocation(args)) {
-  try { await mainCloud(args); } catch (failure) { fail(failure, args.includes("--json")); }
+  try { await mainCloud(args); } catch (failure) { fail(failure, args.includes("--json"), args); }
 } else await main(args);

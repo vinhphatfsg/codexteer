@@ -80,7 +80,15 @@ test("a bound supervisor's resource commands require its --thread and the same s
     for (const [name, command] of Object.entries(active)) assert.equal(as(session, thread, command).error?.code, code, `${code} ${name}`);
   }
   await controlSupervisor(THREAD, "pause", f);
-  for (const name of ["acquire", "renew", "run"]) assert.equal(as(SESSION, THREAD, active[name]).error?.code, "SUPERVISOR_PAUSED", name);
+  const { topics } = await import("../src/help.mjs"), { SUPERVISOR_PAUSED } = await import("../src/help-errors.mjs");
+  const pausedAction = topics.resource.errors.find(entry => entry.code === "SUPERVISOR_PAUSED").action;
+  assert.notEqual(pausedAction, SUPERVISOR_PAUSED.action);
+  for (const name of ["acquire", "renew", "run"]) {
+    const { error } = as(SESSION, THREAD, active[name]);
+    assert.equal(error?.code, "SUPERVISOR_PAUSED", name);
+    assert.equal(error.help, "resource", name);
+    assert.equal(error.action, pausedAction, name);
+  }
   assert.equal(existsSync(marker), false);
   assert.equal((await resourceStatus("other-lock", f)).state, "available");
   for (const name of ["status", "list", "release"]) assert.equal(as(SESSION, THREAD, active[name]).ok, true, name);

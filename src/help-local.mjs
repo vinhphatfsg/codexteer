@@ -73,7 +73,7 @@ export const topics = {
       { need: "この目的別一覧と全コマンドの概要を表示する（このページ）", command: "help overview" },
     ],
     usage: [
-      "help [TOPIC]",
+      "help [TOPIC] [--errors]",
       "projects list",
       "threads list [--desktop-only] [--limit N]",
       "thread create --project ID|NAME [--context-thread THREAD-ID] <MESSAGE>",
@@ -106,8 +106,9 @@ export const topics = {
     ],
     options: [
       { name: "TOPIC", default: "overview", text: "上の一覧のトピック名（例: send、supervise prompt）。<COMMAND> --helpでも同じ内容を表示する。" },
+      { name: "--errors", text: "そのトピックのエラーと対処の一覧だけを表示する。通常のヘルプには載せない。" },
     ],
-    returns: "--jsonを付けると、成功時は{ok:true, command, data}、失敗時は{ok:false, error:{message, code, …}}を標準出力へ1行で返し、失敗時の終了コードは1。対話起動のsupervise <THREAD>とorchestrate（promptなし）は--json非対応で、エージェントの標準入出力と終了コードをそのまま引き継ぐ。watch --streamは常にJSON Lines。",
+    returns: "--jsonを付けると、成功時は{ok:true, command, data}、失敗時は{ok:false, error:{message, code, help, action, …}}を標準出力へ1行で返し、失敗時の終了コードは1。helpは該当トピック、actionはそのトピックに記載した対処で、引数エラー（OPTIONS_INVALIDなど）はusageに失敗したサブコマンドの使い方も返す。対話起動のsupervise <THREAD>とorchestrate（promptなし）は--json非対応で、エージェントの標準入出力と終了コードをそのまま引き継ぐ。watch --streamは常にJSON Lines。",
     examples: [
       "codexteer supervise <THREAD>",
       "codexteer supervise <THREAD> --use-path-cli",
@@ -372,6 +373,7 @@ export const topics = {
       "thread repair <THREAD> [--dry-run | --apply]",
       "--connection cloud thread create --project ENV_ID_OR_NAME [--branch BRANCH] [--dry-run] <MESSAGE...>|-",
       "--connection cloud thread receipt <ATTEMPT_ID>",
+      "--connection cloud|desktop-cloud thread resolve <THREAD>",
       "--connection desktop-cloud thread create --environment ID|NAME [--title TEXT] [--dry-run] <MESSAGE...>|-",
       "--connection desktop-cloud thread assign TARGET --project ID|NAME",
       "--connection desktop-cloud thread receipt <ATTEMPT_ID> [--resolve-unknown --note TEXT]",
