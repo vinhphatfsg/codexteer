@@ -12,6 +12,7 @@
 - 保存済みCLI方式の`supervise`・`supervise prompt`・`orchestrate`・`orchestrate prompt`は、300〜500文字の実行コマンド（`CODEX_HOME`指定・Node・保存したCLIのパス・`--require-node-version`・`--supervisor`・`--connection`・リモートの経路）を本文に20回ほど繰り返す代わりに、これらを固定した起動ファイル`CODEX_HOME/codex-steer/bin/codexteer-s-<hash>`（プロジェクト用は`codexteer-p-<hash>`）を生成し、そのパスを1語の実行コマンドとして示します。子の監督本文は約4割短くなります。起動ファイルは本人専用で内容のハッシュを名前にし、同じ名前で内容が違えば上書きせず`LAUNCHER_MODIFIED`、生成時に実行できなければ本文を出力せず`LAUNCHER_UNUSABLE`で止まります。`--json`は`data.command`も返します。
 - `--supervisor`・`--connection`・`--require-node-version`・`--host`・`--remote-transport`・`--context-thread`を`--`より前に重ねて指定すると、全経路で`OPTIONS_INVALID`になります。生成した実行コマンドに付け直しても束縛は変わりません。以前の版が生成した長い実行コマンドはそのまま使えます。`--use-path-cli`の実行コマンドと動作は変わりません。
 - 生成済みの本文は変わりません。更新後のCLIで生成し直してください。
+- `read`・`watch`・`status`が返すcursorを、タスクのターン数で長くならない`c1`で始まる形式にしました。全ターンの一覧の代わりにターン列のSHA-256を持ち、`--since`・`--based-on`では従来どおり現在のターン列・項目と照合するため、`STALE_CURSOR`・`STALE_OBSERVATION`の判定は変わりません。200ターンのタスクでは約18,600文字から約190文字になります。以前の版が出力したcursor（`eyJ`で始まる）も引き続き使え、続きは新しい形式で返します。保存済みの指摘・送信履歴の記録は変わりません。保存済みCLIなど以前の版に新しいcursorを渡すと`STALE_CURSOR`になるため、`--since`なしで読み直してください。
 
 ## 0.19.0 — 2026-11-01公開
 
