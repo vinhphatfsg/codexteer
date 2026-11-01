@@ -12,6 +12,7 @@ import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 import { RpcClient } from "./rpc.mjs";
 import { prepareDirective } from "./directive.mjs";
 import { releasedDelivery } from "./findings.mjs";
+import { withCursorReference } from "./cursor.mjs";
 import { assertSupervisor, withSupervisedSend } from "./supervision.mjs";
 
 export async function getMessage(threadInput, id, options = {}) {
@@ -23,13 +24,18 @@ export async function getMessage(threadInput, id, options = {}) {
 
 export function messageSummary(entry, includeText = false) {
   const { body, wire_text, ...data } = entry;
+  if (data.metadata) data.metadata = withCursorReference(data.metadata);
   return includeText ? { ...data, body, wire_text } : data;
 }
 
-export async function listMessages(threadInput, { includeText = false, pending = false, ...options } = {}) {
-  const threadId = normalizeTaskId(threadInput);
+// Stored records, for code that writes them back. Outputs go through messageSummary.
+async function messageRecords(threadId, { pending = false, ...options } = {}) {
   return (await listRecords("messages", options)).filter(e => e?.thread_id === threadId && (!pending || !["applied", "dismissed"].includes(e.response?.status)))
-    .sort((a, b) => a.created_at.localeCompare(b.created_at)).map(e => messageSummary(e, includeText));
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+}
+
+export async function listMessages(threadInput, { includeText = false, ...options } = {}) {
+  return (await messageRecords(normalizeTaskId(threadInput), options)).map(e => messageSummary(e, includeText));
 }
 
 export function instructionStates(entries, now = Date.now()) {
@@ -97,7 +103,7 @@ export async function sendTrackedMessage(threadInput, body, options = {}, { send
 export async function reconcileMessages(threadInput, id, options = {}, { discover = discoverRuntime, connect = RpcClient.connect } = {}) {
   const threadId = normalizeTaskId(threadInput);
   if (isCloudTask(threadId)) {
-    const entries = id ? [await getMessage(threadId, id, options)] : await listMessages(threadId, { ...options, includeText: true });
+    const entries = id ? [await getMessage(threadId, id, options)] : await messageRecords(threadId, options);
     const result = [];
     for (const entry of entries) {
       const receipt = entry.cloud_attempt_id && entry.delivery_status !== "not_sent" ? await reconcileCloudSend(entry.cloud_attempt_id, {
@@ -126,7 +132,7 @@ export async function reconcileMessages(threadInput, id, options = {}, { discove
   try {
     const thread = await fetchThread(client, threadId);
     return await withStoreLock(`message-${threadId}`, async () => {
-      const entries = id ? [await getMessage(threadId, id, options)] : await listMessages(threadId, { ...options, includeText: true });
+      const entries = id ? [await getMessage(threadId, id, options)] : await messageRecords(threadId, options);
       const items = thread.turns.flatMap(t => t.items.map(i => ({ ...i, turn_id: t.id })));
       const result = [];
       for (const entry of entries) {

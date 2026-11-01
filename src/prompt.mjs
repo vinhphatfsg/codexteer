@@ -54,10 +54,11 @@ Claude CodeのMonitorツールが使える場合は、読み切ったcursorか�
 ${command} watch ${thread} --stream --notify digest --since <CURSOR> --include-output --json
 Monitorが使えない場合は、次の短い待機を繰り返し、返された差分を読んでcursorを引き継ぎます。
 ${command} watch ${thread} --since <CURSOR> --until change --timeout-ms 30000 --include-output --json
+完了まで待つなら--until idle、本文が長ければ--max-chars N（既定2000）で短くできます。
 watch --streamのdata.type=observationは作業差分です。そのeventsを読んでから読了済みcursorを更新してください。data.type=connectionは接続状態で、watchingは監視開始、reconnectingは観測不能・復帰待ち、recoveredは読み取りの復帰を示します。recovered後もhas_moreなら差分を読み切って再評価します。平常時の接続通知はなく、一時切断の復帰待ちは最大60秒です。
 接続行のresume_cursorはCLIが出力を終えた位置または初回の基準であり、あなたが読了した証明ではありません。watch自体が終了した場合は、最後に自分が読了したcursorを使って明示的に再開します。needs_reviewやfailed、ok:falseが返ったら監視中と報告し続けず、理由を確認してください。履歴の巻き戻し等でcursorが無効なら原因を確認して現状を読み直し、送信前に再評価します。継続観測できない環境では、その限界を報告してください。
 ${DIGEST_GUIDANCE}
-介入も報告も不要な通知には、監督方針に別の指定がなければ、説明を書かずに「変化なし」の一言で応答します。Monitorが期限切れになったら、自分が最後に読了したcursorから再開します。再開の報告は要りません。タスクが停止・待機していても、ユーザーが監督停止を求めるか、監督方針の終了条件を満たすまで監視を続けます。会話の要約や再起動の後は、実行コマンドと自分の読了cursorを確認し、${command} help monitor で手順を読み直してから、そのcursorから監視を再開します。`,
+介入も報告も不要な通知には、監督方針に別の指定がなければ、説明を書かずに「変化なし」の一言で応答します。Monitorが期限切れになったら、自分が最後に読了したcursorから再開します。再開の報告は要りません。タスクが停止・待機していても、ユーザーが監督停止を求めるか、監督方針の終了条件を満たすまで監視を続けます。会話の要約や再起動の後は、実行コマンドと自分の読了cursorを確認し、この本文を保存していればそれを、なければ${command} help monitor の手順を読み直してから、そのcursorから監視を再開します。`,
     `6. 介入の手順
 監督方針で送信が許されている場合は、最初の介入の前に一度、監督状態と送信方法を確認します。
 ${command} supervise status ${thread} --json

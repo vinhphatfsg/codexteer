@@ -18,9 +18,10 @@ test("the prompt keeps digest watch commands and the safety rules the supervisor
   const startup = prompt.split("\n\n").find(section => section.startsWith("4. 開始手順"));
   assert.ok(startup);
   assert.doesNotMatch(startup, /help monitor/, "Startup must not reread the procedure the prompt already contains");
-  assert.ok(prompt.includes("saved-command help monitor"), "Resuming after a summary rereads the procedure with the saved command");
+  assert.match(prompt, /会話の要約や再起動の後は[^。]*この本文を保存していればそれを/, "Resuming after a summary rereads the saved prompt first");
+  assert.ok(prompt.includes("なければsaved-command help monitor"), "Without a saved prompt, the fallback rereads the procedure with the saved command");
   assert.match(prompt, /watch .* --stream --notify digest --since/);
-  assert.match(prompt, /watch .* --since .* --until change --timeout-ms 30000/);
+  assert.match(prompt, /watch .* --since .* --until change --timeout-ms 30000 .*\n完了まで待つなら--until idle、本文が長ければ--max-chars N（既定2000）/, "The single-shot watch line names the wait-for-idle and shorter-output flags");
   assert.match(prompt, /digest\.from_cursor/);
   for (const rule of ["paused", "SUPERVISOR_STOPPED", "--supervisor", "--new-turn", "自動再送", "reconnecting"]) assert.ok(prompt.includes(rule), rule);
 });

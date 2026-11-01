@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm, symlink, chmod } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { registerSupervisor, assertSupervisor, controlSupervisor, supervisorStatus, recordSupervisorObservation, withSupervisedSend } from "../src/supervision.mjs";
@@ -9,7 +9,7 @@ import { createFinding, getFinding, findingStatus, listFindings, resolveFinding,
 import { sendTrackedMessage, getMessage, listMessages, markMessage } from "../src/journal.mjs";
 import { createCheckpoint, runCheckpoint } from "../src/checkpoint.mjs";
 import { readSnapshot, observeThread } from "../src/observe.mjs";
-import { storePath, writeRecord } from "../src/store.mjs";
+import { readRecord, storePath, writeRecord } from "../src/store.mjs";
 
 const ID = "11111111-1111-4111-8111-111111111111", OTHER = "22222222-2222-4222-8222-222222222222";
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
@@ -93,6 +93,31 @@ test("supervised sends require findings and reviewed cursors, and duplicate acce
   condition = "Timeout and cancellation tests pass";
   await sendTrackedMessage(ID, "new requirement", { finding: finding.id }, runtime);
   assert.equal(sends, 2);
+});
+
+test("finding outputs name each observed cursor by based_on_sha256 while the stored record keeps the full token", async t => {
+  const storage = await fixture(t), changed = thread();
+  changed.turns[0].items.push({ id: "next", type: "userMessage", content: [{ type: "text", text: "also cover cancellation" }] });
+  const first = readSnapshot(thread()).cursor, second = readSnapshot(changed).cursor;
+  const reference = token => createHash("sha256").update(token).digest("hex");
+  const created = await createFinding(ID, { ...storage, key: "cursor-reference", title: "Cursor reference", condition: "Timeout tests pass", basedOn: first });
+  assert.equal(created.based_on_sha256, reference(first));
+  assert.match(created.based_on_sha256, /^[0-9a-f]{64}$/);
+  const reopened = await reopenFinding(ID, created.id, { ...storage, reason: "The user added a requirement", condition: "Timeout and cancellation tests pass", basedOn: second });
+  assert.equal(reopened.based_on_sha256, reference(second));
+  assert.equal(reopened.revisions[0].based_on_sha256, reference(first));
+  const outputs = { created, reopened, show: await findingStatus(ID, created.id, storage), list: await listFindings(ID, storage),
+    reused: await createFinding(ID, { ...storage, key: "cursor-reference", title: "Cursor reference", condition: "Timeout tests pass", basedOn: first }) };
+  for (const [name, output] of Object.entries(outputs)) {
+    const text = JSON.stringify(output);
+    assert.equal(text.includes(first) || text.includes(second) || text.includes('"based_on"'), false, `${name} must not echo the cursor`);
+  }
+  assert.equal(outputs.list.findings[0].revisions[0].based_on_sha256, reference(first));
+  const stored = await readRecord("findings", created.id, storage);
+  assert.equal(stored.based_on, second);
+  assert.equal(stored.revisions[0].based_on, first);
+  const plain = await create(storage, "no-cursor");
+  assert.equal(plain.based_on_sha256, null);
 });
 
 test("finding evidence is revalidated before a mutation and stale evidence does not reserve a retry", async t => {
