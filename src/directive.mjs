@@ -11,10 +11,10 @@ export async function prepareDirective(threadId, body, options, id, storage = {}
   if (!source && !kind && !evidence.length && !basedOn && !supersedes && !retracts && !expiresAt && !checkpoint && !finding && !supervisor) return { wireText: body, metadata: null };
   const concern = finding ? await assertFindingSend(threadId, finding, storage) : null;
   if (checkpoint) await getCheckpoint(threadId, checkpoint, storage);
-  if (supersedes && retracts) throw new Error("Use either supersedes or retracts, not both.");
-  if (expiresAt && (!/(Z|[+-]\d{2}:\d{2})$/.test(expiresAt) || !Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now())) throw new Error("--expires-at must be a future ISO timestamp with timezone.");
-  if (kind && !Object.hasOwn(kindLabels, kind)) throw new Error("--kind must be decision, review, hypothesis, or suggestion.");
-  if (source != null && (!source.trim() || source.length > 80 || /[\r\n\x00-\x1f]/.test(source))) throw new Error("--source must be a non-empty single line (up to 80 characters).");
+  if (supersedes && retracts) throw Object.assign(new Error("Use either supersedes or retracts, not both."), { code: "OPTIONS_INVALID" });
+  if (expiresAt && (!/(Z|[+-]\d{2}:\d{2})$/.test(expiresAt) || !Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now())) throw Object.assign(new Error("--expires-at must be a future ISO timestamp with timezone."), { code: "OPTIONS_INVALID" });
+  if (kind && !Object.hasOwn(kindLabels, kind)) throw Object.assign(new Error("--kind must be decision, review, hypothesis, or suggestion."), { code: "OPTIONS_INVALID" });
+  if (source != null && (!source.trim() || source.length > 80 || /[\r\n\x00-\x1f]/.test(source))) throw Object.assign(new Error("--source must be a non-empty single line (up to 80 characters)."), { code: "OPTIONS_INVALID" });
   const observed = basedOn ? decodeCursor(basedOn, threadId) : null;
   const refs = await collectEvidence(evidence);
   const metadata = { source: source ?? "external", kind: kind ?? "review", evidence: refs, based_on: basedOn ?? null, supersedes: supersedes ?? null, retracts: retracts ?? null, expires_at: expiresAt ?? null, checkpoint_id: checkpoint ?? null,

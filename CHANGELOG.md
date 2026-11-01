@@ -2,6 +2,17 @@
 
 公開日は日本時間です。
 
+## 0.19.0 — 2026-11-01公開
+
+- タスクIDと接続指定の不一致エラーに、修正用の`--connection`とJSONの`expected_connection`・`connection`を追加しました。Desktop Cloudには`desktop-cloud`、Web Cloudには`cloud`、ローカルには既定の`shared`を示します。拒否・終了コード・既存エラーコードを維持し、自動切り替えは行いません。
+- `help`の全30トピックを同じ構成に揃えました。各トピックは使い所・使い方・オプション（既定値）・確認できること・エラーと対処・手順・例・補足・関連を持ち、`--json`でも同じ項目名で取得できます。記述は実装と照合し、実装と食い違っていた説明（接続ソケットのリンク、Cloudの版確認の範囲、`status`の`unregistered`など）を直しました。`help desktop-cloud`と`help environments`の「使い所: undefined」表示と、`checkpoint run`・`resource run`の`--json`を`--`の後ろに示していた使い方表示も直しました。トピック名は変わりません。
+- 文言や内部実装に固定されていたテストを整理し、ヘルプの記述とエラーコード・オプションの対応を検査するテストを追加しました。
+- Desktop Cloudで受付不明の送信・プロジェクト割り当てが残ると、以後の送信・`thread assign`が永久に拒否される問題を修正しました。Desktopのプロフィール状態で割り当てを確認できた記録は自動で確定します。確認できない記録は、ユーザーが`history mark <TASK> <MESSAGE-ID> --resolve-unknown --note TEXT`または`thread receipt <ATTEMPT> --resolve-unknown --note TEXT`で理由を残して解除できます（`--supervisor`付きは`SUPERVISOR_CONTROL_FORBIDDEN`）。記録がないことを未配送の証拠にはしません。解除した送信は、結び付いた指摘でも受付不明として扱いません。拒否エラーには解除対象の`existing_message_id`・`existing_attempt_id`を含めます。
+- ローカルの`send`が、`--`より前の未知のオプション（`--kidn`などの打ち間違い）を本文として送っていた問題を修正し、`OPTIONS_INVALID`で拒否するようにしました。`--`より後ろは従来どおり本文です。
+- ローカルの`resource`で、`--supervisor`付きの`acquire`・`renew`・`release`・`status`・`list`が監督状態を確認していなかった問題を修正しました。`--supervisor`付きは`--thread`が必須になり、停止済み・別セッションは拒否、一時停止中は`acquire`・`renew`・`run`を`SUPERVISOR_PAUSED`で拒否します。
+- ローカルタスクへの`diff`が送信の省略形として解釈されていた問題を修正し、接続前に`OPTIONS_INVALID`で拒否します。
+- コードを持たなかった利用者向けの失敗に、エラーコードを付けました（`OPTIONS_INVALID`、`MESSAGE_NOT_FOUND`、`CHECKPOINT_NOT_FOUND`、`INSTRUCTION_NOT_REPLACEABLE`、`RESOURCE_NOT_OWNED`、`TASK_IDLE`、`TASK_BUSY`、`DESKTOP_START_UNSUPPORTED`、`DESKTOP_ALREADY_RUNNING`、`DESKTOP_START_FAILED`、`DESKTOP_UI_NOT_READY`、`DESKTOP_UI_FAILED`、`CURSOR_TOO_LARGE`、`STORE_UNSAFE`など）。実行中のターンがない送信と、idleでないタスクへの`--new-turn`は、`NOT_SENT`ではなく`TASK_IDLE`・`TASK_BUSY`になります。中断したローカルの`checkpoint run`・`resource run`は`error_code: CANCELLED`を返します。
+
 ## 0.18.2 — 2026-11-01公開
 
 - 停止済みの監督IDが、別の監督への交代後に古い本文から再登録できる問題を修正しました。停止履歴を監督記録に保持し、登録前のdoctor・再登録・観測・送信で`SUPERVISOR_STOPPED`を返します。旧形式の停止済み記録も、交代時に履歴へ引き継ぎます。保存済み旧CLIを使う監督には、更新後のCLIでプロンプトを生成し直してください。

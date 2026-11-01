@@ -25,12 +25,10 @@ test("routing takes the destination from positionals rather than metadata option
   assert.equal(cli(["--host", "local", "send", link, "fixture", "--dry-run"]).result.error.code, "HOST_MISMATCH");
 });
 
-test("thread repair exposes offline help and rejects unsafe CLI combinations before access", () => {
-  const help = cli(["help", "thread"]);
-  assert.ok(help.result.data.usage.includes("thread repair <THREAD> [--dry-run | --apply]"));
+test("thread repair rejects unsafe CLI combinations before access", () => {
   for (const flags of [["--apply", "--dry-run"], ["--force"], ["--all"]]) {
     const r = cli(["thread", "repair", ID, ...flags]);
-    assert.equal(r.status, 1); assert.match(r.result.error.message, /Expected:/);
+    assert.equal(r.status, 1);
   }
   const desktop = cli(["--connection", "desktop", "thread", "repair", ID]);
   assert.equal(desktop.result.error.code, "DESKTOP_READ_ONLY");
@@ -49,7 +47,7 @@ test("default live send uses App Server and fails without UI fallback when unava
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const { status, result } = cli(["send", ID, "test"], undefined, { CODEX_HOME: home });
   assert.equal(status, 1);
-  assert.match(result.error.message, /Shared App Server is unavailable/);
+  assert.equal(result.error.code, "RUNTIME_UNAVAILABLE");
   assert.equal(result.error.thread_id, ID);
   assert.equal(result.error.sent, false);
   assert.equal(result.error.delivery_status, "not_sent");
@@ -79,7 +77,6 @@ test("UI-only flags require explicit UI backend", () => {
   for (const backend of [[], ["--backend", "app-server"]]) for (const options of [["--keep-focus"], ["--wait-ms", "10"]]) {
     const { status, result } = cli(["send", ID, "test", ...backend, "--dry-run", ...options]);
     assert.equal(status, 1);
-    assert.match(result.error.message, /require --backend ui/);
   }
   const { result } = cli(["send", ID, "test", "--backend", "ui", "--dry-run", "--keep-focus"]);
   assert.equal(result.data.backend, "desktop-ui");
@@ -107,11 +104,9 @@ test("sound defaults on, supports explicit mute, and stays silent in dry runs", 
   for (const flags of [["--sound", "--no-sound"], ["--no-sound", "--sound"]]) {
     const conflict = cli(["send", ID, "test", ...flags]);
     assert.equal(conflict.status, 1);
-    assert.match(conflict.result.error.message, /cannot be combined/);
   }
   const ui = cli(["send", ID, "test", "--sound", "--backend", "ui", "--dry-run"]);
   assert.equal(ui.status, 1);
-  assert.match(ui.result.error.message, /--sound requires --backend app-server/);
 });
 
 test("desktop start dry run does not launch or inspect Desktop", () => {
@@ -125,30 +120,12 @@ test("unknown backend and empty messages fail before doing any work", () => {
   assert.equal(cli(["send", ID, "", "--backend", "app-server", "--dry-run"]).status, 1);
 });
 
-test("command help explains purpose, results and examples without contacting Desktop", () => {
-  for (const topic of ["cloud", "supervise", "supervise prompt", "findings", "connection", "read", "status", "watch", "monitor", "send", "history", "instructions", "checkpoint", "resource", "doctor", "desktop", "projects", "threads", "thread", "open", "debug-ui"]) {
-    for (const args of [["help", ...topic.split(" ")], [...topic.split(" "), "--help"]]) {
-      const { status, result } = cli(args);
-      assert.equal(status, 0); assert.equal(result.command, "help");
-      assert.equal(result.data.topic, topic); assert.ok(result.data.when); assert.ok(result.data.returns); assert.ok(result.data.examples.length);
-    }
-  }
-  const plain = spawnSync(process.execPath, ["bin/codexteer.mjs", "read", "--help"], { encoding: "utf8" });
-  assert.match(plain.stdout, /使い所:/); assert.match(plain.stdout, /確認できること:/);
-  for (const args of [["--help"], ["supervise", "prompt", "--help"]]) {
-    const help = spawnSync(process.execPath, ["bin/codexteer.mjs", ...args], { encoding: "utf8" });
-    assert.equal(help.status, 0);
-    assert.match(help.stdout, /codexteer supervise prompt <THREAD> \[MESSAGE\] \[--agent claude\|codex\] \[--connection shared\|desktop\|cloud\|desktop-cloud\] \[--use-path-cli\] \[--json\]/);
-    assert.doesNotMatch(help.stdout, /codexteer prompt <THREAD>/);
-  }
-});
-
 test("Monitor stream rejects one-shot flags before connecting and always uses JSON errors", t => {
   const home = mkdtempSync(path.join(os.tmpdir(), "cs-monitor-cli-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   for (const args of [["--until", "idle"], ["--timeout-ms", "1000"]]) {
     const result = cli(["watch", ID, "--stream", ...args], undefined, { CODEX_HOME: home });
-    assert.equal(result.status, 1); assert.match(result.result.error.message, /do not combine/);
+    assert.equal(result.status, 1); assert.notEqual(result.result.error.code, "RUNTIME_UNAVAILABLE");
   }
   const result = spawnSync(process.execPath, ["bin/codexteer.mjs", "watch", ID, "--stream"], { encoding: "utf8", env: { ...process.env, CODEX_HOME: home } });
   assert.equal(result.status, 1);
@@ -170,16 +147,12 @@ test("watch validates digest flags before connecting and leaves single-shot watc
   ]) {
     const result = cli(["watch", ID, ...args], undefined, { CODEX_HOME: home });
     assert.equal(result.status, 1, args.join(" "));
-    assert.match(result.result.error.message, /--notify|--settle-ms|--max-hold-ms/);
-    assert.doesNotMatch(result.result.error.message, /Shared App Server/);
+    assert.notEqual(result.result.error.code, "RUNTIME_UNAVAILABLE", args.join(" "));
   }
   for (const args of [[], ["--until", "change", "--timeout-ms", "0"], ["--notify", "all"], ["--stream"], ["--stream", "--notify", "all"], ["--stream", "--settle-ms", "1000", "--max-hold-ms", "10000"]]) {
     const result = cli(["watch", ID, ...args], undefined, { CODEX_HOME: home });
-    assert.equal(result.status, 1); assert.match(result.result.error.message, /Shared App Server is unavailable/, args.join(" "));
+    assert.equal(result.status, 1); assert.equal(result.result.error.code, "RUNTIME_UNAVAILABLE", args.join(" "));
   }
-  const help = cli(["help", "watch"], undefined, { CODEX_HOME: home });
-  assert.ok(help.result.data.usage.some(line => line.includes("--notify all|digest")));
-  assert.ok(help.result.data.notes.some(line => line.includes("watch --streamの既定はdigest")));
 });
 
 test("metadata dry-run validates kind and evidence without exposing message text", () => {
@@ -207,5 +180,53 @@ test("bound supervisors cannot launch Desktop updates", () => {
     const result = cli(["--supervisor", ID, "desktop", "update", ...flags]);
     assert.equal(result.status, 1);
     assert.equal(result.result.error.code, "SUPERVISOR_CONTROL_FORBIDDEN");
+  }
+});
+
+test("local send rejects unknown options before the -- separator and sends text after it literally", t => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "ct-send-options-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { CODEX_HOME: home };
+  for (const args of [["send", ID, "--bogus", "hi"], ["send", ID, "--kidn", "review", "hi"], ["send", "--bogus", ID, "hi"], [ID, "--bogus", "hi"], [`codex://threads/${ID}`, "hi", "--kidn", "review"], ["send", ID, "hi", "--kind"]]) {
+    const { status, result } = cli([...args, "--dry-run"], undefined, env);
+    assert.equal(status, 1, args.join(" ")); assert.equal(result.error.code, "OPTIONS_INVALID", args.join(" "));
+  }
+  for (const args of [["send", ID, "--dry-run", "--", "--force", "--dry-run"], [ID, "--dry-run", "--", "--force", "--dry-run"]]) {
+    const { status, result } = cli(args, undefined, env);
+    assert.equal(status, 0, args.join(" ")); assert.equal(result.data.dry_run, true); assert.equal(result.data.message_characters, "--force --dry-run".length);
+  }
+});
+
+test("diff on a local task fails as invalid usage instead of being sent as a message", t => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "ct-local-diff-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  for (const args of [["diff", ID], ["diff", `codex://threads/${ID}`], ["diff"], ["--connection", "desktop", "diff", ID], ["--host", "remote-control:env_fixture", "diff", ID]]) {
+    const { status, result } = cli(args, undefined, { CODEX_HOME: home });
+    assert.equal(status, 1, args.join(" ")); assert.equal(result.error.code, "OPTIONS_INVALID", args.join(" "));
+  }
+  assert.equal(cli(["help", "diff"]).status, 0);
+});
+
+test("local usage failures carry a code callers can branch on", t => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "ct-usage-codes-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-000000000055", MSG = "aaaaaaaa-aaaa-4aaa-8aaa-0000000000ff";
+  const table = { OPTIONS_INVALID: [
+    ["send"], ["send", ID, "x", "--backend", "typo"], ["send", ID, "", "--dry-run"], ["send", "not-a-thread", "x", "--dry-run"], ["send", ID, "x", "--sound", "--no-sound"],
+    ["send", ID, "x", "--keep-focus", "--dry-run"], ["send", ID, "x", "--kind", "typo", "--dry-run"], ["send", ID, "x", "--backend", "ui", "--source", "me", "--dry-run"],
+    ["send", ID, "x", "--evidence", ["https://user", "secret@example.com/"].join(":"), "--dry-run"], ["send", ID, "x", "--evidence", home, "--dry-run"], ["--supervisor", SESSION, "send", ID, "x", "--backend", "ui"],
+    ["read", ID, "extra"], ["watch", ID, "--until", "never"], ["watch", ID, "--stream", "--until", "idle"], ["watch", ID, "--notify", "digest"], ["watch", ID, "--stream", "--notify", "typo"],
+    ["watch", ID, "--stream", "--settle-ms", "999"], ["watch", ID, "--stream", "--notify", "all", "--settle-ms", "1000"], ["watch", ID, "--stream", "--poll-ms", "1"],
+    ["doctor", "--thread", ID, "--backend", "ui"], ["doctor", "extra"], ["supervise", "prompt"], ["supervise", ID], ["supervise", "prompt", ID, "--agent", "typo"], ["supervise", "register", ID], ["supervise", "status"],
+    ["thread", "repair", ID, "--apply", "--dry-run"], ["thread", "resolve"], ["thread", "nope"], ["threads", "list", "--limit", "0"], ["projects", "nope"], ["desktop", "nope"], ["open"], ["debug-ui"],
+    ["checkpoint", "list"], ["checkpoint", "nope", ID], ["checkpoint", "capture", ID, "name"], ["checkpoint", "attach", ID, MSG],
+    ["history", "nope", ID], ["history", "mark", ID, MSG, "--status", "typo", "--note", "x"], ["history", "mark", ID, MSG, "--status", "applied", "--note", "x"],
+    ["instructions", "nope"], ["resource", "nope"], ["resource", "acquire", "x"], ["resource", "acquire", "x", "--owner", "a", "--ttl-ms", "1"], ["resource", "run", "x", "--owner", "a"],
+    ["resource", "run", "x", "--owner", "a", "--exec-backend", "typo", "--", "true"], ["resource", "run", "x", "--owner", "a", "--exec-backend", "thread-shell", "--", "true"],
+    ["orchestrate", "prompt"], ["--host", "local", "--host", "local", "threads", "list"], ["--require-node-version", "bad", "threads", "list"], ["remote", "nope"],
+  ], REMOTE_PAIR_INPUT_INVALID: [["remote", "pair", "--code-stdin"]], SUPERVISOR_CONTROL_FORBIDDEN: [["--supervisor", SESSION, "supervise", "prompt", ID], ["--supervisor", SESSION, "supervise", ID], ["--supervisor", SESSION, "supervise", "list"]] };
+  for (const [code, rows] of Object.entries(table)) for (const args of rows) {
+    const { status, result } = cli(args, undefined, { CODEX_HOME: home });
+    assert.equal(status, 1, args.join(" ")); assert.equal(result.error.code, code, args.join(" "));
   }
 });

@@ -3,10 +3,10 @@ import { targetHost } from "./target.mjs";
 import { runRemoteCommand, runRemoteShellCommand } from "./remote-io.mjs";
 
 export function runCommand(argv, { cwd, timeoutMs = 0, onStart = async () => {}, signal: abortSignal, execBackend = "app-server", threadId, remoteShell, supervisor, connection } = {}) {
-  if (!argv.length || !argv[0] || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw new Error("A command and timeout-ms between 0 and 86400000 are required.");
-  if (!["app-server", "thread-shell"].includes(execBackend)) throw new Error("--exec-backend must be app-server or thread-shell.");
+  if (!argv.length || !argv[0] || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw Object.assign(new Error("A command and timeout-ms between 0 and 86400000 are required."), { code: "OPTIONS_INVALID" });
+  if (!["app-server", "thread-shell"].includes(execBackend)) throw Object.assign(new Error("--exec-backend must be app-server or thread-shell."), { code: "OPTIONS_INVALID" });
   if (targetHost() !== "local") return (execBackend === "thread-shell" ? runRemoteShellCommand : runRemoteCommand)(argv, { cwd, timeoutMs, onStart, signal: abortSignal, threadId, shell: remoteShell, supervisor, connection });
-  if (execBackend !== "app-server") throw new Error("thread-shell is an explicit remote execution backend.");
+  if (execBackend !== "app-server") throw Object.assign(new Error("thread-shell is an explicit remote execution backend."), { code: "OPTIONS_INVALID" });
   return new Promise((resolve, reject) => {
     const started = new Date().toISOString();
     let output = "", truncated = false, timedOut = false, failure, killer, timer, startUpdate = Promise.resolve(), closed = false;
@@ -16,7 +16,7 @@ export function runCommand(argv, { cwd, timeoutMs = 0, onStart = async () => {},
       try { process.kill(-child.pid, signal); } catch (e) { if (e.code !== "ESRCH") failure ??= e; }
     };
     const stop = () => { terminate("SIGTERM"); killer ??= setTimeout(() => terminate("SIGKILL"), 1000); };
-    const interrupt = () => { failure ??= new Error("Command interrupted."); stop(); };
+    const interrupt = () => { failure ??= Object.assign(new Error("Command interrupted."), { code: "CANCELLED" }); stop(); };
     process.on("SIGINT", interrupt); process.on("SIGTERM", interrupt);
     abortSignal?.addEventListener("abort", interrupt, { once: true });
     for (const stream of [child.stdout, child.stderr]) {
@@ -30,7 +30,7 @@ export function runCommand(argv, { cwd, timeoutMs = 0, onStart = async () => {},
       clearTimeout(timer); clearTimeout(killer); process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);
       abortSignal?.removeEventListener("abort", interrupt);
       await startUpdate;
-      const result = { pid: child.pid ?? null, exit_code: code, signal, timed_out: timedOut, started_at: started, completed_at: new Date().toISOString(), output_tail: output, output_truncated: truncated, error: failure?.message ?? null };
+      const result = { pid: child.pid ?? null, exit_code: code, signal, timed_out: timedOut, started_at: started, completed_at: new Date().toISOString(), output_tail: output, output_truncated: truncated, error: failure?.message ?? null, error_code: failure ? failure.code ?? null : null };
       resolve(result);
     });
   });

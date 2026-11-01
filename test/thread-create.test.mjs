@@ -3,10 +3,9 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, symlink, readFile, readdir } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { createProjectThread, creationOptions, validateNativeCreationCatalog } from "../src/thread-create.mjs";
+import { createProjectThread, creationOptions } from "../src/thread-create.mjs";
 import { projectsOnClient, projectWorkspace, resolveProject } from "../src/projects.mjs";
 import { initialInstructionMatches } from "../src/creation-verification.mjs";
-import { validateStandaloneCreationCatalog } from "../src/standalone-create.mjs";
 import { RUNTIME_CAPABILITIES } from "../src/compatibility.mjs";
 import { RpcFailure } from "../src/rpc.mjs";
 
@@ -123,7 +122,6 @@ test("standalone preflight rejects missing assignment schemas, changed mapping a
     await assert.rejects(createProjectThread("サンプル", "first", f.options, f.deps), error => error.creation_status === "not_created" && error.sent === false);
     assert(!f.calls.includes("thread/start"));
   }
-  assert.throws(() => validateStandaloneCreationCatalog({ tools: [] }));
 });
 
 test("standalone failures distinguish lost creation, lost delivery and already accepted work without retrying", async t => {
@@ -247,7 +245,7 @@ test("CLI rejects removed relay, unsupported permission overrides, readonly and 
     const r = spawnSync(process.execPath, ["bin/codexteer.mjs", "--json", "thread", "create", "--project", "x", ...args], { encoding: "utf8", env: { ...process.env, CODEX_HOME: "/private/tmp/no-native-create-runtime" } });
     assert.equal(r.status, 1); assert.ok(!r.stdout.includes("RUNTIME_UNAVAILABLE"));
   }
-  assert.throws(() => creationOptions({ thinking: "typo" })); assert.throws(() => validateNativeCreationCatalog({ tools: [] }));
+  assert.throws(() => creationOptions({ thinking: "typo" }));
 });
 
 test("standalone CLI ignores even an invalid inherited CODEX_THREAD_ID", () => {

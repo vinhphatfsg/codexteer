@@ -94,7 +94,7 @@ test("source symlinks and traversal in a source version cannot create a deployme
   const { root, home, sourceRoot, options } = await fixture(t);
   const pkgPath = path.join(sourceRoot, "package.json"), pkg = JSON.parse(await readFile(pkgPath));
   await writeFile(pkgPath, JSON.stringify({ ...pkg, version: "../../escape" }));
-  await assert.rejects(prepareDeployment(home, options), /Invalid distribution version/);
+  await assert.rejects(prepareDeployment(home, options), { code: "DEPLOYMENT_UNSAFE" });
   await writeFile(pkgPath, JSON.stringify(pkg));
   const source = path.join(sourceRoot, "src/prompt.mjs"), outside = path.join(root, "outside");
   await writeFile(outside, "do not read"); await rm(source); await symlink(outside, source);

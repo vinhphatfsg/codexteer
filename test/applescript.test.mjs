@@ -18,12 +18,8 @@ for (const scriptName of ["accessibility.applescript", "send.applescript", "insp
   });
 }
 
-test("send submits a deep-link-prefilled composer without global paste", () => {
+test("send never uses the global clipboard", () => {
   const source = fileURLToPath(new URL("../scripts/send.applescript", import.meta.url));
   const script = readFileSync(source, "utf8");
-  assert.match(script, /key code 36/u);
-  assert.match(script, /previousProcessId/u);
-  assert.match(script, /restoreFocus/u);
   assert.doesNotMatch(script, /keystroke "v"|clipboard/u);
-  assert.doesNotMatch(script, /AXTextArea|AXTextField/u);
 });

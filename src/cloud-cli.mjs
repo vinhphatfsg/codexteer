@@ -1,10 +1,12 @@
-import { desktopCloudProjectDoctor, assignDesktopCloudProject, desktopCloudProjectReceipt } from "./desktop-cloud-project.mjs";
+import { desktopCloudProjectDoctor, assignDesktopCloudProject, desktopCloudProjectReceipt, resolveDesktopCloudProjectAttempt } from "./desktop-cloud-project.mjs";
 import { listProjects as listDesktopProjects } from "./projects.mjs";
 import { isDesktopCloudTask, desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
 import { desktopCloudConnection, desktopCloudEnvironments } from "./desktop-cloud-api.mjs";
 import { createDesktopCloudTask, listDesktopCloudTasks, desktopCloudReceipt } from "./desktop-cloud.mjs";
 import { isCloudTask } from "./task-id.mjs";
 import { cloudTaskId } from "./cloud-id.mjs";
+import { normalizeThreadId } from "./thread-id.mjs";
+import { connectionMismatch } from "./connection-error.mjs";
 import { cloudConnection } from "./cloud-connection.mjs";
 import { observeThread, printObservation } from "./observe.mjs";
 import { monitorCommand } from "./monitor.mjs";
@@ -12,7 +14,7 @@ import { notificationOptions } from "./notify.mjs";
 import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
 import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, assertSupervisorRegistration, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
-import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, listInstructions } from "./journal.mjs";
+import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, resolveUnknownDelivery, listInstructions } from "./journal.mjs";
 import { createCloudTask, cloudTaskDiff, listCloudTasks, cloudCreationReceipt } from "./cloud.mjs";
 import { cloudSendReceipt, reconcileCloudSend } from "./cloud-observe.mjs";
 import { cloudEnvironments } from "./cloud-api.mjs";
@@ -67,8 +69,18 @@ export const cloudInvocation = argv => !!selectedCloudInvocation(argv);
 export async function mainCloud(argv) {
   const args = [...argv], json = flag(args, "--json"), connection = option(args, "--connection", selectedCloudInvocation(argv) || "cloud");
   const desktopCloud = connection === "desktop-cloud";
-  const targetId = desktopCloud ? desktopCloudId : cloudTaskId;
-  if (!["cloud", "desktop-cloud"].includes(connection)) throw failure("A cloud task requires the cloud connection.", "CLOUD_TARGET_CONFLICT");
+  const targetId = desktopCloud ? desktopCloudId : value => {
+    try { return cloudTaskId(value); }
+    catch (error) {
+      // Preserve the Web Cloud ID validator's existing error code.
+      if (isDesktopCloudTask(value)) throw connectionMismatch("desktop-cloud", connection, error.code);
+      let local = false;
+      try { normalizeThreadId(value); local = true; } catch {}
+      if (local) throw connectionMismatch("shared", connection, error.code);
+      throw error;
+    }
+  };
+  if (!["cloud", "desktop-cloud"].includes(connection)) throw Object.assign(connectionMismatch(selectedCloudInvocation(argv) || "cloud", connection), { execution_environment: "cloud" });
   const own = args.slice(0, args.includes("--") ? args.indexOf("--") : args.length);
   if (own.some(value => ["--host", "--remote-transport", "--context-thread"].includes(value))) throw failure("Desktop host routes cannot select a cloud task.", "CLOUD_TARGET_CONFLICT");
   const requiredNode = option(args, "--require-node-version");
@@ -159,11 +171,12 @@ export async function mainCloud(argv) {
       const settings = { taskId: id };
       output(`history.${action}`, action === "show" ? await cloudSendReceipt(attempt, settings) : await reconcileCloudSend(attempt, settings)); return;
     }
-    const includeText = flag(args, "--include-text"), pending = flag(args, "--pending");
-    const report = action === "mark" ? { status: option(args, "--status"), note: option(args, "--note"), evidence: repeated(args, "--evidence"), by: option(args, "--by", "local") } : {};
+    const includeText = flag(args, "--include-text"), pending = flag(args, "--pending"), resolveUnknown = desktopCloud && action === "mark" && flag(args, "--resolve-unknown");
+    const report = resolveUnknown ? { note: option(args, "--note") } : action === "mark" ? { status: option(args, "--status"), note: option(args, "--note"), evidence: repeated(args, "--evidence"), by: option(args, "--by", "local") } : {};
     if (!args[0] || args.length > 2 || !["list", "show", "check", "mark"].includes(action) || (["show", "mark"].includes(action) && !args[1]) || (action === "list" && args[1])) throw failure("Invalid history arguments.");
+    if (resolveUnknown && supervisor) throw failure("A supervisor cannot release its own unknown delivery. The user must run this without --supervisor.", "SUPERVISOR_CONTROL_FORBIDDEN");
     const id = await bound(args[0]); const data = action === "list" ? await listMessages(id, { includeText, pending }) : action === "show" ? messageSummary(await getMessage(id, args[1]), includeText)
-      : action === "check" ? await reconcileMessages(id, args[1], { includeText }, dependencies) : await markMessage(id, args[1], report);
+      : action === "check" ? await reconcileMessages(id, args[1], { includeText }, dependencies) : resolveUnknown ? await resolveUnknownDelivery(id, args[1], report) : await markMessage(id, args[1], report);
     output(`history.${action}`, data); return;
   }
   if (command === "instructions") {
@@ -300,7 +313,8 @@ async function desktopCloudCommands(command, args, { supervisor, output, bound, 
       output("thread.create", await createDesktopCloudTask(environment, message(args), { project, title, dryRun })); return true;
     }
     if (action === "assign") { const project = option(args, "--project"); exact(args, 1); const data = await assignDesktopCloudProject(await bound(args[0]), project); output("thread.assign", data); if (data.verification_status !== "verified") process.exitCode = 1; return true; }
-    exact(args, 1);
+    const resolveUnknown = action === "receipt" && flag(args, "--resolve-unknown"), note = resolveUnknown ? option(args, "--note") : undefined; exact(args, 1);
+    if (resolveUnknown) { output("thread.receipt", await resolveDesktopCloudProjectAttempt(args[0], { note })); return true; }
     if (action === "receipt") { let data; try { data = await desktopCloudReceipt(args[0]); } catch (error) { if (error.code !== "DESKTOP_CLOUD_CREATION_RECEIPT_NOT_FOUND") throw error; data = await desktopCloudProjectReceipt(args[0]); } output("thread.receipt", data); return true; }
     if (action === "resolve") { const id = await bound(args[0]); output("thread.resolve", { thread_id: id, deep_link: desktopCloudLink(id) }); return true; }
     throw failure("Expected thread create|assign|receipt|resolve.");

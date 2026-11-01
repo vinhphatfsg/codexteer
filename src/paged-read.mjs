@@ -75,13 +75,13 @@ function finish(state, cursor, events, commands, old, pending, omitted) {
   Object.assign(cursor, hostFields());
   cursor.state = digest(state); cursor.active_turn_id = state.active_turn_id; cursor.pending = pending;
   const encoded = Buffer.from(JSON.stringify(cursor)).toString("base64url");
-  if (encoded.length > 1024 * 1024) throw new Error("Too many in-progress items for a fast cursor. Use --full-history.");
+  if (encoded.length > 1024 * 1024) throw Object.assign(new Error("Too many in-progress items for a fast cursor. Use --full-history."), { code: "CURSOR_TOO_LARGE" });
   return { ...state, events, running_commands: [...commands.values()], cursor: encoded, changed: !old || events.length > 0 || old.state !== cursor.state,
     has_more: pending, omitted_older_events: omitted, history_scope: "tail-and-tracked-items", running_commands_complete: !pending, observed_at: new Date().toISOString() };
 }
 
 export async function readPaged(client, thread, { since, limit = 50, maxChars = 2000, includeOutput = false } = {}) {
-  if (!Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isInteger(maxChars) || maxChars < 100 || maxChars > 20000) throw new Error("Invalid read limit or max-chars.");
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isInteger(maxChars) || maxChars < 100 || maxChars > 20000) throw Object.assign(new Error("Invalid read limit or max-chars."), { code: "OPTIONS_INVALID" });
   const old = since ? decodeCursor(since, thread.id) : null;
   if (old && old.v !== 2) throw invalidCursor();
   const turns = await turnMetadata(client, thread.id), state = stateOf(thread, turns), commands = new Map();

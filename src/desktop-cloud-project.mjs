@@ -13,6 +13,7 @@ import { listProjects } from "./projects.mjs";
 import { listRecords, readRecord, writeRecord, withStoreLock, storePath } from "./store.mjs";
 const failure = (message, code = "DESKTOP_CLOUD_PROJECT_UNAVAILABLE", uncertain = false) => Object.assign(new Error(message), { code, uncertain });
 const sha = value => createHash("sha256").update(value).digest("hex");
+const shows = (state, projectId) => state?.assignment?.projectKind === "local" && state.assignment.projectId === projectId && state.host_id === "durable";
 
 export async function discoverProjectApi({ discover = discoverRuntime, endpoint = discoverNativeEndpoint, run = spawnSync } = {}) {
   const selected = await discover(), { state } = selected;
@@ -100,7 +101,7 @@ export async function desktopCloudProjectDoctor(target, selector, { connect = co
     const state = await readState(api.paths.home, id);
     report.membership = { status: state.assignment?.projectKind === "local" ? (state.host_id === "durable" ? "registered" : "recorded_host_unverified") : state.projectless ? "projectless" : "source_unknown",
       project_id: state.assignment?.projectId ?? null, host_id: state.host_id, source: "read-only-desktop-profile-state" };
-    if (selected) report.membership.matches_selected_project = state.assignment?.projectKind === "local" && state.assignment.projectId === selected.project_id && state.host_id === "durable";
+    if (selected) report.membership.matches_selected_project = shows(state, selected.project_id);
     return report;
   } finally { try { client?.close(); } catch { /* Preserve diagnostics. */ } }
 }
@@ -109,7 +110,9 @@ export async function assignDesktopCloudProject(target, selector, { connect = co
   const id = desktopCloudId(target);
   if (typeof selector !== "string" || !selector.trim()) throw failure("--project is required.", "PROJECT_REQUIRED");
   return withStoreLock(`desktop-cloud-project-${id}`, async () => {
-    if ((await listRecords("desktop-cloud-projects", storage)).some(row => row.thread_id === id && row.delivery_status === "unknown")) throw failure("An earlier assignment is unknown. Inspect its receipt; do not replay it.", "DESKTOP_CLOUD_PROJECT_PENDING");
+    const pending = (await confirmFromState(id, (await listRecords("desktop-cloud-projects", storage)).filter(row => row.thread_id === id && row.delivery_status === "unknown"), readState, storage)).find(row => !row.resolution);
+    if (pending) throw Object.assign(failure(`An earlier assignment is unknown and is never replayed. Run thread receipt ${pending.attempt_id} --connection desktop-cloud to recheck Desktop's profile state; if it stays unknown, the user (not a supervisor) can release it with --resolve-unknown --note TEXT.`, "DESKTOP_CLOUD_PROJECT_PENDING"),
+      { existing_attempt_id: pending.attempt_id, existing_receipt_path: pending.receipt_path });
     let client, receipt, api, dispatching = false;
     try {
       client = await connect(); const environmentId = await targetEnvironment(client, id); api = await discoverApi();
@@ -129,7 +132,7 @@ export async function assignDesktopCloudProject(target, selector, { connect = co
       receipt.delivery_status = "accepted"; receipt.proof_sha256 = sha(response.payload);
       await writeRecord("desktop-cloud-projects", attempt, receipt, storage); await check(api);
       const stored = await readState(api.paths.home, id);
-      receipt.verification_status = stored.assignment?.projectKind === "local" && stored.assignment.projectId === selected.project_id && stored.host_id === "durable" ? "verified" : "not_observed";
+      receipt.verification_status = shows(stored, selected.project_id) ? "verified" : "not_observed";
       await writeRecord("desktop-cloud-projects", attempt, receipt, storage); return receipt;
     } catch (error) {
       if (receipt) {
@@ -141,8 +144,38 @@ export async function assignDesktopCloudProject(target, selector, { connect = co
     } finally { try { client?.close(); } catch { /* Preserve diagnostics. */ } }
   }, storage);
 }
-export async function desktopCloudProjectReceipt(attempt, storage = {}) {
+// Absence from Desktop state never proves the assignment was not applied, so
+// only a positive observation rewrites an unknown attempt.
+async function confirmFromState(id, rows, readState, storage) {
+  if (!rows.length) return rows;
+  let state; try { state = await readState(storage.home ?? codexHome(), id); } catch { return rows; }
+  const remaining = [];
+  for (const row of rows) {
+    if (!shows(state, row.project_id)) { remaining.push(row); continue; }
+    await writeRecord("desktop-cloud-projects", row.attempt_id, { ...row, delivery_status: "accepted", verification_status: "verified", delivery_verification: "desktop-profile-state", verified_at: new Date().toISOString() }, storage);
+  }
+  return remaining;
+}
+async function readAttempt(attempt, storage) {
   if (typeof attempt !== "string" || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(attempt)) throw failure("Invalid assignment attempt ID.");
   const row = await readRecord("desktop-cloud-projects", attempt, storage);
   if (!row || row.type !== "desktop-cloud-project" || row.attempt_id !== attempt) throw failure("Assignment receipt not found."); return row;
+}
+export async function desktopCloudProjectReceipt(attempt, { readState = readDesktopProjectState, ...storage } = {}) {
+  const row = await readAttempt(attempt, storage);
+  if (row.delivery_status !== "unknown") return row;
+  return withStoreLock(`desktop-cloud-project-${row.thread_id}`, async () => {
+    await confirmFromState(row.thread_id, [await readAttempt(attempt, storage)].filter(current => current.delivery_status === "unknown"), readState, storage);
+    return readAttempt(attempt, storage);
+  }, storage);
+}
+export async function resolveDesktopCloudProjectAttempt(attempt, { note, ...storage } = {}) {
+  if (typeof note !== "string" || !note.trim()) throw failure("--resolve-unknown requires a non-empty --note.", "DESKTOP_CLOUD_OPTIONS_INVALID");
+  const { thread_id: id } = await readAttempt(attempt, storage);
+  return withStoreLock(`desktop-cloud-project-${id}`, async () => {
+    const row = await readAttempt(attempt, storage);
+    if (row.delivery_status !== "unknown" || row.resolution) throw failure("This assignment attempt has no unresolved unknown delivery.", "DESKTOP_CLOUD_OPTIONS_INVALID");
+    const updated = { ...row, resolution: { by: "user", at: new Date().toISOString(), note } };
+    await writeRecord("desktop-cloud-projects", attempt, updated, storage); return updated;
+  }, storage);
 }

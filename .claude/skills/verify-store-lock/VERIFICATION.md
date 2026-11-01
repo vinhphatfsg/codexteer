@@ -4,6 +4,8 @@ Branch: `codex/fix-store-lock-wedge`, based on `7239ce8879adbeea6059bdd6b520474d
 Product/test commit: `dcc2f34f21b94e205e5f80bc63e4b2b4dbc1f143`.
 The model/skill is committed separately; `coverage.json.sync_commit` intentionally identifies the product source snapshot.
 
+Re-verified 2026-11-01 for codexteer 0.19.0 at product commit `96b56d985daa63345f716cabe3b3c88faf4fea31`. The only covered change was `owned()` attaching `code: "STORE_UNSAFE"` to its existing throw; control flow and awaits are unchanged, so the model needed no change. `check.sh` reported every configuration as expected (real code pass, 8,071,594 distinct states; each guard removal fails; NotWedged passes) apart from the fingerprint drift, after which `coverage.json` was refreshed.
+
 ## Design and final scope
 
 Keep the existing hard-link acquisition, PID checks, token rechecks, two-attempt loop, public API, and release behavior. Replace the ownerless mkdir recovery guard with a generation-scoped lock in `lock-recovery/` using the same helper recursively. Hash only the dead owner's token: a raw home path would split recovery guards when callers use symlink aliases of the same CODEX_HOME.

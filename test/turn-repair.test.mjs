@@ -166,7 +166,7 @@ test("same-size content change on append open is rejected even with restored mti
     const h = await open(path, constants.O_RDWR | constants.O_APPEND | constants.O_NOFOLLOW);
     await h.utimes(s.atime, s.mtime);
     return h;
-  } }), e => e.code === "REPAIR_HISTORY_CHANGED" && e.history_changed === false && !!e.repair_stat && /contents changed/.test(e.message));
+  } }), e => e.code === "REPAIR_HISTORY_CHANGED" && e.history_changed === false && !!e.repair_stat);
   assert.equal(await readFile(file, "utf8"), tampered);
 });
 

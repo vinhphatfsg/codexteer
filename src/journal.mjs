@@ -1,5 +1,5 @@
 import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
-import { confirmDesktopCloudDelivery } from "./desktop-cloud.mjs";
+import { confirmDesktopCloudDelivery, resolveDesktopCloudDelivery } from "./desktop-cloud.mjs";
 import { desktopCloudConnection } from "./desktop-cloud-api.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { sendAppServerMessage } from "./app-server.mjs";
@@ -11,12 +11,13 @@ import { discoverRuntime } from "./runtime.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 import { RpcClient } from "./rpc.mjs";
 import { prepareDirective } from "./directive.mjs";
+import { releasedDelivery } from "./findings.mjs";
 import { assertSupervisor, withSupervisedSend } from "./supervision.mjs";
 
 export async function getMessage(threadInput, id, options = {}) {
   const threadId = normalizeTaskId(threadInput);
   const entry = await readRecord("messages", id, options);
-  if (!entry || entry.thread_id !== threadId || entry.id !== id || entry.schema !== 1) throw new Error("Message record not found for this task.");
+  if (!entry || entry.thread_id !== threadId || entry.id !== id || entry.schema !== 1) throw Object.assign(new Error("Message record not found for this task."), { code: "MESSAGE_NOT_FOUND" });
   return entry;
 }
 
@@ -32,12 +33,12 @@ export async function listMessages(threadInput, { includeText = false, pending =
 }
 
 export function instructionStates(entries, now = Date.now()) {
-  const states = new Map(entries.map(e => [e.id, { ...e, instruction_status: e.delivery_status === "not_sent" ? "not_sent" : e.delivery_status !== "accepted" ? "pending_delivery" : e.metadata?.retracts ? "withdrawal_notice" : e.metadata?.expires_at && Date.parse(e.metadata.expires_at) <= now ? "expired" : "active" }]));
+  const states = new Map(entries.map(e => [e.id, { ...e, instruction_status: e.delivery_status === "not_sent" ? "not_sent" : releasedDelivery(e) ? "released" : e.delivery_status !== "accepted" ? "pending_delivery" : e.metadata?.retracts ? "withdrawal_notice" : e.metadata?.expires_at && Date.parse(e.metadata.expires_at) <= now ? "expired" : "active" }]));
   for (const entry of entries) {
     const target = states.get(entry.metadata?.supersedes ?? entry.metadata?.retracts);
     if (!target) continue;
     if (entry.delivery_status === "accepted") Object.assign(target, { instruction_status: entry.metadata.retracts ? "retracted" : "superseded", replaced_by: entry.id });
-    else if (entry.delivery_status !== "not_sent") target.pending_change_ids = [...target.pending_change_ids ?? [], entry.id];
+    else if (entry.delivery_status !== "not_sent" && !releasedDelivery(entry)) target.pending_change_ids = [...target.pending_change_ids ?? [], entry.id];
   }
   return [...states.values()];
 }
@@ -53,7 +54,7 @@ async function validateReplacement(threadId, options, storage) {
   await getMessage(threadId, targetId, storage);
   const entries = instructionStates(await listMessages(threadId, { ...storage, includeText: true }));
   const target = entries.find(e => e.id === targetId);
-  if (!["active", "expired"].includes(target.instruction_status) || target.pending_change_ids?.length) throw new Error("Target instruction is inactive or has an unresolved delivery. Check history before replacing it.");
+  if (!["active", "expired"].includes(target.instruction_status) || target.pending_change_ids?.length) throw Object.assign(new Error("Target instruction is inactive or has an unresolved delivery. Check history before replacing it."), { code: "INSTRUCTION_NOT_REPLACEABLE" });
 }
 
 export async function sendTrackedMessage(threadInput, body, options = {}, { send = sendAppServerMessage, ...storage } = {}) {
@@ -145,12 +146,26 @@ export async function reconcileMessages(threadInput, id, options = {}, { discove
 
 export async function markMessage(threadInput, id, { status, note, evidence = [], by = "local", ...options }) {
   const threadId = normalizeTaskId(threadInput);
-  if (!["acknowledged", "applied", "dismissed"].includes(status) || !note?.trim() || !by?.trim()) throw new Error("mark requires --status acknowledged|applied|dismissed and a non-empty --note.");
-  if (status === "applied" && !evidence.length) throw new Error("applied requires --evidence (a test result, diff or artifact reference).");
+  if (!["acknowledged", "applied", "dismissed"].includes(status) || !note?.trim() || !by?.trim()) throw Object.assign(new Error("mark requires --status acknowledged|applied|dismissed and a non-empty --note."), { code: "OPTIONS_INVALID" });
+  if (status === "applied" && !evidence.length) throw Object.assign(new Error("applied requires --evidence (a test result, diff or artifact reference)."), { code: "OPTIONS_INVALID" });
   return withStoreLock(`message-${threadId}`, async () => {
     const entry = await getMessage(threadId, id, options);
     const response = { status, note, evidence, reported_by: by, reported_at: new Date().toISOString(), basis: "explicit_report" };
     const updated = { ...entry, response, reports: [...entry.reports ?? [], response], updated_at: response.reported_at };
+    await writeRecord("messages", id, updated, options);
+    return messageSummary(updated);
+  }, options);
+}
+
+// Absence from history never proves non-delivery, so a user's note releases the
+// send reservation while delivery_status stays unknown.
+export async function resolveUnknownDelivery(threadInput, id, { note, ...options }) {
+  const threadId = normalizeTaskId(threadInput);
+  if (!isDesktopCloudTask(threadId) || typeof note !== "string" || !note.trim()) throw Object.assign(new Error("--resolve-unknown applies to a Desktop Cloud message and requires a non-empty --note."), { code: "DESKTOP_CLOUD_OPTIONS_INVALID" });
+  return withStoreLock(`message-${threadId}`, async () => {
+    const entry = await getMessage(threadId, id, options), resolution = { by: "user", at: new Date().toISOString(), note };
+    await resolveDesktopCloudDelivery(threadId, entry.client_message_id, resolution, options);
+    const updated = { ...entry, resolution, updated_at: resolution.at };
     await writeRecord("messages", id, updated, options);
     return messageSummary(updated);
   }, options);

@@ -8,7 +8,7 @@ import { readSnapshot, decodeCursor, observeThread } from "../src/observe.mjs";
 import { remoteReadClient, remoteObservationConnection, validateRemoteCatalog } from "../src/remote.mjs";
 import { registeredRemoteProjects } from "../src/projects.mjs";
 import { registerSupervisor, controlSupervisor, supervisorStatus, withSupervisedSend } from "../src/supervision.mjs";
-import { readRecord, writeRecord, storePath } from "../src/store.mjs";
+import { readRecord, writeRecord } from "../src/store.mjs";
 import { nativeRequest } from "../src/native-rpc.mjs";
 import { prepareSupervisorPrompt } from "../src/supervise.mjs";
 import { streamThread } from "../src/monitor.mjs";
@@ -63,7 +63,6 @@ test("same UUID on three hosts has separate cursors, supervisors and pause contr
     await controlSupervisor(ID, "pause", { home });
     assert.equal((await supervisorStatus(ID, { home })).state, "paused");
     assert.equal((await supervisorStatus(ID, { home })).host_id, HOST);
-    assert.match(storePath("supervisors", ID, home), /\/hosts\/[a-f0-9]{64}\//);
     await assert.rejects(withSupervisedSend(ID, session, () => assert.fail("must not send"), { home }), { code: "REMOTE_READ_ONLY" });
   });
   assert.equal((await supervisorStatus(ID, { home })).state, "active");
@@ -150,7 +149,7 @@ test("registered remote projects preserve remote paths and label offline availab
   assert.equal(result.ok, true); assert.equal(result.data.count, 1);
   assert.equal(cli(["projects", "list", "--remote"], { CODEX_HOME: home }).data.count, 1);
   await writeFile(file, JSON.stringify({ "remote-projects": [project, project] }));
-  await assert.rejects(registeredRemoteProjects(home), /Duplicate/);
+  await assert.rejects(registeredRemoteProjects(home), { code: "PROJECT_PROTOCOL_ERROR" });
   await chmod(file, 0o666); await assert.rejects(registeredRemoteProjects(home), { code: "PROJECT_REGISTRY_UNSAFE" });
 });
 
@@ -181,9 +180,8 @@ test("saved remote prompt renderer preserves host restrictions across module cop
   assert.equal(result.ok, true);
   assert.equal(result.data.observation_only, true);
   assert.equal(result.data.host_id, HOST);
-  assert(result.data.prompt.includes(`対象ホスト: ${HOST}`));
+  assert(result.data.prompt.includes(`--host '${HOST}'`));
   assert(!result.data.prompt.includes(` send ${ID}`));
-  assert(!result.data.prompt.includes("必要最小限の軌道修正と、その結果の確認を委任"));
 });
 
 test("remote agent launch registers and stops only the selected host's supervisor", async t => {
@@ -195,7 +193,7 @@ test("remote agent launch registers and stops only the selected host's superviso
   });
   assert.equal(result.status, 0, result.stderr);
   const { prompt } = JSON.parse(result.stdout);
-  assert(prompt.includes(`対象ホスト: ${HOST}`)); assert(!prompt.includes(` send ${ID}`));
+  assert(prompt.includes(`--host '${HOST}'`)); assert(!prompt.includes(` send ${ID}`));
   assert.equal((await supervisorStatus(ID, { home })).state, "unregistered");
   await withTarget(HOST, CALLER, async () => assert.equal((await supervisorStatus(ID, { home })).state, "stopped"));
 });

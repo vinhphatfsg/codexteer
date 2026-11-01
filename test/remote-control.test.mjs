@@ -260,7 +260,7 @@ test("new user input after the reviewed control cursor rejects before any steeri
 test("idle and new-turn paths do not send or resume remotely", async t => {
   const f = await fixture(t); f.thread.status.type = "idle"; f.thread.turns[0].status = "completed";
   await scope(async () => {
-    await assert.rejects(sendAppServerMessage(ID, "fixture", f.route), /eligible active turn/);
+    await assert.rejects(sendAppServerMessage(ID, "fixture", f.route));
     await assert.rejects(sendAppServerMessage(ID, "fixture", { ...f.route, newTurn: true }), { code: "REMOTE_NEW_TURN_UNSUPPORTED" });
   });
   assert(!f.methods.some(x => x.method.startsWith("turn/")));

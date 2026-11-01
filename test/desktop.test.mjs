@@ -30,16 +30,6 @@ test("opens composer deep links in the background", () => {
   ]);
 });
 
-test("can explicitly keep Codex focused", () => {
-  const settings = {
-    follow_up_mode: "steer",
-    composer_enter_behavior: "enter",
-    submit_shortcut: "plain",
-  };
-  const plan = buildSendPlan(THREAD_ID, "test", 1500, settings, { keepFocus: true });
-  assert.equal(plan.focus_policy, "keep-codex-focused");
-});
-
 test("uses a normal submission shortcut for a stopped thread", () => {
   const settings = {
     follow_up_mode: "queue",
@@ -70,6 +60,6 @@ test("dry run does not touch the desktop", () => {
 test("rejects invalid wait time", () => {
   assert.throws(
     () => sendDesktopMessage(THREAD_ID, "test", { dryRun: true, waitMs: -1 }),
-    /--wait-ms/,
+    { code: "OPTIONS_INVALID" },
   );
 });

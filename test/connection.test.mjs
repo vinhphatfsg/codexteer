@@ -156,7 +156,6 @@ test("CLI binds copied observation prompts to the selected endpoint and rejects 
   const f = await fixture(t);
   const data = (await f.cli(["supervise", "prompt", ID, "--agent", "codex"])).data;
   assert.equal(data.supervisor.connection, "desktop");
-  assert.match(data.prompt, /この接続は観測専用/);
   assert.doesNotMatch(data.prompt, /\n.* send /);
   const register = data.prompt.split("\n").find(line => line.includes(` supervise register ${ID} `));
   const recipientEnv = { PATH: "/no-supervisor-cli", HOME: f.home };

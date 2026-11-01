@@ -7,14 +7,14 @@ import { hostNamespace, hostFields } from "./target.mjs";
 const valid = value => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,150}$/.test(value);
 // The persisted namespace predates the codexteer rename; keep existing records.
 export function storePath(bucket, id, home = codexHome()) {
-  if (!valid(bucket) || (id != null && !valid(id))) throw new Error("Invalid local record identifier.");
+  if (!valid(bucket) || (id != null && !valid(id))) throw Object.assign(new Error("Invalid local record identifier."), { code: "OPTIONS_INVALID" });
   const namespace = hostNamespace();
   return path.join(home, "codex-steer", ...(namespace ? ["hosts", namespace] : []), bucket, ...(id == null ? [] : [`${id}.json`]));
 }
 
 async function owned(file, directory = false) {
   const s = await lstat(file);
-  if (s.uid !== process.getuid() || s.isSymbolicLink() || (s.mode & 0o077) || (directory ? !s.isDirectory() : !s.isFile())) throw new Error("Unsafe local state ownership, permissions, or file type.");
+  if (s.uid !== process.getuid() || s.isSymbolicLink() || (s.mode & 0o077) || (directory ? !s.isDirectory() : !s.isFile())) throw Object.assign(new Error("Unsafe local state ownership, permissions, or file type."), { code: "STORE_UNSAFE" });
 }
 
 async function directory(bucket, home, create = false) {

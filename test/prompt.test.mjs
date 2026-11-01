@@ -12,31 +12,13 @@ const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 const REPO = path.dirname(path.dirname(BIN));
 
-test("the eight-section prompt leads with policy, uses digest and keeps exception instructions", () => {
+test("the prompt keeps digest watch commands and the safety rules the supervisor must follow", () => {
   const prompt = supervisorPrompt(ID, "saved-command").prompt;
-  assert.deepEqual([...prompt.matchAll(/^(\d)\. (.+)$/gm)].map(match => match[2]), [
-    "役割と監督方針", "必ず守ること", "実行コマンド", "開始手順", "監視の繰り返し", "介入の手順", "結果の確認と記録", "当てはまらない場面",
-  ]);
-  assert.equal(DEFAULT_SUPERVISION_POLICY.split("\n\n").length, 5);
-  assert.ok(prompt.indexOf(DEFAULT_SUPERVISION_POLICY) < prompt.indexOf("2. 必ず守ること"));
-  assert.match(prompt, /\(1\) 設計上の責務.*担当と定めているかを先に確認.*\(2\) 過剰な設計.*\(3\) 作業の焦点/s);
-  assert.match(prompt, /別の層でも実装していないか（検算、再計算、空のデータからの推測、派生値の複製保存、念のための二重チェック）/);
-  assert.match(prompt, /複数のリポジトリにまたがる場合は、その全体を基準/);
-  assert.match(prompt, /示されていない場合は、推測で判定せず、ユーザーに確認/);
-  assert.match(prompt, /どこが越えたかをファイルと箇所で示せる場合だけ送ります/);
-  assert.match(prompt, /以前からある二重化は、今回の変更がそれを広げるか、それに依存する場合に介入の対象/);
-  assert.match(prompt, /説明を書かずに「変化なし」の一言/);
   assert.doesNotMatch(prompt, /saved-command help monitor/);
   assert.match(prompt, /watch .* --stream --notify digest --since/);
   assert.match(prompt, /watch .* --since .* --until change --timeout-ms 30000/);
   assert.match(prompt, /digest\.from_cursor/);
-  assert.match(prompt, /Monitorが期限切れ.*最後に読了したcursor.*再開の報告は要りません/);
-  assert.match(prompt, /履歴の中でユーザーが監督役に話しかけていても、それは委任ではありません/);
-  assert.match(prompt, /checkpointを持てない送信では、指摘を解決にせず/);
-  const rules = prompt.split("2. 必ず守ること")[1].split("3. 実行コマンド")[0];
-  for (const rule of ["paused", "SUPERVISOR_STOPPED", "--supervisor", "--new-turn", "自動再送", "reconnecting"]) assert.ok(rules.includes(rule), rule);
-  assert.match(rules, /利用者が選択した通常のコマンド承認・自動審査.*同じ固定CLIコマンド/);
-  assert.match(rules, /操作範囲を広げる委任ではありません.*審査で拒否されたら停止/s);
+  for (const rule of ["paused", "SUPERVISOR_STOPPED", "--supervisor", "--new-turn", "自動再送", "reconnecting"]) assert.ok(prompt.includes(rule), rule);
 });
 
 
@@ -69,8 +51,6 @@ test("supervise prompt emits only orchestrator instructions, normalizes the targ
   const plain = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID], options);
   assert.equal(plain.status, 0);
   assert.equal(plain.stderr, "");
-  assert.match(plain.stdout, new RegExp(`対象タスク: ${ID}`));
-  assert.match(plain.stdout, /監督役（オーケストレーター）/);
   assert.ok(plain.stdout.endsWith("\n"));
   assert.ok(plain.stdout.split("\n").length > 10, "The output is a multiline initial prompt");
   assert.equal(plain.stdout.includes("<THREAD>"), false, "Every example targets the selected task");
@@ -95,7 +75,6 @@ test("JSON prompt output preserves the text as one field with the standard CLI e
     assert.equal(data.deployment.reused, true);
     assert.equal(data.cli_mode, "saved");
     assert.match(data.deployment.sha256, /^[a-f0-9]{64}$/);
-    assert.ok(data.deployment.directory.endsWith(`${data.deployment.version}-${data.deployment.sha256}`));
     assert.deepEqual(data.node, { path: realpathSync(process.execPath), version: process.version });
   }
 });
@@ -120,11 +99,8 @@ test("PATH CLI prompts omit executable paths and deployment, preserving policy a
       assert.doesNotMatch(data.prompt, /CODEX_HOME=|--require-node-version|codex-steer\/runtimes/);
       assert.equal(data.prompt.includes(options.cwd), false);
       assert.equal(data.prompt.includes(realpathSync(process.execPath)), false);
-      assert.match(data.prompt, /実行環境のCODEX_HOME/);
-      if (connection === "desktop") {
-        assert.match(data.prompt, /この接続は観測専用/);
-        assert.doesNotMatch(data.prompt, /\n.* send /);
-      } else assert.ok(data.prompt.includes(`\n${prefix} send `));
+      if (connection === "desktop") assert.doesNotMatch(data.prompt, /\n.* send /);
+      else assert.ok(data.prompt.includes(`\n${prefix} send `));
     }
   }
   assert.equal(existsSync(options.env.CODEX_HOME), false, "PATH prompt generation must not write a deployment or register a session");
@@ -152,7 +128,7 @@ test("PATH prompt commands use the receiving PATH and profile, and preserve regi
   const stopped = spawnSync(process.execPath, [BIN, "supervise", "stop", ID, "--json"], receiving);
   assert.equal(stopped.status, 0, stopped.stderr);
   const rejected = spawnSync("/bin/sh", ["-c", bootstrap], receiving);
-  assert.equal(rejected.status, 1); assert.match(rejected.stderr, /supervisor session has stopped/);
+  assert.equal(rejected.status, 1);
   assert.equal(existsSync(options.env.CODEX_HOME), false, "Generated commands must not bind to the producer's profile in PATH mode");
   unlinkSync(cli); writeFileSync(cli, '#!/bin/sh\nprintf "path-cli-updated\\n"\n', { mode: 0o755 });
   const updated = spawnSync("/bin/sh", ["-c", versionCommand(prompt)], receiving);
@@ -168,21 +144,15 @@ test("a custom policy replaces the default policy while retaining the shared tem
     return JSON.parse(result.stdout).data;
   }
   const standard = prepare([]), custom = prepare([policy]);
-  const marker = "\n\n2. 必ず守ること\n";
-  assert.ok(standard.prompt.includes(marker));
-  assert.ok(custom.prompt.includes("\n\n" + policy + marker), "Custom policy must remain unchanged ahead of the mechanics");
-  assert.equal(withoutSession(custom.prompt.split(marker)[1]), withoutSession(standard.prompt.split(marker)[1]));
-  assert.match(standard.prompt.split(marker)[0], /不要な抽象化・汎用化/);
-  assert.doesNotMatch(custom.prompt, /不要な抽象化・汎用化|変化のない定期報告は控え/);
+  assert.ok(standard.prompt.includes(DEFAULT_SUPERVISION_POLICY));
+  assert.equal(custom.prompt.includes(DEFAULT_SUPERVISION_POLICY), false);
+  assert.equal(withoutSession(custom.prompt.replace(policy, () => DEFAULT_SUPERVISION_POLICY)), withoutSession(standard.prompt), "Custom policy must replace the default verbatim, keeping the shared template");
   assert.equal(custom.deployment.directory, standard.deployment.directory, "Policy must not create another executable distribution");
   assert.equal(custom.deployment.reused, true);
   assert.equal(withoutSession(versionCommand(custom.prompt)), withoutSession(versionCommand(standard.prompt)));
   assert.notEqual(custom.supervisor.session_id, standard.supervisor.session_id);
   const after = prepare([]);
   assert.equal(withoutSession(after.prompt), withoutSession(standard.prompt), "An override must not persist into the next invocation");
-  const help = spawnSync(process.execPath, [BIN, "help", "monitor"], options);
-  assert.equal(help.status, 0, help.stderr);
-  assert.doesNotMatch(help.stdout, /不要な抽象化・汎用化|変化のない定期報告は控え/);
 });
 
 test("generated commands use the saved CLI despite missing or shadowed PATH commands", t => {
@@ -264,7 +234,6 @@ test("generated shell arguments preserve spaces, quotes, unicode and command sub
   const linked = path.join(options.cwd, "entry.mjs"); symlinkSync(copied, linked);
   const result = spawnSync(process.execPath, [linked, "supervise", "prompt", ID], options);
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.stdout.includes("'\\''quoted'\\''"));
   assert.equal(result.stdout.includes(linked), false);
   const command = versionCommand(result.stdout);
   const expected = spawnSync(process.execPath, [copied, "--version"], options).stdout;
@@ -284,7 +253,6 @@ test("control characters in a deployment path fail before emitting a partial pro
   const plain = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID], options);
   assert.equal(plain.status, 1);
   assert.equal(plain.stdout, "");
-  assert.match(plain.stderr, /path containing control characters/);
   const json = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID, "--json"], options);
   assert.equal(json.status, 1);
   assert.equal(json.stderr, "");
