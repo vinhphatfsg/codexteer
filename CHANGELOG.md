@@ -5,6 +5,8 @@
 ## Unreleased
 
 - タスクIDと接続指定の不一致エラーに、修正用の`--connection`とJSONの`expected_connection`・`connection`を追加しました。Desktop Cloudには`desktop-cloud`、Web Cloudには`cloud`、ローカルには既定の`shared`を示します。拒否・終了コード・既存エラーコードを維持し、自動切り替えは行いません。
+- `help`の全30トピックを同じ構成に揃えました。各トピックは使い所・使い方・オプション（既定値）・確認できること・エラーと対処・手順・例・補足・関連を持ち、`--json`でも同じ項目名で取得できます。記述は実装と照合し、実装と食い違っていた説明（接続ソケットのリンク、Cloudの版確認の範囲、`status`の`unregistered`など）を直しました。`help desktop-cloud`と`help environments`の「使い所: undefined」表示と、`checkpoint run`・`resource run`の`--json`を`--`の後ろに示していた使い方表示も直しました。トピック名は変わりません。
+- 文言や内部実装に固定されていたテストを整理し、ヘルプの記述とエラーコード・オプションの対応を検査するテストを追加しました。
 
 ## 0.18.2 — 2026-11-01公開
 
