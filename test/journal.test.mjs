@@ -60,12 +60,12 @@ test("duplicate or mismatched history is conflict; absence never becomes proof o
 
 test("reported application requires evidence, keeps reports and is distinct from delivery", async t => {
   const storage = await fixture(t); const r = await sendTrackedMessage(ID, "test", {}, { ...storage, send: accepted });
-  await assert.rejects(markMessage(ID, r.message_id, { ...storage, status: "applied", note: "done" }));
+  await assert.rejects(markMessage(ID, r.message_id, { ...storage, status: "applied", note: "done" }), { code: "OPTIONS_INVALID" });
   await markMessage(ID, r.message_id, { ...storage, status: "acknowledged", note: "will check", by: "worker" });
   const marked = await markMessage(ID, r.message_id, { ...storage, status: "applied", note: "regression passed", evidence: ["results.xml"], by: "reviewer" });
   assert.equal(marked.reports.length, 2); assert.equal(marked.response.basis, "explicit_report");
   assert.equal((await listMessages(ID, { ...storage, pending: true })).length, 0);
-  await assert.rejects(getMessage("aaaaaaaa-aaaa-4aaa-8aaa-000000000002", r.message_id, storage));
+  await assert.rejects(getMessage("aaaaaaaa-aaaa-4aaa-8aaa-000000000002", r.message_id, storage), { code: "MESSAGE_NOT_FOUND" });
 });
 
 test("dry-run has no journal; state rejects symlinks and unsafe permissions", async t => {
@@ -74,11 +74,11 @@ test("dry-run has no journal; state rejects symlinks and unsafe permissions", as
   assert.deepEqual(await listMessages(ID, storage), []);
   await writeRecord("messages", "safe", { ok: true }, storage);
   await symlink(storePath("messages", "safe", storage.home), storePath("messages", "alias", storage.home));
-  await assert.rejects(readRecord("messages", "alias", storage), /Unsafe/);
-  await assert.rejects(writeRecord("messages", "alias", {}, storage), /Unsafe/);
+  await assert.rejects(readRecord("messages", "alias", storage), { code: "STORE_UNSAFE" });
+  await assert.rejects(writeRecord("messages", "alias", {}, storage), { code: "STORE_UNSAFE" });
   await chmod(storePath("messages", "safe", storage.home), 0o644);
-  await assert.rejects(readRecord("messages", "safe", storage), /Unsafe/);
-  assert.throws(() => storePath("messages", "../escape", storage.home), /identifier/);
+  await assert.rejects(readRecord("messages", "safe", storage), { code: "STORE_UNSAFE" });
+  assert.throws(() => storePath("messages", "../escape", storage.home), { code: "OPTIONS_INVALID" });
 });
 
 test("message operations release locks after failure", async t => {

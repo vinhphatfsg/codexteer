@@ -206,3 +206,27 @@ test("diff on a local task fails as invalid usage instead of being sent as a mes
   }
   assert.equal(cli(["help", "diff"]).status, 0);
 });
+
+test("local usage failures carry a code callers can branch on", t => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "ct-usage-codes-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-000000000055", MSG = "aaaaaaaa-aaaa-4aaa-8aaa-0000000000ff";
+  const table = { OPTIONS_INVALID: [
+    ["send"], ["send", ID, "x", "--backend", "typo"], ["send", ID, "", "--dry-run"], ["send", "not-a-thread", "x", "--dry-run"], ["send", ID, "x", "--sound", "--no-sound"],
+    ["send", ID, "x", "--keep-focus", "--dry-run"], ["send", ID, "x", "--kind", "typo", "--dry-run"], ["send", ID, "x", "--backend", "ui", "--source", "me", "--dry-run"],
+    ["send", ID, "x", "--evidence", ["https://user", "secret@example.com/"].join(":"), "--dry-run"], ["send", ID, "x", "--evidence", home, "--dry-run"], ["--supervisor", SESSION, "send", ID, "x", "--backend", "ui"],
+    ["read", ID, "extra"], ["watch", ID, "--until", "never"], ["watch", ID, "--stream", "--until", "idle"], ["watch", ID, "--notify", "digest"], ["watch", ID, "--stream", "--notify", "typo"],
+    ["watch", ID, "--stream", "--settle-ms", "999"], ["watch", ID, "--stream", "--notify", "all", "--settle-ms", "1000"], ["watch", ID, "--stream", "--poll-ms", "1"],
+    ["doctor", "--thread", ID, "--backend", "ui"], ["doctor", "extra"], ["supervise", "prompt"], ["supervise", ID], ["supervise", "prompt", ID, "--agent", "typo"], ["supervise", "register", ID], ["supervise", "status"],
+    ["thread", "repair", ID, "--apply", "--dry-run"], ["thread", "resolve"], ["thread", "nope"], ["threads", "list", "--limit", "0"], ["projects", "nope"], ["desktop", "nope"], ["open"], ["debug-ui"],
+    ["checkpoint", "list"], ["checkpoint", "nope", ID], ["checkpoint", "capture", ID, "name"], ["checkpoint", "attach", ID, MSG],
+    ["history", "nope", ID], ["history", "mark", ID, MSG, "--status", "typo", "--note", "x"], ["history", "mark", ID, MSG, "--status", "applied", "--note", "x"],
+    ["instructions", "nope"], ["resource", "nope"], ["resource", "acquire", "x"], ["resource", "acquire", "x", "--owner", "a", "--ttl-ms", "1"], ["resource", "run", "x", "--owner", "a"],
+    ["resource", "run", "x", "--owner", "a", "--exec-backend", "typo", "--", "true"], ["resource", "run", "x", "--owner", "a", "--exec-backend", "thread-shell", "--", "true"],
+    ["orchestrate", "prompt"], ["--host", "local", "--host", "local", "threads", "list"], ["--require-node-version", "bad", "threads", "list"], ["remote", "nope"],
+  ], REMOTE_PAIR_INPUT_INVALID: [["remote", "pair", "--code-stdin"]], SUPERVISOR_CONTROL_FORBIDDEN: [["--supervisor", SESSION, "supervise", "prompt", ID], ["--supervisor", SESSION, "supervise", ID], ["--supervisor", SESSION, "supervise", "list"]] };
+  for (const [code, rows] of Object.entries(table)) for (const args of rows) {
+    const { status, result } = cli(args, undefined, { CODEX_HOME: home });
+    assert.equal(status, 1, args.join(" ")); assert.equal(result.error.code, code, args.join(" "));
+  }
+});

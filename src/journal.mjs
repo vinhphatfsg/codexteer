@@ -16,7 +16,7 @@ import { assertSupervisor, withSupervisedSend } from "./supervision.mjs";
 export async function getMessage(threadInput, id, options = {}) {
   const threadId = normalizeTaskId(threadInput);
   const entry = await readRecord("messages", id, options);
-  if (!entry || entry.thread_id !== threadId || entry.id !== id || entry.schema !== 1) throw new Error("Message record not found for this task.");
+  if (!entry || entry.thread_id !== threadId || entry.id !== id || entry.schema !== 1) throw Object.assign(new Error("Message record not found for this task."), { code: "MESSAGE_NOT_FOUND" });
   return entry;
 }
 
@@ -53,7 +53,7 @@ async function validateReplacement(threadId, options, storage) {
   await getMessage(threadId, targetId, storage);
   const entries = instructionStates(await listMessages(threadId, { ...storage, includeText: true }));
   const target = entries.find(e => e.id === targetId);
-  if (!["active", "expired"].includes(target.instruction_status) || target.pending_change_ids?.length) throw new Error("Target instruction is inactive or has an unresolved delivery. Check history before replacing it.");
+  if (!["active", "expired"].includes(target.instruction_status) || target.pending_change_ids?.length) throw Object.assign(new Error("Target instruction is inactive or has an unresolved delivery. Check history before replacing it."), { code: "INSTRUCTION_NOT_REPLACEABLE" });
 }
 
 export async function sendTrackedMessage(threadInput, body, options = {}, { send = sendAppServerMessage, ...storage } = {}) {
@@ -145,8 +145,8 @@ export async function reconcileMessages(threadInput, id, options = {}, { discove
 
 export async function markMessage(threadInput, id, { status, note, evidence = [], by = "local", ...options }) {
   const threadId = normalizeTaskId(threadInput);
-  if (!["acknowledged", "applied", "dismissed"].includes(status) || !note?.trim() || !by?.trim()) throw new Error("mark requires --status acknowledged|applied|dismissed and a non-empty --note.");
-  if (status === "applied" && !evidence.length) throw new Error("applied requires --evidence (a test result, diff or artifact reference).");
+  if (!["acknowledged", "applied", "dismissed"].includes(status) || !note?.trim() || !by?.trim()) throw Object.assign(new Error("mark requires --status acknowledged|applied|dismissed and a non-empty --note."), { code: "OPTIONS_INVALID" });
+  if (status === "applied" && !evidence.length) throw Object.assign(new Error("applied requires --evidence (a test result, diff or artifact reference)."), { code: "OPTIONS_INVALID" });
   return withStoreLock(`message-${threadId}`, async () => {
     const entry = await getMessage(threadId, id, options);
     const response = { status, note, evidence, reported_by: by, reported_at: new Date().toISOString(), basis: "explicit_report" };

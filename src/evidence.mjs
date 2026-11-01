@@ -8,11 +8,11 @@ import { remoteFingerprintFile } from "./remote-io.mjs";
 export async function fingerprintFile(input) {
   if (targetHost() !== "local") return remoteFingerprintFile(input);
   const ref = path.resolve(input), canonical = await realpath(ref), before = await stat(canonical);
-  if (!before.isFile()) throw new Error("Evidence must be a file or an http(s)/codex URL.");
+  if (!before.isFile()) throw Object.assign(new Error("Evidence must be a file or an http(s)/codex URL."), { code: "OPTIONS_INVALID" });
   const hash = createHash("sha256");
   for await (const data of createReadStream(canonical)) hash.update(data);
   const after = await stat(canonical);
-  if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || (await realpath(ref)) !== canonical) throw new Error("File changed while being fingerprinted. Try again after editing finishes.");
+  if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || (await realpath(ref)) !== canonical) throw Object.assign(new Error("File changed while being fingerprinted. Try again after editing finishes."), { code: "STALE_EVIDENCE" });
   return { type: "file", ref, path: canonical, size: after.size, mode: after.mode & 0o777, sha256: hash.digest("hex") };
 }
 
@@ -20,7 +20,7 @@ export async function collectEvidence(refs = []) {
   return Promise.all(refs.map(async ref => {
     if (/^(https?|codex):\/\//i.test(ref)) {
       const url = new URL(ref);
-      if (url.username || url.password) throw new Error("Evidence URLs must not contain credentials.");
+      if (url.username || url.password) throw Object.assign(new Error("Evidence URLs must not contain credentials."), { code: "OPTIONS_INVALID" });
       return { type: "url", ref: url.href, verification: "reference_only" };
     }
     return fingerprintFile(ref);

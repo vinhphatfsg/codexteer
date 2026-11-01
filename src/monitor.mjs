@@ -24,8 +24,8 @@ export async function streamThread(threadInput, options, onChange, { discover = 
     if (discover === discoverRuntime) discover = cloud.discover;
     if (connect === RpcClient.connect) connect = cloud.connect;
   }
-  if (!Number.isInteger(pollMs) || pollMs < 250 || pollMs > 10000) throw new Error("--poll-ms must be between 250 and 10000.");
-  if (!Number.isInteger(reconnectTimeoutMs) || reconnectTimeoutMs < 1 || reconnectTimeoutMs > 60000) throw new Error("Invalid reconnect timeout.");
+  if (!Number.isInteger(pollMs) || pollMs < 250 || pollMs > 10000) throw Object.assign(new Error("--poll-ms must be between 250 and 10000."), { code: "OPTIONS_INVALID" });
+  if (!Number.isInteger(reconnectTimeoutMs) || reconnectTimeoutMs < 1 || reconnectTimeoutMs > 60000) throw Object.assign(new Error("Invalid reconnect timeout."), { code: "OPTIONS_INVALID" });
   const notification = notificationOptions(options);
   const buffer = notification.notify === "digest" ? new NotificationBuffer(notification) : null;
   if (signal?.aborted) return;

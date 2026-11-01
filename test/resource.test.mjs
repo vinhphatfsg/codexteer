@@ -13,8 +13,8 @@ test("leases exclude another owner and record conditions without interpreting th
   now += 1001;
   assert.equal((await resourceStatus("screen", { ...f, now: () => now })).state, "expired");
   const b = await acquireResource("screen", { ...f, now: () => now, owner: "codex" });
-  await assert.rejects(releaseResource("screen", a.token, f), /does not match/);
-  await assert.rejects(renewResource("screen", a.token, f), /no longer owned/);
+  await assert.rejects(releaseResource("screen", a.token, f), { code: "RESOURCE_NOT_OWNED" });
+  await assert.rejects(renewResource("screen", a.token, f), { code: "RESOURCE_NOT_OWNED" });
   await releaseResource("screen", b.token, f);
   assert.equal((await resourceStatus("screen", f)).state, "released");
 });

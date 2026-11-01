@@ -74,7 +74,7 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
   const input = [{ type: "text", text: message }];
   if (!newTurn) {
     const turn = activeTurn(thread);
-    if (!turn) throw new Error("The task has no eligible active turn. Read it again before sending; use --new-turn only for an idle task.");
+    if (!turn) throw Object.assign(new Error("The task has no eligible active turn. Read it again before sending; use --new-turn only for an idle task."), { code: "TASK_IDLE" });
     await beforeSend?.(thread, client);
     // Desktop uses clientId on the resulting userMessage to render external
     // steering as a user bubble instead of just an anonymous "steered" marker.
@@ -84,7 +84,7 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
     if (accepted?.turnId !== turn.id) throw new RpcFailure("App Server returned an unexpected turn ID. Do not retry automatically.", { code: "PROTOCOL_ERROR", uncertain: true });
     return { turn_id: accepted.turnId, client_message_id: clientUserMessageId };
   }
-  if (!["idle", "notLoaded"].includes(thread.status?.type) || thread.turns.some(turn => turn.status === "inProgress")) throw new Error("--new-turn requires an idle task. Nothing was sent.");
+  if (!["idle", "notLoaded"].includes(thread.status?.type) || thread.turns.some(turn => turn.status === "inProgress")) throw Object.assign(new Error("--new-turn requires an idle task. Nothing was sent."), { code: "TASK_BUSY" });
   // Resume through Desktop's long-lived connection so approval ownership
   // survives the short-lived sender. Never resume only on the sender connection.
   if (!subscribe) throw new Error("Desktop subscription support is required for --new-turn.");
@@ -93,7 +93,7 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
   await beforeSend?.(thread, client);
   await subscribe(threadId);
   const resumed = await readSendState(client, threadId);
-  if (resumed.status?.type !== "idle" || resumed.turns.some(turn => turn.status === "inProgress")) throw new Error("Task became active while resuming. Nothing was sent.");
+  if (resumed.status?.type !== "idle" || resumed.turns.some(turn => turn.status === "inProgress")) throw Object.assign(new Error("Task became active while resuming. Nothing was sent."), { code: "TASK_BUSY" });
   await beforeSend?.(resumed, client);
   const clientUserMessageId = clientMessageId;
   const accepted = await client.request("turn/start", { threadId, input, clientUserMessageId }, { mutation: true });
@@ -110,7 +110,7 @@ export async function sendAppServerMessage(threadInput, message, { dryRun = fals
   const route = remote ? remoteControlConnection() : {};
   connect ??= route.connect ?? RpcClient.connect; discover ??= route.discover ?? discoverRuntime;
   const threadId = normalizeThreadId(threadInput);
-  if (typeof message !== "string" || !message.trim()) throw new Error("Message must not be empty.");
+  if (typeof message !== "string" || !message.trim()) throw Object.assign(new Error("Message must not be empty."), { code: "OPTIONS_INVALID" });
   const plan = { thread_id: threadId, ...hostFields(), backend: "app-server", delivery_action: newTurn ? "new-turn" : "steer", message_characters: [...message].length, dry_run: dryRun };
   if (dryRun) return { ...plan, sent: false, delivery_status: "not_sent" };
   let client;

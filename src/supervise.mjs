@@ -19,7 +19,7 @@ export async function prepareSupervisorPrompt(threadInput, policy, { agent = "cl
   connection = taskConnection(threadId, connection);
   validateSupervisionPolicy(policy);
   connectionMode(connection);
-  if (!SUPERVISOR_AGENTS.includes(agent)) throw new Error("--agent must be claude or codex.");
+  if (!SUPERVISOR_AGENTS.includes(agent)) throw Object.assign(new Error("--agent must be claude or codex."), { code: "OPTIONS_INVALID" });
   const supervisor = { session_id: randomUUID(), owner: agent, connection, ...hostFields() };
   let context = targetContext() ?? process.env.CODEX_THREAD_ID;
   if (targetHost() !== "local" && remoteTransport() === "native" && !context) throw Object.assign(new Error("Remote supervision requires --context-thread <LOCAL-THREAD-ID> or CODEX_THREAD_ID."), { code: "REMOTE_CONTEXT_REQUIRED" });

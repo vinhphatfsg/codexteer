@@ -5,9 +5,9 @@ const key = event => JSON.stringify([event.turn_id, event.id]);
 const commandState = ({ change, output, ...event }) => event;
 
 export function notificationOptions({ notify = "digest", settleMs = 20000, maxHoldMs = 600000 } = {}) {
-  if (!["all", "digest"].includes(notify)) throw new Error("--notify must be all or digest.");
-  if (!Number.isInteger(settleMs) || settleMs < 1000 || settleMs > 120000) throw new Error("--settle-ms must be between 1000 and 120000.");
-  if (!Number.isInteger(maxHoldMs) || maxHoldMs < 10000 || maxHoldMs > 1800000) throw new Error("--max-hold-ms must be between 10000 and 1800000.");
+  if (!["all", "digest"].includes(notify)) throw Object.assign(new Error("--notify must be all or digest."), { code: "OPTIONS_INVALID" });
+  if (!Number.isInteger(settleMs) || settleMs < 1000 || settleMs > 120000) throw Object.assign(new Error("--settle-ms must be between 1000 and 120000."), { code: "OPTIONS_INVALID" });
+  if (!Number.isInteger(maxHoldMs) || maxHoldMs < 10000 || maxHoldMs > 1800000) throw Object.assign(new Error("--max-hold-ms must be between 10000 and 1800000."), { code: "OPTIONS_INVALID" });
   return { notify, settleMs, maxHoldMs };
 }
 

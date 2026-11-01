@@ -27,7 +27,7 @@ test("checkpoint binds a real command, inputs and artifact; later input/artifact
   await writeFile(`${f.cwd}/src/new.txt`, "added");
   const v = await verifyCheckpoint(ID, f.id, f);
   assert.equal(v.inputs_current, false); assert.ok(v.differences.added.includes(`${f.cwd}/src/new.txt`));
-  await assert.rejects(runCheckpoint(ID, f.id, [process.execPath, "-e", "process.exit(0)"], f), /Inputs changed/);
+  await assert.rejects(runCheckpoint(ID, f.id, [process.execPath, "-e", "process.exit(0)"], f), { code: "STALE_CHECKPOINT" });
 });
 
 test("editing inputs during a successful test invalidates the run, including edit then restore", async t => {
@@ -45,12 +45,12 @@ test("editing inputs during a successful test invalidates the run, including edi
 test("failed commands, missing executables and timeouts never validate or attach artifacts", async t => {
   const f = await fixture(t);
   assert.equal((await runCheckpoint(ID, f.id, [process.execPath, "-e", "process.exit(2)"], f)).valid, false);
-  await assert.rejects(attachArtifacts(ID, f.id, [`${f.cwd}/src/input.txt`], f), /successful run/);
+  await assert.rejects(attachArtifacts(ID, f.id, [`${f.cwd}/src/input.txt`], f), { code: "STALE_CHECKPOINT" });
   const missing = await runCheckpoint(ID, f.id, ["/definitely/missing/codexteer-command"], f);
   assert.equal(missing.valid, false); assert.match(missing.error, /ENOENT/);
   const timed = await runCheckpoint(ID, f.id, [process.execPath, "-e", "setTimeout(()=>{},10000)"], { ...f, timeoutMs: 100 });
   assert.equal(timed.timed_out, true); assert.equal(timed.valid, false);
-  await assert.rejects(getCheckpoint("aaaaaaaa-aaaa-4aaa-8aaa-000000000002", f.id, f), /not found/);
+  await assert.rejects(getCheckpoint("aaaaaaaa-aaaa-4aaa-8aaa-000000000002", f.id, f), { code: "CHECKPOINT_NOT_FOUND" });
 });
 
 test("runner preserves literal arguments without shell expansion and bounds captured output", async t => {

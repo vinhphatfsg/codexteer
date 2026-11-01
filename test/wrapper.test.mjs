@@ -37,8 +37,8 @@ test("wrapper leaves unrelated invocations and schema/daemon/proxy subcommands a
 });
 
 test("conflicting transports fail rather than starting a second listener", () => {
-  assert.throws(() => serverArguments(["app-server", "--listen", "ws://127.0.0.1:1"], "/s"), /conflicting/);
-  assert.throws(() => serverArguments(["app-server", "-c"], "/s"), /Incomplete/);
+  assert.throws(() => serverArguments(["app-server", "--listen", "ws://127.0.0.1:1"], "/s"), { code: "OPTIONS_INVALID" });
+  assert.throws(() => serverArguments(["app-server", "-c"], "/s"), { code: "OPTIONS_INVALID" });
 });
 
 test("Desktop launch scopes overrides to one launch and does not force another instance", () => {
@@ -51,7 +51,7 @@ test("startup refuses an already-running Desktop without opening or killing it",
   await assert.rejects(startDesktop({ run(command, args) {
     calls.push({ command, args });
     return { status: 0, stdout: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT\n" };
-  } }), /already running/);
+  } }), { code: "DESKTOP_ALREADY_RUNNING" });
   assert.deepEqual(calls, [{ command: "/bin/ps", args: ["-axo", "comm="] }]);
 });
 
@@ -332,4 +332,17 @@ test("startup confirms its deployed distribution and dry-run never places or con
   });
   assert.equal(connected, true); assert.deepEqual(result.deployment, deployed); assert.equal(result.started, true);
   await startDesktop({ dryRun: true, prepare: () => assert.fail("dry-run must not deploy"), run: () => assert.fail("dry-run must not execute"), discover: () => assert.fail("dry-run must not discover") });
+});
+
+test("Desktop startup failures carry a code for each caller action", { skip: process.platform !== "darwin" }, async t => {
+  const previous = process.env.CODEX_APP_SERVER_WS_URL;
+  t.after(() => { if (previous === undefined) delete process.env.CODEX_APP_SERVER_WS_URL; else process.env.CODEX_APP_SERVER_WS_URL = previous; });
+  const never = () => assert.fail("must not launch");
+  process.env.CODEX_APP_SERVER_WS_URL = "ws://127.0.0.1:1";
+  await assert.rejects(startDesktop({ run: never, prepare: never }), { code: "DESKTOP_START_UNSUPPORTED" });
+  delete process.env.CODEX_APP_SERVER_WS_URL;
+  for (const [run, code] of [
+    [command => command === "/bin/ps" ? { status: 1, stdout: "" } : never(), "DESKTOP_START_FAILED"],
+    [command => ({ status: command === "/bin/ps" ? 0 : 1, stdout: "" }), "DESKTOP_START_FAILED"],
+  ]) await assert.rejects(startDesktop({ run, prepare: async () => ({ wrapper_path: "/private/tmp/wrapper.mjs", sha256: "x" }), discover: never }), { code });
 });

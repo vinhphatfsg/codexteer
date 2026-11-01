@@ -6,10 +6,10 @@ import { runCommand } from "./runner.mjs";
 import { targetHost } from "./target.mjs";
 
 function resourceKey(name) {
-  if (!name?.trim() || name.length > 200 || /[\r\n\x00-\x1f]/.test(name)) throw new Error("Resource name must be a non-empty single line (up to 200 characters).");
+  if (!name?.trim() || name.length > 200 || /[\r\n\x00-\x1f]/.test(name)) throw Object.assign(new Error("Resource name must be a non-empty single line (up to 200 characters)."), { code: "OPTIONS_INVALID" });
   return digest(name).slice(0, 40);
 }
-function validTtl(ttlMs) { if (!Number.isInteger(ttlMs) || ttlMs < 1000 || ttlMs > 86400000) throw new Error("--ttl-ms must be between 1000 and 86400000."); }
+function validTtl(ttlMs) { if (!Number.isInteger(ttlMs) || ttlMs < 1000 || ttlMs > 86400000) throw Object.assign(new Error("--ttl-ms must be between 1000 and 86400000."), { code: "OPTIONS_INVALID" }); }
 function leaseState(entry, now = Date.now()) { return !entry ? "available" : entry.released_at ? "released" : Date.parse(entry.expires_at) <= now ? "expired" : "held"; }
 
 export async function resourceStatus(name, { now = Date.now, ...storage } = {}) {
@@ -19,7 +19,7 @@ export async function resourceStatus(name, { now = Date.now, ...storage } = {}) 
 
 export async function acquireResource(name, { owner, ttlMs = 600000, reason = "", condition = "", threadId, now = Date.now, ...storage }) {
   const key = resourceKey(name); validTtl(ttlMs);
-  if (!owner?.trim()) throw new Error("--owner is required (for example claude-code or codex).");
+  if (!owner?.trim()) throw Object.assign(new Error("--owner is required (for example claude-code or codex)."), { code: "OPTIONS_INVALID" });
   if (threadId) threadId = normalizeTaskId(threadId);
   return withStoreLock(`resource-${key}`, async () => {
     const current = await readRecord("resources", key, storage);
@@ -34,7 +34,7 @@ export async function renewResource(name, token, { ttlMs = 600000, now = Date.no
   const key = resourceKey(name); validTtl(ttlMs);
   return withStoreLock(`resource-${key}`, async () => {
     const entry = await readRecord("resources", key, storage);
-    if (!token || entry?.token !== token || leaseState(entry, now()) !== "held") throw new Error("Lease is no longer owned by this token. Acquire it again after checking status.");
+    if (!token || entry?.token !== token || leaseState(entry, now()) !== "held") throw Object.assign(new Error("Lease is no longer owned by this token. Acquire it again after checking status."), { code: "RESOURCE_NOT_OWNED" });
     entry.expires_at = new Date(now() + ttlMs).toISOString();
     await writeRecord("resources", key, entry, storage); return entry;
   }, storage);
@@ -44,7 +44,7 @@ export async function releaseResource(name, token, { now = Date.now, ...storage 
   const key = resourceKey(name);
   return withStoreLock(`resource-${key}`, async () => {
     const entry = await readRecord("resources", key, storage);
-    if (!token || entry?.token !== token) throw new Error("Lease token does not match. Another owner's lease was not released.");
+    if (!token || entry?.token !== token) throw Object.assign(new Error("Lease token does not match. Another owner's lease was not released."), { code: "RESOURCE_NOT_OWNED" });
     entry.released_at ??= new Date(now()).toISOString();
     await writeRecord("resources", key, entry, storage); return entry;
   }, storage);
@@ -55,7 +55,7 @@ export async function listResources({ now = Date.now, ...storage } = {}) {
 }
 
 export async function runWithResource(name, argv, { timeoutMs = 0, cwd = targetHost() === "local" ? process.cwd() : undefined, ttlMs = 600000, execBackend, remoteShell, supervisor, connection, ...options }, { execute = runCommand } = {}) {
-  if (!argv.length || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw new Error("A command and valid --timeout-ms are required.");
+  if (!argv.length || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw Object.assign(new Error("A command and valid --timeout-ms are required."), { code: "OPTIONS_INVALID" });
   const lease = await acquireResource(name, { ...options, ttlMs }), controller = new AbortController();
   let timer, renewal = Promise.resolve(), stopped = false, leaseError = null, released = false, result, uncertain = false;
   const schedule = () => { timer = setTimeout(() => {

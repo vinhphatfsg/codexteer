@@ -22,13 +22,13 @@ export async function captureInputs(roots, excludes = [], { allowMissing = false
     try { info = await lstat(file); } catch (e) { if (e.code === "ENOENT" && allowMissing) return; throw e; }
     if (info.isSymbolicLink()) {
       const target = await realpath(file), targetInfo = await lstat(target);
-      if (targetInfo.isDirectory()) throw new Error("Directory symlinks are not snapshot inputs. Specify the real directory explicitly.");
+      if (targetInfo.isDirectory()) throw Object.assign(new Error("Directory symlinks are not snapshot inputs. Specify the real directory explicitly."), { code: "OPTIONS_INVALID" });
       records.set(file, { ...await fingerprintFile(file), link: await readlink(file), mtime_ms: targetInfo.mtimeMs, ctime_ms: targetInfo.ctimeMs });
     } else if (info.isDirectory()) {
       records.set(file, { type: "directory", ref: file, mode: info.mode & 0o777 });
       for (const name of (await readdir(file)).sort()) await visit(path.join(file, name));
     } else if (info.isFile()) records.set(file, { ...await fingerprintFile(file), mtime_ms: info.mtimeMs, ctime_ms: info.ctimeMs });
-    else throw new Error("Snapshot inputs must be files or directories.");
+    else throw Object.assign(new Error("Snapshot inputs must be files or directories."), { code: "OPTIONS_INVALID" });
   }
   for (const root of roots) await visit(root);
   const files = [...records.values()].sort((a, b) => a.ref.localeCompare(b.ref));
@@ -42,18 +42,18 @@ function differences(before, after) {
 
 export async function getCheckpoint(threadInput, id, storage = {}) {
   const threadId = normalizeTaskId(threadInput), entry = await readRecord("checkpoints", id, storage);
-  if (!entry || entry.thread_id !== threadId || entry.id !== id) throw new Error("Checkpoint not found for this task.");
+  if (!entry || entry.thread_id !== threadId || entry.id !== id) throw Object.assign(new Error("Checkpoint not found for this task."), { code: "CHECKPOINT_NOT_FOUND" });
   return entry;
 }
 
 export async function createCheckpoint(threadInput, name, { paths, excludes = [], cwd = process.cwd(), ...storage }) {
   const threadId = normalizeTaskId(threadInput);
-  if (!name?.trim() || !paths?.length) throw new Error("capture requires a name and at least one --path.");
+  if (!name?.trim() || !paths?.length) throw Object.assign(new Error("capture requires a name and at least one --path."), { code: "OPTIONS_INVALID" });
   const scope = targetHost() === "local" ? { cwd: path.resolve(cwd), roots: [...new Set(paths.map(p => path.resolve(cwd, p)))], excludes: excludes.map(p => path.resolve(cwd, p)) }
     : await remoteCheckpointScope(threadId, paths, excludes);
   const { roots, excludes: omit } = scope;
   const snapshot = await captureInputs(roots, omit);
-  if (!snapshot.files.some(f => f.type === "file")) throw new Error("No input files were selected.");
+  if (!snapshot.files.some(f => f.type === "file")) throw Object.assign(new Error("No input files were selected."), { code: "OPTIONS_INVALID" });
   const entry = { schema: 1, id: randomUUID(), thread_id: threadId, name, cwd: scope.cwd, created_at: new Date().toISOString(), snapshot, runs: [], artifacts: [] };
   await writeRecord("checkpoints", entry.id, entry, storage);
   return checkpointSummary(entry);
@@ -115,13 +115,13 @@ function watchInputs(snapshot) {
 }
 
 export async function runCheckpoint(threadInput, id, argv, { timeoutMs = 0, execBackend, remoteShell, supervisor, connection, ...storage } = {}) {
-  if (!argv.length || !argv[0] || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw new Error("A command and timeout-ms between 0 and 86400000 are required.");
+  if (!argv.length || !argv[0] || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw Object.assign(new Error("A command and timeout-ms between 0 and 86400000 are required."), { code: "OPTIONS_INVALID" });
   const threadId = normalizeTaskId(threadInput);
   return withStoreLock(`checkpoint-${id}`, async () => {
     const entry = await getCheckpoint(threadId, id, storage), watcher = targetHost() === "local" ? watchInputs(entry.snapshot) : await remoteWatchInputs(entry.snapshot);
     try {
       const before = await captureInputs(entry.snapshot.roots, entry.snapshot.excludes, { allowMissing: true });
-      if (before.digest !== entry.snapshot.digest) throw new Error("Inputs changed since capture. Capture a new checkpoint before running.");
+      if (before.digest !== entry.snapshot.digest) throw Object.assign(new Error("Inputs changed since capture. Capture a new checkpoint before running."), { code: "STALE_CHECKPOINT" });
       const run = { id: randomUUID(), argv, status: "running", started_at: new Date().toISOString() };
       entry.runs.push(run); await writeRecord("checkpoints", id, entry, storage);
       let result;
@@ -145,12 +145,12 @@ export async function runCheckpoint(threadInput, id, argv, { timeoutMs = 0, exec
 }
 
 export async function attachArtifacts(threadInput, id, refs, storage = {}) {
-  if (!refs.length) throw new Error("At least one --artifact file is required.");
+  if (!refs.length) throw Object.assign(new Error("At least one --artifact file is required."), { code: "OPTIONS_INVALID" });
   return withStoreLock(`checkpoint-${id}`, async () => {
     const verified = await verifyCheckpoint(threadInput, id, storage);
-    if (!verified.valid) throw new Error("A successful run against unchanged inputs is required before attaching artifacts.");
+    if (!verified.valid) throw Object.assign(new Error("A successful run against unchanged inputs is required before attaching artifacts."), { code: "STALE_CHECKPOINT" });
     const artifacts = await collectEvidence(refs);
-    if (artifacts.some(a => a.type !== "file")) throw new Error("Artifacts must be local files.");
+    if (artifacts.some(a => a.type !== "file")) throw Object.assign(new Error("Artifacts must be local files."), { code: "OPTIONS_INVALID" });
     const entry = await getCheckpoint(threadInput, id, storage);
     entry.artifacts.push(...artifacts.map(a => ({ ...a, run_id: entry.runs.at(-1).id, attached_at: new Date().toISOString() })));
     await writeRecord("checkpoints", id, entry, storage);

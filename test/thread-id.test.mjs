@@ -13,8 +13,8 @@ test("normalizes a Codex deep link", () => {
 });
 
 test("rejects unrelated URLs and invalid IDs", () => {
-  assert.throws(() => normalizeThreadId("codex://new"), /Expected codex/);
-  assert.throws(() => normalizeThreadId("not-a-thread"), /Invalid local Codex thread ID/);
+  assert.throws(() => normalizeThreadId("codex://new"), { code: "OPTIONS_INVALID" });
+  assert.throws(() => normalizeThreadId("not-a-thread"), { code: "OPTIONS_INVALID" });
 });
 
 test("builds a deep link", () => {

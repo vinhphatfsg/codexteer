@@ -95,7 +95,7 @@ export function trimEvent(event, maxChars, includeOutput) {
 }
 
 export function readSnapshot(thread, { since, limit = 50, maxChars = 2000, includeOutput = false } = {}) {
-  if (!Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isInteger(maxChars) || maxChars < 100 || maxChars > 20000) throw new Error("Invalid read limit or max-chars.");
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isInteger(maxChars) || maxChars < 100 || maxChars > 20000) throw Object.assign(new Error("Invalid read limit or max-chars."), { code: "OPTIONS_INVALID" });
   const s = threadSnapshot(thread), old = since ? decodeCursor(since, thread.id) : null;
   if (old && old.v !== 1) throw invalidCursor();
   if (old && (old.count > s.events.length || prefixHash(s.hashes, old.count, old.open) !== old.prefix)) throw invalidCursor();
@@ -137,7 +137,7 @@ export async function fetchThread(client, threadId, metadata) {
 
 async function readAttempt(client, threadId, options) {
   const old = options.since ? decodeCursor(options.since, threadId) : null;
-  if (options.fullHistory && old?.v === 2) throw new Error("A v2 cursor uses paged history. Omit --full-history, or read --full-history without --since to start a full check.");
+  if (options.fullHistory && old?.v === 2) throw Object.assign(new Error("A v2 cursor uses paged history. Omit --full-history, or read --full-history without --since to start a full check."), { code: "OPTIONS_INVALID" });
   const { thread } = await client.request("thread/read", { threadId, includeTurns: false });
   if (thread?.id !== threadId || !Array.isArray(thread.turns)) throw protocolFailure("App Server returned invalid task metadata.");
   if (thread.historyMode === "paginated" && !options.fullHistory) {
@@ -169,6 +169,8 @@ export async function observeThread(threadInput, options = {}, { discover = disc
   }
   if (options.supervisor) await assertSupervisor(threadId, options.supervisor, { connection: options.connection });
   if (options.since) decodeCursor(options.since, threadId);
+  const { until = "change", timeoutMs = 30000, pollMs = 1000 } = options;
+  if (options.watch && (!["change", "idle", "attention"].includes(until) || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 60000 || !Number.isInteger(pollMs) || pollMs < 250 || pollMs > 10000)) throw Object.assign(new Error("Invalid watch condition, timeout-ms or poll-ms."), { code: "OPTIONS_INVALID" });
   let client;
   try {
     const { paths, state } = await discover();
@@ -179,8 +181,6 @@ export async function observeThread(threadInput, options = {}, { discover = disc
       if (options.supervisor) await recordSupervisorObservation(threadId, options.supervisor, result);
       return result;
     }
-    const { until = "change", timeoutMs = 30000, pollMs = 1000 } = options;
-    if (!["change", "idle", "attention"].includes(until) || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 60000 || !Number.isInteger(pollMs) || pollMs < 250 || pollMs > 10000) throw new Error("Invalid watch condition, timeout-ms or poll-ms.");
     const deadline = now() + timeoutMs;
     let baseline = options.since;
     while (true) {

@@ -26,7 +26,7 @@ test("uncertain replacement keeps old instruction active until delivery is recon
   await assert.rejects(sendTrackedMessage(ID, "corrected", { supersedes: a.message_id }, { ...deps, send: async () => { throw Object.assign(new Error("unknown"), { delivery_status: "unknown", sent: null }); } }), e => { error = e; return true; });
   let list = await listInstructions(ID, deps);
   assert.equal(list.instructions[0].id, a.message_id); assert.equal(list.pending_changes[0].id, error.message_id);
-  await assert.rejects(sendTrackedMessage(ID, "again", { supersedes: a.message_id }, deps), /unresolved/);
+  await assert.rejects(sendTrackedMessage(ID, "again", { supersedes: a.message_id }, deps), { code: "INSTRUCTION_NOT_REPLACEABLE" });
   const entry = await getMessage(ID, error.message_id, deps);
   await writeRecord("messages", entry.id, { ...entry, delivery_status: "accepted", sent: true }, deps);
   list = await listInstructions(ID, deps);
@@ -35,12 +35,12 @@ test("uncertain replacement keeps old instruction active until delivery is recon
 
 test("wrong-task targets and stale targets are rejected; expiry is explicit", async t => {
   const deps = await setup(t); const a = await sendTrackedMessage(ID, "first", {}, deps);
-  await assert.rejects(sendTrackedMessage("aaaaaaaa-aaaa-4aaa-8aaa-000000000002", "wrong", { supersedes: a.message_id }, deps), /not found/);
-  await assert.rejects(sendTrackedMessage(ID, "expired", { expiresAt: "2020-01-01T00:00:00Z" }, deps), /future ISO/);
+  await assert.rejects(sendTrackedMessage("aaaaaaaa-aaaa-4aaa-8aaa-000000000002", "wrong", { supersedes: a.message_id }, deps), { code: "MESSAGE_NOT_FOUND" });
+  await assert.rejects(sendTrackedMessage(ID, "expired", { expiresAt: "2020-01-01T00:00:00Z" }, deps), { code: "OPTIONS_INVALID" });
   const expiry = new Date(Date.now() + 60000).toISOString();
   const b = await sendTrackedMessage(ID, "temporary", { expiresAt: expiry }, deps);
   const state = instructionStates([await getMessage(ID, b.message_id, deps)], Date.parse(expiry) + 1);
   assert.equal(state[0].instruction_status, "expired");
   await sendTrackedMessage(ID, "replacement", { supersedes: a.message_id }, deps);
-  await assert.rejects(sendTrackedMessage(ID, "stale", { supersedes: a.message_id }, deps), /inactive/);
+  await assert.rejects(sendTrackedMessage(ID, "stale", { supersedes: a.message_id }, deps), { code: "INSTRUCTION_NOT_REPLACEABLE" });
 });

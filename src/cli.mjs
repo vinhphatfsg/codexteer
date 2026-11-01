@@ -126,7 +126,7 @@ function readMessage(parts) {
 
 function backendOption(args, fallback) {
   const backend = takeOption(args, "--backend", fallback);
-  if (backend != null && !["app-server", "ui"].includes(backend)) throw new Error("--backend must be app-server or ui.");
+  if (backend != null && !["app-server", "ui"].includes(backend)) throw usage("--backend must be app-server or ui.");
   return backend;
 }
 
@@ -164,7 +164,7 @@ export async function main(argv) {
   try {
     const transport = validateRemoteTransport(takeOption(args, "--remote-transport", "native"));
     const explicitHost = takeOption(args, "--host", undefined);
-    if (args.slice(0, args.includes("--") ? args.indexOf("--") : args.length).includes("--host")) throw new Error("Specify --host only once.");
+    if (args.slice(0, args.includes("--") ? args.indexOf("--") : args.length).includes("--host")) throw usage("Specify --host only once.");
     if (explicitHost !== undefined) validateHostId(explicitHost);
     const probe = [...args];
     takeFlag(probe, "--json");
@@ -199,7 +199,7 @@ async function mainOnTarget(argv) {
     const connectionDependencies = observationConnection(connection);
     const requiredNode = takeOption(args, "--require-node-version", undefined);
     if (requiredNode !== undefined) {
-      if (!/^v\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/.test(requiredNode)) throw new Error("--require-node-version requires a Node version such as v25.1.0.");
+      if (!/^v\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/.test(requiredNode)) throw usage("--require-node-version requires a Node version such as v25.1.0.");
       if (requiredNode !== process.version) throw Object.assign(new Error(`This supervision command requires Node ${requiredNode}, but is running ${process.version}. Regenerate the supervisor prompt with the intended Node runtime.`), { code: "NODE_VERSION_MISMATCH" });
     }
     if (takeFlag(args, "--version")) {
@@ -233,14 +233,14 @@ async function mainOnTarget(argv) {
     if (command === "remote") {
       if (supervisor) throw Object.assign(new Error("A bound supervisor cannot enroll, pair or manage account credentials."), { code: "SUPERVISOR_MISMATCH" });
       const action = args.shift(), codeStdin = takeFlag(args, "--code-stdin"), provider = takeOption(args, "--key-provider", undefined);
-      if (provider !== undefined && action !== "prepare") throw new Error("--key-provider is only available for remote prepare.");
-      if (!["prepare", "recover-key", "enroll", "status", "identity", "pair", "verify"].includes(action) || args.length || (codeStdin && action !== "pair") || (action === "pair" && !codeStdin)) throw new Error("Expected: remote prepare|recover-key|enroll|status|identity|verify, or --host HOST remote pair --code-stdin.");
-      if (["prepare", "enroll"].includes(action) && targetHost() !== "local") throw new Error("remote prepare/enroll registers this local controller; omit --host.");
+      if (provider !== undefined && action !== "prepare") throw usage("--key-provider is only available for remote prepare.");
+      if (!["prepare", "recover-key", "enroll", "status", "identity", "pair", "verify"].includes(action) || args.length || (codeStdin && action !== "pair") || (action === "pair" && !codeStdin)) throw usage("Expected: remote prepare|recover-key|enroll|status|identity|verify, or --host HOST remote pair --code-stdin.");
+      if (["prepare", "enroll"].includes(action) && targetHost() !== "local") throw usage("remote prepare/enroll registers this local controller; omit --host.");
       // Code input is never an argv option or a chat message.
-      if (action === "pair" && !/^remote-control:env_[A-Za-z0-9_-]+$/.test(targetHost())) throw new Error("remote pair requires --host remote-control:env_...");
+      if (action === "pair" && !/^remote-control:env_[A-Za-z0-9_-]+$/.test(targetHost())) throw Object.assign(new Error("remote pair requires --host remote-control:env_..."), { code: "REMOTE_PAIR_INPUT_INVALID" });
       if (action === "pair" && process.stdin.isTTY) console.error("codexteer: Enter the selected host's fresh pairing code (hidden), then press Enter.");
       const code = action === "pair" ? await readPairingCode() : undefined;
-      if (code && code.length > 128) throw new Error("Invalid pairing code input.");
+      if (code && code.length > 128) throw Object.assign(new Error("Invalid pairing code input."), { code: "REMOTE_PAIR_INPUT_INVALID" });
       const data = await withDeviceAccount(context => action === "prepare" ? prepareDevice(context, { ...(provider ? { provider } : {}) }) : action === "recover-key" ? recoverDeviceKey(context) : action === "enroll" ? enrollDevice(context, { progress: text => console.error(`codexteer: ${text}`) })
         : action === "pair" ? pairDevice(context, targetHost(), code)
           : action === "verify" ? verifyDevice(context) : action === "identity" ? deviceIdentityInfo(context) : readDevice(context.home, context.identity).then(deviceStatus));
@@ -248,12 +248,13 @@ async function mainOnTarget(argv) {
     }
     if (command === "supervise" && ["register", "status", "list", "pause", "resume", "stop"].includes(args[0])) {
       const action = args.shift(), owner = action === "register" ? takeOption(args, "--owner", "external") : undefined;
-      if (args.length !== (action === "list" ? 0 : 1)) throw new Error(`Expected: supervise ${action}${action === "list" ? "" : " <THREAD>"}.`);
+      if (args.length !== (action === "list" ? 0 : 1)) throw usage(`Expected: supervise ${action}${action === "list" ? "" : " <THREAD>"}.`);
       let data;
       if (action === "register") {
-        if (!supervisor) throw new Error("supervise register requires the --supervisor ID from a generated prompt.");
+        if (!supervisor) throw usage("supervise register requires the --supervisor ID from a generated prompt.");
         data = await registerSupervisor(args[0], supervisor, { owner, connection });
       } else {
+        if (supervisor && action === "list") throw Object.assign(new Error("A bound supervisor cannot list other supervisor sessions. Use supervise status <THREAD> for its own task, or run supervise list from the user's terminal without --supervisor."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         if (supervisor && action !== "status") throw Object.assign(new Error("Supervisors cannot change their own control state. Run this control command from the user's terminal without --supervisor."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         if (supervisor) {
           const record = await getSupervisor(args[0]);
@@ -284,7 +285,7 @@ async function mainOnTarget(argv) {
       else if (action === "list") options = { all: takeFlag(args, "--all"), limit: Number(takeOption(args, "--limit", "50")) };
       const handlers = { create: createFinding, show: findingStatus, list: listFindings, resolve: resolveFinding, dismiss: dismissFinding, reopen: reopenFinding, evaluate: evaluateFinding, stats: findingStats };
       const single = ["create", "list", "stats"].includes(action);
-      if (!Object.hasOwn(handlers, action) || args.length !== (single ? 1 : 2) || args.some(arg => arg.startsWith("--"))) throw new Error("See codexteer help findings.");
+      if (!Object.hasOwn(handlers, action) || args.length !== (single ? 1 : 2) || args.some(arg => arg.startsWith("--"))) throw usage("See codexteer help findings.");
       if (supervisor) await assertSupervisor(args[0], supervisor, { connection });
       data = single ? await handlers[action](args[0], options) : await handlers[action](args[0], args[1], options);
       success(`findings.${action}`, data, json);
@@ -295,7 +296,7 @@ async function mainOnTarget(argv) {
       if (supervisor) throw Object.assign(new Error("Managed supervision is bound to its existing task and cannot orchestrate a project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
       const promptOnly = args[0] === "prompt";
       if (promptOnly) args.shift();
-      else if (json) throw new Error("orchestrate inherits agent output and does not support --json. Use help orchestrate --json or orchestrate prompt --project ID|NAME <GOAL> --json.");
+      else if (json) throw usage("orchestrate inherits agent output and does not support --json. Use help orchestrate --json or orchestrate prompt --project ID|NAME <GOAL> --json.");
       const separator = promptOnly ? -1 : args.indexOf("--");
       const ownArgs = separator < 0 ? args : args.slice(0, separator);
       const agentArgs = separator < 0 ? [] : args.slice(separator + 1);
@@ -303,8 +304,8 @@ async function mainOnTarget(argv) {
       const agent = takeOption(ownArgs, "--agent", promptOnly ? undefined : "claude");
       const usePathCli = takeFlag(ownArgs, "--use-path-cli");
       if (promptOnly && ownArgs[0] === "--") ownArgs.shift();
-      else if (ownArgs.some(arg => arg.startsWith("--"))) throw new Error("Unknown orchestrate option. See help orchestrate; agent arguments belong after --.");
-      if (ownArgs.length !== 1) throw new Error("Expected: orchestrate [prompt] --project <ID-or-exact-name> <GOAL>. Quote the goal as one argument, or use - for stdin.");
+      else if (ownArgs.some(arg => arg.startsWith("--"))) throw usage("Unknown orchestrate option. See help orchestrate; agent arguments belong after --.");
+      if (ownArgs.length !== 1) throw usage("Expected: orchestrate [prompt] --project <ID-or-exact-name> <GOAL>. Quote the goal as one argument, or use - for stdin.");
       const goal = ownArgs[0] === "-" ? readFileSync(0, "utf8") : ownArgs[0];
       if (promptOnly) {
         const data = await prepareOrchestrationPrompt(project, goal, { agent, connection, usePathCli });
@@ -317,22 +318,22 @@ async function mainOnTarget(argv) {
       args.shift();
       const agent = takeOption(args, "--agent", "claude");
       const usePathCli = takeFlag(args, "--use-path-cli");
-      if (args.length < 1 || args.length > 2 || args.some(arg => arg.startsWith("--"))) throw new Error("Expected: supervise prompt <THREAD> [MESSAGE]. See codexteer help supervise prompt.");
-      if (supervisor) throw new Error("A supervisor cannot generate a replacement session.");
+      if (args.length < 1 || args.length > 2 || args.some(arg => arg.startsWith("--"))) throw usage("Expected: supervise prompt <THREAD> [MESSAGE]. See codexteer help supervise prompt.");
+      if (supervisor) throw Object.assign(new Error("A supervisor cannot generate a replacement session."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
       const data = await prepareSupervisorPrompt(args[0], args[1], { agent, connection, usePathCli });
       success("supervise.prompt", data, json);
       if (!json) console.log(data.prompt);
       return;
     }
     if (command === "supervise") {
-      if (supervisor) throw new Error("A supervisor cannot start a replacement session.");
-      if (json) throw new Error("supervise inherits agent output and does not support --json. Use help supervise --json or supervise prompt <THREAD> --json.");
+      if (supervisor) throw Object.assign(new Error("A supervisor cannot start a replacement session."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+      if (json) throw usage("supervise inherits agent output and does not support --json. Use help supervise --json or supervise prompt <THREAD> --json.");
       const separator = args.indexOf("--");
       const ownArgs = separator < 0 ? args : args.slice(0, separator);
       const agentArgs = separator < 0 ? [] : args.slice(separator + 1);
       const agent = takeOption(ownArgs, "--agent", "claude");
       const usePathCli = takeFlag(ownArgs, "--use-path-cli");
-      if (ownArgs.length < 1 || ownArgs.length > 2 || ownArgs.some(arg => arg.startsWith("--"))) throw new Error("Expected: supervise <THREAD> [MESSAGE] [--agent claude|codex] [--use-path-cli] [-- <AGENT-ARGS...>].");
+      if (ownArgs.length < 1 || ownArgs.length > 2 || ownArgs.some(arg => arg.startsWith("--"))) throw usage("Expected: supervise <THREAD> [MESSAGE] [--agent claude|codex] [--use-path-cli] [-- <AGENT-ARGS...>].");
       process.exitCode = await superviseAgent(ownArgs[0], { agent, agentArgs, policy: ownArgs[1], connection, usePathCli });
       return;
     }
@@ -345,21 +346,21 @@ async function mainOnTarget(argv) {
         const options = { owner: takeOption(args, "--owner", undefined), ttlMs: Number(takeOption(args, "--ttl-ms", "600000")), reason: takeOption(args, "--reason", ""), condition: takeOption(args, "--condition", ""), threadId, cwd: takeOption(args, "--cwd", undefined) };
         if (action === "run") {
           const timeoutMs = Number(takeOption(args, "--timeout-ms", "0")), includeOutput = takeFlag(args, "--include-output"), execBackend = takeOption(args, "--exec-backend", "app-server"), remoteShell = takeOption(args, "--shell", undefined);
-          if (args[1] !== "--" || args.length < 3) throw new Error("Expected: resource run <NAME> --owner NAME -- <COMMAND> [ARGS...]");
+          if (args[1] !== "--" || args.length < 3) throw usage("Expected: resource run <NAME> --owner NAME -- <COMMAND> [ARGS...]");
           data = await runWithResource(args[0], args.slice(2), { ...options, timeoutMs, execBackend, remoteShell, supervisor, connection });
           if (!includeOutput) delete data.output_tail;
           if (!data.valid) process.exitCode = 1;
         } else {
-          if (args.length !== 1) throw new Error("Expected: resource acquire <NAME> --owner NAME.");
+          if (args.length !== 1) throw usage("Expected: resource acquire <NAME> --owner NAME.");
           data = await acquireResource(args[0], options);
         }
       } else if (["renew", "release"].includes(action)) {
         const token = takeOption(args, "--token", undefined), ttlMs = action === "renew" ? Number(takeOption(args, "--ttl-ms", "600000")) : undefined;
-        if (args.length !== 1) throw new Error(`Expected: resource ${action} <NAME> --token TOKEN.`);
+        if (args.length !== 1) throw usage(`Expected: resource ${action} <NAME> --token TOKEN.`);
         data = action === "renew" ? await renewResource(args[0], token, { ttlMs }) : await releaseResource(args[0], token);
       } else if (action === "status" && args.length === 1) data = await resourceStatus(args[0]);
       else if (action === "list" && args.length === 0) data = await listResources();
-      else throw new Error("See codexteer help resource.");
+      else throw usage("See codexteer help resource.");
       success(`resource.${action}`, data, json);
       if (!json) console.log(JSON.stringify(data, null, 2));
       return;
@@ -370,27 +371,27 @@ async function mainOnTarget(argv) {
       let data;
       if (action === "capture") {
         const paths = takeOptions(args, "--path"), excludes = takeOptions(args, "--exclude");
-        if (args.length !== 2) throw new Error("Expected: checkpoint capture <THREAD> <NAME> --path PATH ...");
+        if (args.length !== 2) throw usage("Expected: checkpoint capture <THREAD> <NAME> --path PATH ...");
         data = await createCheckpoint(args[0], args[1], { paths, excludes });
       } else if (action === "run") {
         const timeoutMs = Number(takeOption(args, "--timeout-ms", "0")), execBackend = takeOption(args, "--exec-backend", "app-server"), remoteShell = takeOption(args, "--shell", undefined);
         if (supervisor && execBackend === "thread-shell") await assertSupervisor(args[0], supervisor, { connection, sending: true });
-        if (args[2] !== "--" || args.length < 4) throw new Error("Expected: checkpoint run <THREAD> <ID> -- <COMMAND> [ARGS...]");
+        if (args[2] !== "--" || args.length < 4) throw usage("Expected: checkpoint run <THREAD> <ID> -- <COMMAND> [ARGS...]");
         data = await runCheckpoint(args[0], args[1], args.slice(3), { timeoutMs, execBackend, remoteShell, supervisor, connection });
         if (!includeOutput) delete data.output_tail;
         if (!data.valid) process.exitCode = 1;
       } else if (action === "attach") {
         const refs = takeOptions(args, "--artifact");
-        if (args.length !== 2) throw new Error("Expected: checkpoint attach <THREAD> <ID> --artifact FILE ...");
+        if (args.length !== 2) throw usage("Expected: checkpoint attach <THREAD> <ID> --artifact FILE ...");
         data = await attachArtifacts(args[0], args[1], refs);
       } else if (action === "list") {
-        if (args.length !== 1) throw new Error("Expected: checkpoint list <THREAD>.");
+        if (args.length !== 1) throw usage("Expected: checkpoint list <THREAD>.");
         data = await listCheckpoints(args[0]);
       } else if (["show", "verify"].includes(action)) {
-        if (args.length !== 2) throw new Error(`Expected: checkpoint ${action} <THREAD> <ID>.`);
+        if (args.length !== 2) throw usage(`Expected: checkpoint ${action} <THREAD> <ID>.`);
         data = action === "verify" ? await verifyCheckpoint(args[0], args[1]) : checkpointSummary(await getCheckpoint(args[0], args[1]), includeOutput);
         if (action === "verify" && !data.valid) process.exitCode = 1;
-      } else throw new Error("See codexteer help checkpoint.");
+      } else throw usage("See codexteer help checkpoint.");
       success(`checkpoint.${action}`, data, json);
       if (!json) console.log(JSON.stringify(data, null, 2));
       return;
@@ -399,18 +400,18 @@ async function mainOnTarget(argv) {
       const action = args.shift();
       if (action === "list") {
         const all = takeFlag(args, "--all");
-        if (args.length !== 1) throw new Error("Expected: instructions list <THREAD> [--all].");
+        if (args.length !== 1) throw usage("Expected: instructions list <THREAD> [--all].");
         if (supervisor) await assertSupervisor(args[0], supervisor, { connection });
         const data = await listInstructions(args[0], { all });
         success("instructions.list", data, json);
         if (!json) { for (const entry of data.instructions) console.log(`${entry.id}  ${entry.instruction_status}  ${entry.metadata?.source ?? "unspecified"}\n${entry.body}`); if (data.pending_changes.length) console.log(`配送未確認: ${data.pending_changes.map(e => e.id).join(", ")}`); }
         return;
       }
-      if (action !== "retract") throw new Error("See codexteer help instructions.");
+      if (action !== "retract") throw usage("See codexteer help instructions.");
       if (connection === "desktop") throw desktopReadOnly();
       const reason = takeOption(args, "--reason", undefined), source = takeOption(args, "--source", undefined), basedOn = takeOption(args, "--based-on", undefined);
       const dryRun = takeFlag(args, "--dry-run"), newTurn = takeFlag(args, "--new-turn");
-      if (args.length !== 2 || !reason?.trim()) throw new Error("Expected: instructions retract <THREAD> <MESSAGE-ID> --reason TEXT.");
+      if (args.length !== 2 || !reason?.trim()) throw usage("Expected: instructions retract <THREAD> <MESSAGE-ID> --reason TEXT.");
       const data = await sendTrackedMessage(args[0], reason, { retracts: args[1], source, basedOn, dryRun, newTurn, supervisor, connection });
       success("instructions.retract", data, json);
       if (!json) console.log(dryRun ? "撤回の送信プレビューです。" : `撤回を受け付けました。message_id: ${data.message_id}`);
@@ -422,7 +423,7 @@ async function mainOnTarget(argv) {
       const pending = takeFlag(args, "--pending");
       const report = action === "mark" ? { status: takeOption(args, "--status", undefined), note: takeOption(args, "--note", undefined), evidence: takeOptions(args, "--evidence"), by: takeOption(args, "--by", "local") } : {};
       const [threadId, id] = args;
-      if (!threadId || args.length > 2 || !["list", "show", "check", "mark"].includes(action) || (["show", "mark"].includes(action) && !id) || (action === "list" && id)) throw new Error("See codexteer help history.");
+      if (!threadId || args.length > 2 || !["list", "show", "check", "mark"].includes(action) || (["show", "mark"].includes(action) && !id) || (action === "list" && id)) throw usage("See codexteer help history.");
       if (supervisor) await assertSupervisor(threadId, supervisor, { connection });
       const data = action === "list" ? await listMessages(threadId, { includeText, pending }) : action === "show" ? messageSummary(await getMessage(threadId, id), includeText) : action === "check" ? await reconcileMessages(threadId, id, { includeText }, connectionDependencies) : await markMessage(threadId, id, report);
       success(`history.${action}`, data, json);
@@ -443,14 +444,14 @@ async function mainOnTarget(argv) {
       if (stream) json = true;
       if (command === "watch") {
         const until = takeOption(args, "--until", undefined), timeout = takeOption(args, "--timeout-ms", undefined);
-        if (stream && (until !== undefined || timeout !== undefined)) throw new Error("--stream runs until cancelled; do not combine it with --until or --timeout-ms. See codexteer help monitor.");
+        if (stream && (until !== undefined || timeout !== undefined)) throw usage("--stream runs until cancelled; do not combine it with --until or --timeout-ms. See codexteer help monitor.");
         const notify = takeOption(args, "--notify", stream ? "digest" : "all"), settle = takeOption(args, "--settle-ms", undefined), maxHold = takeOption(args, "--max-hold-ms", undefined);
-        if (!stream && (notify === "digest" || settle !== undefined || maxHold !== undefined)) throw new Error("--notify digest, --settle-ms and --max-hold-ms require --stream.");
-        if (notify !== "digest" && (settle !== undefined || maxHold !== undefined)) throw new Error("--settle-ms and --max-hold-ms require --notify digest.");
+        if (!stream && (notify === "digest" || settle !== undefined || maxHold !== undefined)) throw usage("--notify digest, --settle-ms and --max-hold-ms require --stream.");
+        if (notify !== "digest" && (settle !== undefined || maxHold !== undefined)) throw usage("--settle-ms and --max-hold-ms require --notify digest.");
         Object.assign(options, notificationOptions({ notify, ...(settle === undefined ? {} : { settleMs: Number(settle) }), ...(maxHold === undefined ? {} : { maxHoldMs: Number(maxHold) }) }));
         Object.assign(options, { watch: true, until: until ?? "change", timeoutMs: Number(timeout ?? "30000"), pollMs: Number(takeOption(args, "--poll-ms", "1000")) });
       }
-      if (args.length !== 1) throw new Error(`Expected: ${command} <THREAD>. See codexteer help ${command}.`);
+      if (args.length !== 1) throw usage(`Expected: ${command} <THREAD>. See codexteer help ${command}.`);
       if (stream) { await monitorCommand(args[0], options, connectionDependencies); return; }
       const data = await observeThread(args[0], options, connectionDependencies);
       data.connection_mode = connection;
@@ -463,10 +464,10 @@ async function mainOnTarget(argv) {
       const backend = backendOption(args, "app-server");
       if (connection === "desktop" && backend === "ui") throw desktopReadOnly();
       const target = takeOption(args, "--thread", undefined);
-      if (target !== undefined && backend !== "app-server") throw new Error("doctor --thread requires --backend app-server.");
+      if (target !== undefined && backend !== "app-server") throw usage("doctor --thread requires --backend app-server.");
       const threadId = target === undefined ? undefined : normalizeThreadId(target);
       if (supervisor && threadId) await assertSupervisorRegistration(threadId, supervisor, { connection });
-      if (args.length) throw new Error(`Unexpected argument: ${args[0]}`);
+      if (args.length) throw usage(`Unexpected argument: ${args[0]}`);
       if (targetHost() !== "local" && backend === "ui") throw remoteReadOnly();
       const report = backend === "ui" ? desktopDoctor() : await appServerDoctor({ threadId, ...connectionDependencies });
       if (report.connection) Object.assign(report.connection, { mode: connection, observation_only: connection === "desktop" || (targetHost() !== "local" && !control), ...hostFields() });
@@ -498,7 +499,7 @@ async function mainOnTarget(argv) {
     if (command === "desktop") {
       const action = args.shift();
       if (action === "update-status") {
-        if (args.length) throw new Error(`Unexpected argument: ${args[0]}`);
+        if (args.length) throw usage(`Unexpected argument: ${args[0]}`);
         const data = await desktopUpdateStatus();
         success("desktop.update-status", data, json);
         if (!json) console.log(JSON.stringify(data, null, 2));
@@ -508,15 +509,15 @@ async function mainOnTarget(argv) {
         if (supervisor) throw Object.assign(new Error("A supervisor cannot update or restart Desktop. Run this command from the user's terminal without --supervisor."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         const dryRun = takeFlag(args, "--dry-run");
         const timeoutMs = Number(takeOption(args, "--timeout-ms", "600000"));
-        if (args.length) throw new Error(`Unexpected argument: ${args[0]}`);
+        if (args.length) throw usage(`Unexpected argument: ${args[0]}`);
         const data = await launchDesktopUpdate({ dryRun, timeoutMs });
         success("desktop.update", data, json);
         if (!json) console.log(dryRun ? "Dry run: official update, relaunch, normal quit, wrapper startup, and verification." : `Update worker started (${data.worker_pid}). Check: ${data.status_command}`);
         return;
       }
-      if (action !== "start") throw new Error("Expected: codexteer desktop start|update|update-status");
+      if (action !== "start") throw usage("Expected: codexteer desktop start|update|update-status");
       const dryRun = takeFlag(args, "--dry-run");
-      if (args.length) throw new Error(`Unexpected argument: ${args[0]}`);
+      if (args.length) throw usage(`Unexpected argument: ${args[0]}`);
       const data = await startDesktop({ dryRun });
       success("desktop.start", data, json);
       if (!json) console.log(dryRun ? "Dry run: would launch Desktop with the shared App Server wrapper." : "Desktop shared App Server is ready.");
@@ -525,9 +526,9 @@ async function mainOnTarget(argv) {
 
     if (command === "projects") {
       if (connection === "desktop") throw desktopReadOnly();
-      if (args.shift() !== "list") throw new Error("Expected: codexteer projects list [--remote | --all] [--host HOST-ID]");
+      if (args.shift() !== "list") throw usage("Expected: codexteer projects list [--remote | --all] [--host HOST-ID]");
       const remote = takeFlag(args, "--remote"), all = takeFlag(args, "--all");
-      if (args.length || (remote && all) || (all && targetHost() !== "local")) throw new Error("Use projects list [--remote | --all] or projects list --host HOST-ID.");
+      if (args.length || (remote && all) || (all && targetHost() !== "local")) throw usage("Use projects list [--remote | --all] or projects list --host HOST-ID.");
       const saved = targetHost() !== "local" && remoteTransport() === "paired" ? await listRemoteProjects()
         : remote || all || targetHost() !== "local" ? await registeredRemoteProjects() : [];
       const projects = [...(!remote && (all || targetHost() === "local") ? await listProjects() : []),
@@ -538,15 +539,15 @@ async function mainOnTarget(argv) {
     }
 
     if (command === "threads") {
-      if (args.shift() !== "list") throw new Error("Expected: codexteer threads list");
+      if (args.shift() !== "list") throw usage("Expected: codexteer threads list");
       const limit = Number.parseInt(takeOption(args, "--limit", "20"), 10);
       const desktopOnly = takeFlag(args, "--desktop-only");
       const cursor = takeOption(args, "--cursor", undefined), projectId = takeOption(args, "--project", undefined), search = takeOption(args, "--search", undefined);
-      if (args.length > 0) throw new Error(`Unexpected argument: ${args[0]}`);
+      if (args.length > 0) throw usage(`Unexpected argument: ${args[0]}`);
       if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
-        throw new Error("--limit must be an integer between 1 and 500.");
+        throw usage("--limit must be an integer between 1 and 500.");
       }
-      if (targetHost() === "local" && [cursor, projectId, search].some(value => value !== undefined)) throw new Error("--cursor/--project/--search currently require a paired remote host.");
+      if (targetHost() === "local" && [cursor, projectId, search].some(value => value !== undefined)) throw usage("--cursor/--project/--search currently require a paired remote host.");
       const data = targetHost() === "local" ? { threads: await listLocalThreads({ limit, desktopOnly }) } : await listRemoteThreads({ limit, desktopOnly, cursor, projectId, search });
       const threads = data.threads;
       success("threads.list", { ...data, count: threads.length }, json);
@@ -560,7 +561,7 @@ async function mainOnTarget(argv) {
         if (connection === "desktop") throw desktopReadOnly();
         if (supervisor) throw Object.assign(new Error("Managed supervision is bound to its existing task. Verify a project creation receipt without --supervisor."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         const timeoutMs = Number(takeOption(args, "--timeout-ms", "120000"));
-        if (args.length !== 1 || args[0].startsWith("--")) throw new Error("Expected: thread verify <ATTEMPT-ID> [--timeout-ms N].");
+        if (args.length !== 1 || args[0].startsWith("--")) throw usage("Expected: thread verify <ATTEMPT-ID> [--timeout-ms N].");
         const data = await (targetHost() === "local" ? verifyProjectThread : verifyRemoteProjectThread)(args[0], { timeoutMs });
         success("thread.verify", data, json);
         if (!json) console.log(`Verified existing ${data.deep_link}; creation and initial instruction were not repeated.`);
@@ -578,7 +579,7 @@ async function mainOnTarget(argv) {
           options.timeoutMs = Number(options.timeoutMs);
         }
         const literal = args.indexOf("--");
-        if (args.slice(0, literal < 0 ? args.length : literal).some(arg => arg.startsWith("--"))) throw new Error("Unknown thread create option. Use -- before an instruction starting with --.");
+        if (args.slice(0, literal < 0 ? args.length : literal).some(arg => arg.startsWith("--"))) throw usage("Unknown thread create option. Use -- before an instruction starting with --.");
         const message = readMessage(args);
         const data = await (targetHost() === "local" ? createProjectThread : createRemoteProjectThread)(selector, message, options);
         success("thread.create", data, json);
@@ -587,7 +588,7 @@ async function mainOnTarget(argv) {
       }
       if (action === "repair") {
         const apply = takeFlag(args, "--apply"), dryRun = takeFlag(args, "--dry-run");
-        if (args.length !== 1 || args[0].startsWith("--") || (apply && dryRun)) throw new Error("Expected: thread repair <THREAD> [--dry-run | --apply].");
+        if (args.length !== 1 || args[0].startsWith("--") || (apply && dryRun)) throw usage("Expected: thread repair <THREAD> [--dry-run | --apply].");
         if (connection === "desktop") throw desktopReadOnly();
         if (supervisor) throw Object.assign(new Error("A supervisor cannot repair task history. Run this command from the user's terminal without --supervisor."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         const data = await repairTurns(args[0], { apply });
@@ -595,8 +596,8 @@ async function mainOnTarget(argv) {
         if (!json) console.log(JSON.stringify(data, null, 2));
         return;
       }
-      if (action !== "resolve") throw new Error("Expected: codexteer thread create|verify|resolve|repair. See help thread.");
-      if (args.length !== 1) throw new Error("thread resolve requires exactly one thread ID or URL.");
+      if (action !== "resolve") throw usage("Expected: codexteer thread create|verify|resolve|repair. See help thread.");
+      if (args.length !== 1) throw usage("thread resolve requires exactly one thread ID or URL.");
       const threadId = normalizeThreadId(args[0]);
       const data = { thread_id: threadId, deep_link: threadDeepLink(threadId) };
       success("thread.resolve", data, json);
@@ -605,7 +606,7 @@ async function mainOnTarget(argv) {
     }
 
     if (command === "open") {
-      if (args.length !== 1) throw new Error("open requires exactly one thread ID or URL.");
+      if (args.length !== 1) throw usage("open requires exactly one thread ID or URL.");
       const threadId = normalizeThreadId(args[0]);
       const data = targetHost() === "local" ? openDesktopThread(threadId) : await ensureRemoteDesktopSubscription(threadId);
       success("open", data, json);
@@ -615,7 +616,7 @@ async function mainOnTarget(argv) {
 
     if (command === "debug-ui") {
       const waitMs = Number.parseInt(takeOption(args, "--wait-ms", "1500"), 10);
-      if (args.length !== 1) throw new Error("debug-ui requires exactly one thread ID or URL.");
+      if (args.length !== 1) throw usage("debug-ui requires exactly one thread ID or URL.");
       const threadId = normalizeThreadId(args[0]);
       const data = inspectDesktopUi(threadId, { waitMs });
       success("debug-ui", data, json);
@@ -634,23 +635,23 @@ async function mainOnTarget(argv) {
       if (remoteTransport() !== "paired") throw remoteReadOnly();
       throw Object.assign(new Error("UI sending on the remote host is unsupported. No UI or other delivery route was used."), { code: "REMOTE_UI_UNSUPPORTED", sent: false, delivery_status: "not_sent" });
     }
-    if (supervisor && backend !== "app-server") throw new Error("Managed supervision requires the app-server backend.");
+    if (supervisor && backend !== "app-server") throw usage("Managed supervision requires the app-server backend.");
     const explicitSound = takeFlag(args, "--sound");
     const noSound = takeFlag(args, "--no-sound");
-    if (explicitSound && noSound) throw new Error("--sound and --no-sound cannot be combined.");
-    if (explicitSound && backend !== "app-server") throw new Error("--sound requires --backend app-server so receipt can be confirmed.");
+    if (explicitSound && noSound) throw usage("--sound and --no-sound cannot be combined.");
+    if (explicitSound && backend !== "app-server") throw usage("--sound requires --backend app-server so receipt can be confirmed.");
     const newTurn = takeFlag(args, "--new-turn");
     const directive = { source: takeOption(args, "--source", undefined), kind: takeOption(args, "--kind", undefined), evidence: takeOptions(args, "--evidence"), basedOn: takeOption(args, "--based-on", undefined), supersedes: takeOption(args, "--supersedes", undefined), expiresAt: takeOption(args, "--expires-at", undefined), checkpoint: takeOption(args, "--checkpoint", undefined), finding: takeOption(args, "--finding", undefined) };
-    if (backend === "ui" && (directive.source || directive.kind || directive.evidence.length || directive.basedOn || directive.supersedes || directive.expiresAt || directive.checkpoint || directive.finding)) throw new Error("Directive metadata requires --backend app-server.");
+    if (backend === "ui" && (directive.source || directive.kind || directive.evidence.length || directive.basedOn || directive.supersedes || directive.expiresAt || directive.checkpoint || directive.finding)) throw usage("Directive metadata requires --backend app-server.");
     const keepFocus = takeFlag(args, "--keep-focus");
     const waitInput = takeOption(args, "--wait-ms", undefined);
-    if (backend !== "ui" && (keepFocus || waitInput != null)) throw new Error("--keep-focus and --wait-ms require --backend ui.");
+    if (backend !== "ui" && (keepFocus || waitInput != null)) throw usage("--keep-focus and --wait-ms require --backend ui.");
     const waitMs = Number(waitInput ?? "1500");
     if (args.slice(0, args.includes("--") ? args.indexOf("--") : args.length).some(arg => arg.startsWith("--"))) throw usage("Unknown send option. Use -- before instruction text starting with --.");
     const threadInput = args.shift();
-    if (!threadInput) throw new Error("send requires a thread ID or codex://threads URL.");
+    if (!threadInput) throw usage("send requires a thread ID or codex://threads URL.");
     const message = readMessage(args);
-    if (message.trim() === "") throw new Error("send requires a non-empty message.");
+    if (message.trim() === "") throw usage("send requires a non-empty message.");
     const threadId = normalizeThreadId(threadInput);
     const data = backend === "app-server"
       ? await sendTrackedMessage(threadId, message, { dryRun, newTurn, ...directive, supervisor, connection })
