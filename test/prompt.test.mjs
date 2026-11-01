@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeRecord } from "../src/store.mjs";
 import { DEFAULT_SUPERVISION_POLICY, supervisorPrompt } from "../src/prompt.mjs";
+import { ORCHESTRATED_SUPERVISION_POLICY } from "../src/orchestrate-prompt.mjs";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
@@ -19,6 +20,16 @@ test("the prompt keeps digest watch commands and the safety rules the supervisor
   assert.match(prompt, /watch .* --since .* --until change --timeout-ms 30000/);
   assert.match(prompt, /digest\.from_cursor/);
   for (const rule of ["paused", "SUPERVISOR_STOPPED", "--supervisor", "--new-turn", "自動再送", "reconnecting"]) assert.ok(prompt.includes(rule), rule);
+});
+
+test("every supervision policy keeps the shared idle reply and decision kind rules", () => {
+  for (const policy of [undefined, "セキュリティの問題だけを私へ報告してください。", ORCHESTRATED_SUPERVISION_POLICY]) {
+    for (const usePathCli of [false, true]) {
+      const { prompt } = supervisorPrompt(ID, "saved-command", policy, undefined, { usePathCli });
+      assert.match(prompt, /「変化なし」/);
+      assert.match(prompt, /--kind decision[^。]*ユーザー本人/);
+    }
+  }
 });
 
 
