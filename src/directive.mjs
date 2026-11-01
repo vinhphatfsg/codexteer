@@ -1,5 +1,6 @@
 import { collectEvidence, verifyEvidence } from "./evidence.mjs";
-import { decodeCursor, threadSnapshot, fetchThread } from "./observe.mjs";
+import { threadSnapshot, fetchThread } from "./observe.mjs";
+import { parseCursor } from "./cursor.mjs";
 import { getCheckpoint, verifyCheckpoint } from "./checkpoint.mjs";
 import { verifyPagedFreshness } from "./paged-read.mjs";
 import { assertFindingSend, getFinding } from "./findings.mjs";
@@ -15,7 +16,7 @@ export async function prepareDirective(threadId, body, options, id, storage = {}
   if (expiresAt && (!/(Z|[+-]\d{2}:\d{2})$/.test(expiresAt) || !Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now())) throw Object.assign(new Error("--expires-at must be a future ISO timestamp with timezone."), { code: "OPTIONS_INVALID" });
   if (kind && !Object.hasOwn(kindLabels, kind)) throw Object.assign(new Error("--kind must be decision, review, hypothesis, or suggestion."), { code: "OPTIONS_INVALID" });
   if (source != null && (!source.trim() || source.length > 80 || /[\r\n\x00-\x1f]/.test(source))) throw Object.assign(new Error("--source must be a non-empty single line (up to 80 characters)."), { code: "OPTIONS_INVALID" });
-  const observed = basedOn ? decodeCursor(basedOn, threadId) : null;
+  const observed = basedOn ? parseCursor(basedOn, threadId) : null;
   const refs = await collectEvidence(evidence);
   const metadata = { source: source ?? "external", kind: kind ?? "review", evidence: refs, based_on: basedOn ?? null, supersedes: supersedes ?? null, retracts: retracts ?? null, expires_at: expiresAt ?? null, checkpoint_id: checkpoint ?? null,
     ...(concern ? { finding_id: concern.id, finding_revision: concern.revision } : {}), ...(supervisor ? { supervisor_id: supervisor } : {}) };

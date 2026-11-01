@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readSnapshot, observeThread, fetchThread, decodeCursor } from "../src/observe.mjs";
+import { readSnapshot, observeThread, fetchThread } from "../src/observe.mjs";
+import { parseCursor } from "../src/cursor.mjs";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 const thread = (items = [], status = "active") => ({ id: ID, status: { type: status, ...(status === "active" ? { activeFlags: [] } : {}) }, turns: [{ id: "turn", status: status === "active" ? "inProgress" : "completed", items }] });
@@ -32,7 +33,7 @@ test("initial tail is bounded; cursors reject wrong targets, rollback, and rewri
   const data = thread([msg("a"), msg("b"), msg("c")]);
   const a = readSnapshot(data, { limit: 1 });
   assert.deepEqual(a.events.map(x => x.id), ["c"]); assert.equal(a.omitted_older_events, 3);
-  assert.throws(() => decodeCursor(a.cursor, "another"), { code: "STALE_CURSOR" });
+  assert.throws(() => parseCursor(a.cursor, "another"), { code: "STALE_CURSOR" });
   assert.throws(() => readSnapshot(thread([]), { since: a.cursor }), { code: "STALE_CURSOR" });
   data.turns[0].items[0].text = "rewritten";
   assert.throws(() => readSnapshot(data, { since: a.cursor }), { code: "STALE_CURSOR" });

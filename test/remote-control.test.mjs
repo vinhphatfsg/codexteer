@@ -9,7 +9,8 @@ import { REMOTE_CLIENT_INFO } from "../src/remote-client-info.mjs";
 import { CONTROL_URL, CONTROL_SCOPE, authIdentity, connectionPayload, readEnrollment, verifyDeviceProof, signConnectionChallenge, inspectConnectionKey } from "../src/remote-control-auth.mjs";
 import { remoteControlConnection, validateControlRequest } from "../src/remote-control.mjs";
 import { withTarget } from "../src/target.mjs";
-import { readSnapshot, observeThread, decodeCursor } from "../src/observe.mjs";
+import { readSnapshot, observeThread } from "../src/observe.mjs";
+import { parseCursor } from "../src/cursor.mjs";
 import { sendAppServerMessage } from "../src/app-server.mjs";
 import { appServerDoctor } from "../src/launcher.mjs";
 import { BUNDLED_NODE } from "../src/wrapper.mjs";
@@ -210,7 +211,8 @@ test("control route reads and strictly steers the existing server turn with one 
   const f = await fixture(t);
   await scope(async () => {
     const observation = await observeThread(ID, {}, f.route);
-    assert.equal(decodeCursor(observation.cursor, ID).remote_transport, "control");
+    assert.ok(parseCursor(observation.cursor, ID));
+    await withTarget(HOST, undefined, () => assert.throws(() => parseCursor(observation.cursor, ID), { code: "STALE_CURSOR" }), { transport: "native" });
     const sent = await sendAppServerMessage(ID, "fixture instruction", { ...f.route, clientMessageId: "client-message" });
     assert.equal(sent.delivery_status, "accepted"); assert.equal(sent.turn_id, "turn-one");
     const sends = f.methods.filter(x => x.method === "turn/steer"); assert.equal(sends.length, 1);
@@ -223,7 +225,7 @@ test("control route reads and strictly steers the existing server turn with one 
 test("paired transport preserves strict server steering while binding cursors separately from Desktop control", async t => {
   const f = await fixture(t, { transport: "paired" });
   const observed = await withTarget(HOST, undefined, () => observeThread(ID, {}, f.route), { transport: "paired" });
-  await scope(() => assert.throws(() => decodeCursor(observed.cursor, ID), { code: "STALE_CURSOR" }));
+  await scope(() => assert.throws(() => parseCursor(observed.cursor, ID), { code: "STALE_CURSOR" }));
   const sent = await withTarget(HOST, undefined, () => sendAppServerMessage(ID, "fixture only", f.route), { transport: "paired" });
   assert.equal(sent.remote_transport, "paired"); assert.equal(sent.delivery_status, "accepted");
   assert.equal(f.methods.filter(call => call.method === "turn/steer").length, 1);
@@ -287,7 +289,7 @@ test("native and control cursors and supervisor routes cannot be interchanged", 
   const home = await temp(t);
   const cursor = await withTarget(HOST, undefined, async () => { await registerSupervisor(ID, SESSION, { home }); return readSnapshot(task()).cursor; });
   await scope(async () => {
-    assert.throws(() => decodeCursor(cursor, ID), { code: "STALE_CURSOR" });
+    assert.throws(() => parseCursor(cursor, ID), { code: "STALE_CURSOR" });
     await assert.rejects(assertSupervisor(ID, SESSION, { home }), { code: "SUPERVISOR_MISMATCH" });
   });
 });
