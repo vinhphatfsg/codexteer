@@ -92,7 +92,7 @@ Felix Riesebergの[How to be more ambitious](https://felixrieseberg.com/how-to-b
 
 ## 制御と確認範囲
 
-`supervise pause/stop`は個別スレッドの監督制御です。プロジェクト全体の一括pause/stopや常駐スケジューラーは追加していません。オーケストレーターへの監督停止指示は、新規作成・追加送信・自分のMonitor/watchを止める指示として扱い、実行中のCodex担当の作業自体を止める指示とは区別します。
+`supervise pause/stop`は個別スレッドの監督制御です。プロジェクト全体の一括pause/stopや常駐スケジューラーは追加していません。オーケストレーターへの監督停止指示は、新規作成・追加送信・自分のMonitor/watchを止め、各担当の監督を`supervise stop`で終了する指示として扱い、実行中のCodex担当の作業自体を止める指示とは区別します。全体の完了時も各担当の監督を終了します。
 
 `resource`は参加者間の協調用リースで、OSの強制ロックや公平な待ち行列ではありません。利用順はオーケストレーターが調整します。監督登録がactiveでも、継続して監視できていることを証明しません。
 
