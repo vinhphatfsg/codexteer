@@ -4,6 +4,15 @@ import { prepareDeployment } from "./distribution.mjs";
 import { codexHome } from "./runtime.mjs";
 
 export const SUPERVISOR_AGENTS = ["claude", "codex"];
+const BOUND_OPTIONS = ["--require-node-version", "--supervisor", "--connection", "--host", "--remote-transport", "--context-thread"];
+
+// Parsers take the first occurrence, so a repeated option would silently
+// change or bypass the binding of a generated command.
+export function rejectRepeatedBinding(argv) {
+  const own = argv.includes("--") ? argv.slice(0, argv.indexOf("--")) : argv;
+  const repeated = BOUND_OPTIONS.find(name => own.indexOf(name) !== own.lastIndexOf(name));
+  if (repeated) throw Object.assign(new Error(`Specify ${repeated} only once. A generated supervision command already sets it; run that command without adding it again.`), { code: "OPTIONS_INVALID" });
+}
 
 export function shellArgument(value) {
   if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(value)) {

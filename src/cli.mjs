@@ -15,6 +15,7 @@ import { acquireResource, resourceStatus, renewResource, releaseResource, listRe
 import { playSendSound } from "./sound.mjs";
 import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
 import { prepareOrchestrationPrompt, orchestrateAgent } from "./orchestrate.mjs";
+import { rejectRepeatedBinding } from "./prompt-command.mjs";
 import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, assertSupervisorRegistration, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
 import { connectionMode, observationConnection, desktopReadOnly } from "./connection.mjs";
@@ -162,9 +163,9 @@ function printSupervisor(data) {
 export async function main(argv) {
   const args = [...argv];
   try {
+    rejectRepeatedBinding(args);
     const transport = validateRemoteTransport(takeOption(args, "--remote-transport", "native"));
     const explicitHost = takeOption(args, "--host", undefined);
-    if (args.slice(0, args.includes("--") ? args.indexOf("--") : args.length).includes("--host")) throw usage("Specify --host only once.");
     if (explicitHost !== undefined) validateHostId(explicitHost);
     const probe = [...args];
     takeFlag(probe, "--json");
