@@ -3,7 +3,7 @@ import { normalizeTaskId } from "./task-id.mjs";
 import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
 import { collectEvidence } from "./evidence.mjs";
 import { digest } from "./observe.mjs";
-import { parseCursor } from "./cursor.mjs";
+import { parseCursor, withCursorReference } from "./cursor.mjs";
 import { verifyCheckpoint } from "./checkpoint.mjs";
 
 const failure = (message, code) => Object.assign(new Error(message), { code });
@@ -15,6 +15,7 @@ const text = (value, label, max = 8000) => {
 // A cursor can advance because our own intervention appeared as a userMessage.
 // It is observation context, never sufficient evidence for another intervention.
 const contextHash = record => digest({ condition: record.condition, evidence: record.evidence });
+const presentFinding = record => ({ ...withCursorReference(record), ...(Array.isArray(record.revisions) ? { revisions: record.revisions.map(withCursorReference) } : {}) });
 
 export async function getFinding(threadInput, id, storage = {}) {
   const threadId = normalizeTaskId(threadInput), record = await readRecord("findings", id, storage);
@@ -43,7 +44,7 @@ export async function createFinding(threadInput, { key, title, condition, eviden
       evidence: refs, based_on: basedOn ?? null, user_revision: observed?.user_revision ?? null, disposition: "open", resolution: null,
       evaluation: { rating: "unrated" }, revisions: [], created_at: now, updated_at: now };
     await writeRecord("findings", record.id, record, storage);
-    return { ...record, status: "open", messages: [], verification: null, reused: false };
+    return presentFinding({ ...record, status: "open", messages: [], verification: null, reused: false });
   }, storage);
 }
 
@@ -77,7 +78,7 @@ export async function findingStatus(threadInput, id, storage = {}) {
     } catch (error) { verification = { valid: false, checkpoint_id: record.resolution.checkpoint_id, error_code: error.code ?? "CHECKPOINT_UNAVAILABLE", condition_assessment: "explicit_report" }; }
     if (!verification.valid && record.disposition === "resolved") status = "needs_review";
   }
-  return { ...record, status, messages, verification };
+  return presentFinding({ ...record, status, messages, verification });
 }
 
 export async function listFindings(threadInput, { all = false, limit = 50, ...storage } = {}) {

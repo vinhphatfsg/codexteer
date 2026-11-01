@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, stat, symlink, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { sendTrackedMessage, getMessage, listMessages, reconcileMessages, markMessage } from "../src/journal.mjs";
+import { createHash } from "node:crypto";
+import { sendTrackedMessage, getMessage, listMessages, messageSummary, reconcileMessages, markMessage } from "../src/journal.mjs";
 import { readRecord, writeRecord, withStoreLock, storePath } from "../src/store.mjs";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
@@ -48,6 +49,28 @@ test("unknown delivery retains ID and is reconciled by ID and body without resen
   const entries = await reconcileMessages(ID, error.message_id, storage, transport);
   assert.equal(entries[0].verification.status, "stored"); assert.equal(entries[0].delivery_status, "accepted"); assert.equal(entries[0].response.status, "unreported");
   assert.equal(count, 1); assert.equal(closed, true);
+});
+
+test("history outputs name the observed cursor by based_on_sha256, and checking every message keeps the stored token", async t => {
+  const storage = await fixture(t), messageId = "22222222-2222-4222-8222-222222222222", token = "c1" + "Zm9yLWJhc2VkLW9u".repeat(12);
+  const entry = { schema: 1, id: messageId, client_message_id: messageId, thread_id: ID, created_at: "2026-11-01T00:00:00Z", body: "fix it", wire_text: "[codexteer]\n\nfix it",
+    metadata: { source: "claude-code", kind: "review", evidence: [], based_on: token, supersedes: null }, delivery_status: "unknown", response: { status: "unreported" } };
+  entry.message_sha256 = createHash("sha256").update(JSON.stringify(entry.wire_text)).digest("hex");
+  await writeRecord("messages", messageId, entry, storage);
+  const transport = { discover: async () => ({ paths: { socket: "unused" } }), connect: async () => ({ close() {}, request: async () => ({ thread: { id: ID, turns: [{ id: "turn", items: [
+    { type: "userMessage", id: "item", clientId: messageId, content: [{ type: "text", text: entry.wire_text }] }] }] } }) }) };
+  const outputs = { list: await listMessages(ID, storage), listText: await listMessages(ID, { ...storage, includeText: true }),
+    show: messageSummary(await getMessage(ID, messageId, storage), true), checkOne: await reconcileMessages(ID, messageId, storage, transport),
+    checkAll: await reconcileMessages(ID, undefined, { ...storage, includeText: true }, transport) };
+  for (const [name, output] of Object.entries(outputs)) {
+    const text = JSON.stringify(output);
+    assert.equal(text.includes(token) || text.includes('"based_on"'), false, `${name} must not echo the cursor`);
+    assert.equal((Array.isArray(output) ? output[0] : output).metadata.based_on_sha256, createHash("sha256").update(token).digest("hex").slice(0, 16), name);
+  }
+  assert.equal(outputs.checkAll[0].verification.status, "stored");
+  const stored = await readRecord("messages", messageId, storage);
+  assert.equal(stored.metadata.based_on, token);
+  assert.equal(stored.delivery_status, "accepted");
 });
 
 test("duplicate or mismatched history is conflict; absence never becomes proof of non-delivery", async t => {

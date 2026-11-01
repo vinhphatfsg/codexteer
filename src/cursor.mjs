@@ -105,6 +105,18 @@ export function resolveTurns(claim, liveTurns, threadId) {
     last_public: claim.last_public, state: claim.state, active_turn_id: claim.active_turn_id, pending: claim.pending };
 }
 
+/**
+ * The output view of a stored record. Its based_on token becomes based_on_sha256,
+ * the first 16 hex of SHA-256 over the token. Stored records keep the full token.
+ * @template {object} T
+ * @param {T} record
+ */
+export function withCursorReference(record) {
+  if (!record || !Object.hasOwn(record, "based_on")) return record;
+  return Object.fromEntries(Object.entries(record).map(([key, value]) => key !== "based_on" ? [key, value]
+    : ["based_on_sha256", typeof value === "string" ? createHash("sha256").update(value).digest("hex").slice(0, 16) : null]));
+}
+
 const check = (threadId, body) => createHash("sha256").update(JSON.stringify(["codexteer-cursor", threadId, hostFields()])).update(body).digest().subarray(0, 8);
 const commitment = (turns, running) => createHash("sha256").update(JSON.stringify(turns.map((t, i) => [t.id, running.has(i) ? null : t.status]))).digest("hex");
 
