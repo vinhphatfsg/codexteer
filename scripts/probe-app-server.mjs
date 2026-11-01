@@ -172,6 +172,28 @@ async function idle(threadId) {
   await until(async () => (await desktop.request("thread/read", { threadId })).thread.status.type === "idle", "task idle");
 }
 
+async function startTurn(observer, threadId, text) {
+  const { turn } = await desktop.request("turn/start", { threadId, input: [{ type: "text", text }] });
+  // Wait until the observer also sees this turn's input, so a later
+  // --based-on cursor already includes it.
+  await until(async () => {
+    const { thread } = await observer.request("thread/read", { threadId, includeTurns: true });
+    if (thread.status.type !== "active" || thread.turns.at(-1)?.id !== turn.id) return false;
+    const { data } = await observer.request("thread/items/list", { threadId, turnId: turn.id, sortDirection: "asc", limit: 50 });
+    return data.some(row => row.item.type === "userMessage");
+  }, "started turn and its input visible to the observer");
+  return turn.id;
+}
+
+// Codex CLI 0.166 re-requests the model as soon as a steer arrives, so the
+// answer ends the turn. Older builds answer a steer with a follow-up request
+// in the same turn. Either way, return a turn that is active for the next send.
+async function activeTurnAfterAnswer(observer, threadId, turnId, text) {
+  const boundary = await until(() => desktop.notifications.some(m => m.method === "turn/completed" && m.params.turn?.id === turnId) ? "completed"
+    : streams.some(s => !s.used && !s.response.destroyed && !s.response.writableEnded) && "continued", "turn completed or continued");
+  return boundary === "completed" ? startTurn(observer, threadId, text) : turnId;
+}
+
 async function modelOutput(makeItem, marker) {
   const stream = await until(() => streams.find(s => s.marker === marker && !s.used && !s.response.destroyed && !s.response.writableEnded), "fake-model stream");
   stream.used = true;
@@ -227,6 +249,7 @@ try {
   await checkHelperPassThrough();
   const { thread } = await desktop.request("thread/start", { cwd: root, model: "gpt-5.4", approvalPolicy: "on-request", sandbox: "read-only" });
   const { turn } = await desktop.request("turn/start", { threadId: thread.id, input: [{ type: "text", text: "probe initial" }] });
+  const turnId = turn.id;
   const cli = await external();
   // The start response can precede visibility on another connection. Wait for
   // this exact turn, with the same bounded wait used for other protocol events.
@@ -237,12 +260,12 @@ try {
   assert.equal(read.thread.status.type, "active");
   assert.equal(read.thread.turns.at(-1).id, turn.id);
   const observation = await observeThread(thread.id, {}, { discover: () => legacyRuntime("pre-version") });
-  assert.equal(observation.active_turn_id, turn.id);
+  assert.equal(observation.active_turn_id, turnId);
   if ((await discoverRuntime(root)).state.cli_version !== "0.153.4") {
     await assert.rejects(sendAppServerMessage(thread.id, "must reject unverified legacy send", { discover: () => legacyRuntime("pre-version") }), { code: "RUNTIME_PROTOCOL_UNVERIFIED" });
   }
   const result = await sendAppServerMessage(thread.id, "日本語\nprobe steer", { discover: preVersionSendRuntime });
-  assert.equal(result.turn_id, turn.id);
+  assert.equal(result.turn_id, turnId);
   await assert.rejects(cli.request("turn/steer", { threadId: thread.id, expectedTurnId: "stale", input: [{ type: "text", text: "must reject" }] }), { code: "RPC_REJECTED" });
   // Reach a model boundary so queued steering is consumed. Check the real
   // server's Desktop notification and persisted item, not only the steer ACK.
@@ -253,6 +276,7 @@ try {
   assert.ok(delta.events.every(e => e.type !== "reasoning"));
   // Exercise the default backend in another cwd, including URL shorthand and
   // argv text. A second identical message must retain its own identity, too.
+  const cliTurnId = await activeTurnAfterAnswer(cli, thread.id, turnId, "probe cli turn");
   const cliSend = await promisify(execFile)(process.execPath, [fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url)), `codex://threads/${thread.id}`, "日本語\nprobe steer", "--json"], {
     cwd: root, env: { ...process.env, CODEX_HOME: root }, timeout: 15000,
   });
@@ -260,6 +284,7 @@ try {
   assert.equal(cliReceipt.ok, true);
   assert.equal(cliReceipt.data.backend, "app-server");
   assert.equal(cliReceipt.data.thread_id, thread.id);
+  assert.equal(cliReceipt.data.turn_id, cliTurnId);
   assert.notEqual(cliReceipt.data.client_message_id, result.client_message_id);
   await modelOutput(stream => ({ type: "message", id: `msg-${stream.id}`, role: "assistant", status: "completed", content: [{ type: "output_text", text: "probe response 2" }] }));
   await checkUserMessageIdentity(thread.id, cliReceipt.data, "日本語\nprobe steer");
@@ -269,11 +294,13 @@ try {
   assert.equal(journal.client_message_id, cliReceipt.data.client_message_id);
   const verifiedJournal = await reconcileMessages(thread.id, journal.id, { home: root }, { discover: () => discoverRuntime(root) });
   assert.equal(verifiedJournal[0].verification.status, "stored");
+  const typedTurnId = await activeTurnAfterAnswer(cli, thread.id, cliTurnId, "probe typed turn");
   const fresh = await observeThread(thread.id, {}, { discover: () => discoverRuntime(root) });
   await writeFile(`${root}/evidence.txt`, "synthetic review evidence");
   const cliArgs = [fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url))];
   const cliOptions = { cwd: root, env: { ...process.env, CODEX_HOME: root }, timeout: 15000 };
   const typed = JSON.parse((await promisify(execFile)(process.execPath, [...cliArgs, "send", thread.id, "訂正した仮説", "--source", "claude-code", "--kind", "hypothesis", "--evidence", `${root}/evidence.txt`, "--based-on", fresh.cursor, "--supersedes", journal.id, "--json"], cliOptions)).stdout).data;
+  assert.equal(typed.turn_id, typedTurnId);
   const typedEntry = await getMessage(thread.id, typed.message_id, { home: root });
   assert.equal(typedEntry.metadata.supersedes, journal.id);
   await modelOutput(stream => ({ type: "message", id: `msg-${stream.id}`, role: "assistant", status: "completed", content: [{ type: "output_text", text: "probe response 3" }] }));
@@ -282,13 +309,14 @@ try {
   assert.ok(typedDelta.events.some(e => e.client_message_id === typed.client_message_id));
   assert.equal((await reconcileMessages(thread.id, typed.message_id, { home: root }, { discover: () => discoverRuntime(root) }))[0].verification.status, "stored");
   assert.equal((await listInstructions(thread.id, { home: root, all: true })).instructions.find(e => e.id === journal.id).instruction_status, "superseded");
+  const commandTurnId = await activeTurnAfterAnswer(cli, thread.id, typedTurnId, "probe command turn");
   await assert.rejects(promisify(execFile)(process.execPath, [...cliArgs, "send", thread.id, "must not send stale review", "--based-on", fresh.cursor, "--json"], cliOptions), error => {
     const response = JSON.parse(error.stdout);
     assert.equal(response.error.code, "STALE_OBSERVATION"); assert.equal(response.error.sent, false); return true;
   });
 
   await modelTool("exec_command", { cmd: "sleep 2", yield_time_ms: 1000 });
-  const runningItem = await until(() => desktop.notifications.find(m => m.method === "item/started" && m.params.turnId === turn.id && m.params.item?.type === "commandExecution"), "running command");
+  const runningItem = await until(() => desktop.notifications.find(m => m.method === "item/started" && m.params.turnId === commandTurnId && m.params.item?.type === "commandExecution"), "running command");
   // Some builds publish command history only at completion, even though the
   // Desktop has received item/started. Both readers observe persisted history.
   const runningRead = await observeThread(thread.id, {}, { discover: () => discoverRuntime(root) });
@@ -340,9 +368,9 @@ try {
   monitor.kill("SIGTERM");
   assert.deepEqual(await monitorExit, [0, null]); assert.equal(monitorErrors, ""); monitor = null;
   console.log(JSON.stringify({ checkpoint: "steering-assistance-monitor", result: "PASS", typed_replacement_stored: true, stale_review_rejected: true, jsonl_cursor_pages: true, silent_when_unchanged: true, cancellation: true }));
-  await desktop.request("turn/interrupt", { threadId: thread.id, turnId: turn.id });
+  await desktop.request("turn/interrupt", { threadId: thread.id, turnId: commandTurnId });
   await idle(thread.id);
-  console.log(JSON.stringify({ checkpoint: "CP1-CP3-protocol", result: "PASS", thread_id: thread.id, turn_id: turn.id, stale_turn_rejected: true, desktop_steer_client_id: true, cli_url_shorthand_client_id: true }));
+  console.log(JSON.stringify({ checkpoint: "CP1-CP3-protocol", result: "PASS", thread_id: thread.id, turn_id: turnId, stale_turn_rejected: true, desktop_steer_client_id: true, cli_url_shorthand_client_id: true }));
 
   const next = await sendAppServerMessage(thread.id, "probe warm new turn", { newTurn: true, discover: () => legacyRuntime("v0.13") });
   await checkUserMessageIdentity(thread.id, next, "probe warm new turn");
