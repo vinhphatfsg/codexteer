@@ -6,7 +6,7 @@ import { listLocalThreads } from "./thread-store.mjs";
 import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, listInstructions } from "./journal.mjs";
 import { launchDesktopUpdate, desktopUpdateStatus } from "./update.mjs";
 import { appServerDoctor, startDesktop } from "./launcher.mjs";
-import { VERSION, helpData, renderHelp } from "./help.mjs";
+import { VERSION, helpData, renderHelp, errorRemedy, topicFor } from "./help.mjs";
 import { observeThread, printObservation } from "./observe.mjs";
 import { monitorCommand } from "./monitor.mjs";
 import { notificationOptions } from "./notify.mjs";
@@ -35,10 +35,11 @@ function success(command, data, json) {
   return data;
 }
 
-export function fail(error, json) {
+export function fail(error, json, argv = []) {
   const message = error instanceof Error ? error.message : String(error);
+  const remedy = errorRemedy(argv, error.code);
   if (json) console.log(JSON.stringify({ ok: false, ...(error.watch ? { command: "watch", data: error.watch } : {}), error: {
-    message, code: error.code, ...hostFields(), delivery_status: error.delivery_status,
+    message, code: error.code, ...remedy, ...hostFields(), delivery_status: error.delivery_status,
     operation: error.operation, capability: error.capability,
     expected_connection: error.expected_connection, connection: error.connection,
     ...((error.execution_environment === "cloud" || (typeof error.code === "string" && error.code.startsWith("CLOUD_"))) ? {
@@ -64,6 +65,8 @@ export function fail(error, json) {
   } }));
   else {
     console.error(`codexteer: ${message}`);
+    for (const line of remedy?.usage ?? []) console.error(`使い方: codexteer ${line}`);
+    if (remedy?.action) console.error(`対処: ${remedy.action}`);
     if (error.execution_environment === "cloud" || (typeof error.code === "string" && error.code.startsWith("DESKTOP_CLOUD_"))) {
       // Recovery metadata must survive an uncertain submission or a stale
       // on-disk receipt. Never print the child error, prompt, or diagnostics.
@@ -186,7 +189,7 @@ export async function main(argv) {
     const ownArguments = probe.slice(0, probe.includes("--") ? probe.indexOf("--") : probe.length);
     if (isControlTransport(transport) && host === "local" && command !== "remote" && !["help", "--help", "--version"].some(value => ownArguments.includes(value))) throw Object.assign(new Error("--remote-transport control requires a remote hostId link or --host."), { code: "REMOTE_HOST_REQUIRED" });
     return await withTarget(host, contextThread, () => mainOnTarget(args), { transport });
-  } catch (error) { fail(error, argv.includes("--json")); }
+  } catch (error) { fail(error, argv.includes("--json"), argv); }
 }
 
 async function mainOnTarget(argv) {
@@ -210,10 +213,7 @@ async function mainOnTarget(argv) {
     }
     if (args.length === 0 || takeFlag(args, "--help") || args[0] === "help") {
       if (args[0] === "help") args.shift();
-      const candidate = args[0] ?? "overview";
-      const topic = ["supervise", "orchestrate"].includes(candidate) && args[1] === "prompt" ? `${candidate} prompt`
-        : /^(codex:\/\/|[0-9a-f]{8}-)/i.test(candidate) ? "send" : candidate;
-      const data = helpData(topic);
+      const data = helpData(topicFor(args) ?? args[0] ?? "overview");
       success("help", data, json);
       if (!json) console.log(renderHelp(data));
       return;
@@ -669,6 +669,6 @@ async function mainOnTarget(argv) {
       if (!noSound && !dryRun && data.sent === true && !data.sound.played) console.error(`codexteer: Input was accepted, but the sound could not be played (${data.sound.reason}).`);
     }
   } catch (error) {
-    fail(error, json);
+    fail(error, json, argv);
   }
 }
