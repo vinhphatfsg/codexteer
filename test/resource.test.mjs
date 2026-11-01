@@ -64,8 +64,8 @@ test("unknown remote execution retains its lease instead of allowing a competing
 test("a bound supervisor's resource commands require its --thread and the same supervisor state as run", async t => {
   const { spawnSync } = await import("node:child_process"), { existsSync } = await import("node:fs");
   const { registerSupervisor, controlSupervisor } = await import("../src/supervision.mjs");
-  const f = await fixture(t), THREAD = "33333333-3333-4333-8333-333333333333", OTHER = "44444444-4444-4444-8444-444444444444";
-  const SESSION = "55555555-5555-4555-8555-555555555555", STRANGER = "66666666-6666-4666-8666-666666666666";
+  const f = await fixture(t), THREAD = "33333333-3333-4333-8333-333333333333", OTHER = "11111111-1111-4111-8111-000000000044";
+  const SESSION = "22222222-2222-4222-8222-000000000055", STRANGER = "22222222-2222-4222-8222-000000000066";
   const cli = args => { const r = spawnSync(process.execPath, ["bin/codexteer.mjs", "--json", ...args], { encoding: "utf8", env: { ...process.env, CODEX_HOME: f.home } }); return { status: r.status, ...JSON.parse(r.stdout) }; };
   const marker = `${f.home}/ran`, run = [process.execPath, "-e", "require('fs').writeFileSync(process.argv[1],'x')", marker];
   const commands = token => ({ acquire: ["acquire", "lock", "--owner", "sup"], renew: ["renew", "lock", "--token", token], release: ["release", "lock", "--token", token], status: ["status", "lock"], list: ["list"], run: ["run", "other-lock", "--owner", "sup", "--", ...run] });
