@@ -160,6 +160,29 @@ test("unknown initial creation is journaled and only exact persisted input relea
   assert.equal(next.delivery_status, "accepted"); assert.equal(calls.filter(row => row.method === "turn/start").length, 2);
 });
 
+test("only the user's noted resolution releases an unconfirmed delivery; history absence and supervisors cannot", async t => {
+  const { execFile } = await import("node:child_process"), { promisify } = await import("node:util"), { readRecord } = await import("../src/store.mjs"), { reconcileMessages } = await import("../src/journal.mjs");
+  const storage = await profile(t), calls = [], sid = "aaaaaaaa-aaaa-4aaa-8aaa-000000000006";
+  let failure;
+  try { await createDesktopCloudTask(config, "initial", {}, { ...storage, environments: async () => ({ environments: [{ id: config, name: "Fixture" }] }), connect: async () => client(calls, () => Object.assign(Error("lost"), { uncertain: true })) }); } catch (error) { failure = error; }
+  const blocked = () => assert.rejects(sendDesktopCloudInput(id, "next", { newTurn: true }, { ...storage, connect: () => assert.fail("pending must block") }), error => error.code === "DESKTOP_CLOUD_DELIVERY_PENDING" && error.existing_message_id === failure.message_id);
+  await blocked();
+  const absent = { discover: async () => ({ paths: { socket: "fixture" }, state: { codex_steer_protocol: 1 } }), connect: async () => ({ close() {}, request: async () => ({ thread: metadata() }) }) };
+  assert.equal((await reconcileMessages(id, failure.message_id, storage, absent))[0].verification.status, "not_observed"); await blocked();
+  await registerSupervisor(id, sid, { ...storage, connection: "desktop-cloud" });
+  const cli = async (...args) => { let result; try { result = await promisify(execFile)(process.execPath, [new URL("../bin/codexteer.mjs", import.meta.url).pathname, ...args, "--json"], { env: { ...process.env, HOME: storage.home, CODEX_HOME: storage.home, PATH: "/no-official-cli" } }); } catch (error) { result = error; } return JSON.parse(result.stdout); };
+  const resolve = ["history", "mark", id, failure.message_id, "--resolve-unknown"], note = "Not visible in Desktop; the user will decide whether to resend";
+  assert.equal((await cli("--supervisor", sid, ...resolve, "--note", note)).error.code, "SUPERVISOR_CONTROL_FORBIDDEN");
+  assert.equal((await cli(...resolve)).error.code, "DESKTOP_CLOUD_OPTIONS_INVALID");
+  await blocked();
+  const resolved = await cli(...resolve, "--note", note);
+  assert.equal(resolved.ok, true); assert.equal(resolved.data.delivery_status, "unknown"); assert.equal(resolved.data.resolution.note, note); assert.equal(resolved.data.resolution.by, "user"); assert(Date.parse(resolved.data.resolution.at));
+  const record = await readRecord("desktop-cloud-sends", failure.message_id, storage);
+  assert.equal(record.delivery_status, "unknown"); assert.deepEqual(record.resolution, resolved.data.resolution);
+  const next = await sendDesktopCloudInput(id, "next", { newTurn: true }, { ...storage, connect: async () => client(calls) });
+  assert.equal(next.delivery_status, "accepted"); assert.equal(calls.filter(row => row.method === "turn/start").length, 2);
+});
+
 test("Desktop Cloud doctor permits startup before registration but rejects another active supervisor", async t => {
   const { mkdir, writeFile } = await import("node:fs/promises"), { execFile } = await import("node:child_process"), { promisify } = await import("node:util");
   const { home } = await profile(t), bin = path.join(home, "bin"), run = promisify(execFile), sid = "aaaaaaaa-aaaa-4aaa-8aaa-000000000004";

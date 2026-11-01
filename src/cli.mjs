@@ -66,7 +66,7 @@ export function fail(error, json) {
     if (error.execution_environment === "cloud" || (typeof error.code === "string" && error.code.startsWith("DESKTOP_CLOUD_"))) {
       // Recovery metadata must survive an uncertain submission or a stale
       // on-disk receipt. Never print the child error, prompt, or diagnostics.
-      for (const key of ["creation_status", "submission_status", "delivery_status", "attempt_id", "receipt_path", "existing_attempt_id", "existing_receipt_path", "task_id", "thread_id", "url"]) {
+      for (const key of ["creation_status", "submission_status", "delivery_status", "attempt_id", "receipt_path", "existing_message_id", "existing_attempt_id", "existing_receipt_path", "task_id", "thread_id", "url"]) {
         if (typeof error[key] === "string") console.error(`${key}: ${JSON.stringify(error[key])}`);
       }
       if (error.receipt_update_required) console.error("receipt_update_required: true");

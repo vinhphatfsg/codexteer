@@ -52,8 +52,8 @@ export async function sendDesktopCloudInput(target, text, { dryRun = false, newT
   const plan = { thread_id: id, deep_link: desktopCloudLink(id), client_message_id: clientMessageId, backend: "desktop-cloud", connection_mode: "desktop-cloud", delivery_action: newTurn ? "new-turn" : "steer", dry_run: dryRun, message_characters: [...text].length };
   if (dryRun) return { ...plan, sent: false, delivery_status: "not_sent" };
   return withStoreLock(`desktop-cloud-send-${id}`, async () => {
-    const pending = (await listRecords("desktop-cloud-sends", storage)).find(row => row.thread_id === id && row.delivery_status === "unknown");
-    if (pending) throw failure("An earlier Desktop Cloud delivery is unknown. Inspect history; it must not be replayed automatically.", "DESKTOP_CLOUD_DELIVERY_PENDING");
+    const pending = (await listRecords("desktop-cloud-sends", storage)).find(row => row.thread_id === id && row.delivery_status === "unknown" && !row.resolution);
+    if (pending) throw Object.assign(failure(`An earlier Desktop Cloud delivery is unknown and is never replayed automatically. Run history check ${id} ${pending.client_message_id}; if it stays unconfirmed, the user (not a supervisor) can release it with history mark ${id} ${pending.client_message_id} --resolve-unknown --note TEXT.`, "DESKTOP_CLOUD_DELIVERY_PENDING"), { existing_message_id: pending.client_message_id });
     let client, dispatching = false, receipt = { ...plan, prompt_sha256: hash(text), sent: false, delivery_status: "not_sent" };
     const save = () => writeRecord("desktop-cloud-sends", clientMessageId, receipt, storage);
     try {
@@ -94,5 +94,13 @@ export async function confirmDesktopCloudDelivery(entry, verification, storage =
     const receipt = await readRecord("desktop-cloud-sends", entry.client_message_id, storage);
     if (!receipt || receipt.thread_id !== id || receipt.prompt_sha256 !== hash(entry.wire_text) || receipt.delivery_status === "not_sent") return;
     await writeRecord("desktop-cloud-sends", entry.client_message_id, { ...receipt, delivery_status: "accepted", sent: true, turn_id: verification.turn_id, delivery_verification: "stored" }, storage);
+  }, storage);
+}
+export async function resolveDesktopCloudDelivery(target, clientMessageId, resolution, storage = {}) {
+  const id = desktopCloudId(target);
+  return withStoreLock(`desktop-cloud-send-${id}`, async () => {
+    const receipt = await readRecord("desktop-cloud-sends", clientMessageId, storage);
+    if (receipt?.thread_id !== id || receipt.delivery_status !== "unknown" || receipt.resolution) throw failure("This message has no unresolved unknown Desktop Cloud delivery.");
+    const updated = { ...receipt, resolution }; await writeRecord("desktop-cloud-sends", clientMessageId, updated, storage); return updated;
   }, storage);
 }

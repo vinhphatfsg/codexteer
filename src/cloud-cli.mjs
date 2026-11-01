@@ -14,7 +14,7 @@ import { notificationOptions } from "./notify.mjs";
 import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
 import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, assertSupervisorRegistration, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
-import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, listInstructions } from "./journal.mjs";
+import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, resolveUnknownDelivery, listInstructions } from "./journal.mjs";
 import { createCloudTask, cloudTaskDiff, listCloudTasks, cloudCreationReceipt } from "./cloud.mjs";
 import { cloudSendReceipt, reconcileCloudSend } from "./cloud-observe.mjs";
 import { cloudEnvironments } from "./cloud-api.mjs";
@@ -171,11 +171,12 @@ export async function mainCloud(argv) {
       const settings = { taskId: id };
       output(`history.${action}`, action === "show" ? await cloudSendReceipt(attempt, settings) : await reconcileCloudSend(attempt, settings)); return;
     }
-    const includeText = flag(args, "--include-text"), pending = flag(args, "--pending");
-    const report = action === "mark" ? { status: option(args, "--status"), note: option(args, "--note"), evidence: repeated(args, "--evidence"), by: option(args, "--by", "local") } : {};
+    const includeText = flag(args, "--include-text"), pending = flag(args, "--pending"), resolveUnknown = desktopCloud && action === "mark" && flag(args, "--resolve-unknown");
+    const report = resolveUnknown ? { note: option(args, "--note") } : action === "mark" ? { status: option(args, "--status"), note: option(args, "--note"), evidence: repeated(args, "--evidence"), by: option(args, "--by", "local") } : {};
     if (!args[0] || args.length > 2 || !["list", "show", "check", "mark"].includes(action) || (["show", "mark"].includes(action) && !args[1]) || (action === "list" && args[1])) throw failure("Invalid history arguments.");
+    if (resolveUnknown && supervisor) throw failure("A supervisor cannot release its own unknown delivery. The user must run this without --supervisor.", "SUPERVISOR_CONTROL_FORBIDDEN");
     const id = await bound(args[0]); const data = action === "list" ? await listMessages(id, { includeText, pending }) : action === "show" ? messageSummary(await getMessage(id, args[1]), includeText)
-      : action === "check" ? await reconcileMessages(id, args[1], { includeText }, dependencies) : await markMessage(id, args[1], report);
+      : action === "check" ? await reconcileMessages(id, args[1], { includeText }, dependencies) : resolveUnknown ? await resolveUnknownDelivery(id, args[1], report) : await markMessage(id, args[1], report);
     output(`history.${action}`, data); return;
   }
   if (command === "instructions") {

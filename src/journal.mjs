@@ -1,5 +1,5 @@
 import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
-import { confirmDesktopCloudDelivery } from "./desktop-cloud.mjs";
+import { confirmDesktopCloudDelivery, resolveDesktopCloudDelivery } from "./desktop-cloud.mjs";
 import { desktopCloudConnection } from "./desktop-cloud-api.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { sendAppServerMessage } from "./app-server.mjs";
@@ -151,6 +151,20 @@ export async function markMessage(threadInput, id, { status, note, evidence = []
     const entry = await getMessage(threadId, id, options);
     const response = { status, note, evidence, reported_by: by, reported_at: new Date().toISOString(), basis: "explicit_report" };
     const updated = { ...entry, response, reports: [...entry.reports ?? [], response], updated_at: response.reported_at };
+    await writeRecord("messages", id, updated, options);
+    return messageSummary(updated);
+  }, options);
+}
+
+// Absence from history never proves non-delivery, so a user's note releases the
+// send reservation while delivery_status stays unknown.
+export async function resolveUnknownDelivery(threadInput, id, { note, ...options }) {
+  const threadId = normalizeTaskId(threadInput);
+  if (!isDesktopCloudTask(threadId) || typeof note !== "string" || !note.trim()) throw Object.assign(new Error("--resolve-unknown applies to a Desktop Cloud message and requires a non-empty --note."), { code: "DESKTOP_CLOUD_OPTIONS_INVALID" });
+  return withStoreLock(`message-${threadId}`, async () => {
+    const entry = await getMessage(threadId, id, options), resolution = { by: "user", at: new Date().toISOString(), note };
+    await resolveDesktopCloudDelivery(threadId, entry.client_message_id, resolution, options);
+    const updated = { ...entry, resolution, updated_at: resolution.at };
     await writeRecord("messages", id, updated, options);
     return messageSummary(updated);
   }, options);
