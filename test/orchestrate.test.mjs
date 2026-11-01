@@ -38,6 +38,7 @@ test("orchestration preserves the goal and emits project operations and bound ch
   assert.ok(operationLines.some(line => line.includes(" thread create --project <PROJECT-ID> ")));
   assert.ok(operationLines.every(line => !line.includes("--supervisor")), "Project operations cannot borrow a child's supervisor ID");
   assert.ok(childPreparation(data.prompt).includes(ORCHESTRATED_SUPERVISION_POLICY));
+  for (const rule of ["prepared-command --connection shared supervise stop <THREAD-ID> --json", "ユーザーの確定要件ではありません"]) assert.ok(data.prompt.includes(rule), rule);
 });
 
 test("PATH generation is deterministic, offline and does not create any state", t => {
@@ -138,6 +139,7 @@ test("a saved project prompt creates a bound child prompt after the original sou
   assert.equal(childData.deployment.reused, true);
   assert.equal(childData.supervisor.owner, "codex");
   assert.ok(childData.prompt.includes(ORCHESTRATED_SUPERVISION_POLICY));
+  for (const rule of [/--new-turn[^。]*監督方針で再開/, /--new-turnでの再開[^。]*idle/, /監督方針の終了条件/, /監視の終了条件[^。]*全体の完了/]) assert.match(childData.prompt, rule, "The child prompt carries its own resume delegation and end condition");
   const bootstrap = childData.prompt.split("\n").find(line => line.includes(` supervise register ${ID} `));
   assert.ok(bootstrap.includes(`--supervisor '${childData.supervisor.session_id}'`));
   const registered = spawnSync("/bin/sh", ["-c", bootstrap], receiving);
@@ -149,6 +151,9 @@ test("a saved project prompt creates a bound child prompt after the original sou
   assert.equal(control(["pause"]).status, 0);
   assert.equal(spawnSync("/bin/sh", ["-c", bootstrap], receiving).status, 0);
   assert.equal(JSON.parse(control(["status"]).stdout).data.state, "paused", "Re-registration must not unpause a child");
+  const stop = data.prompt.split("\n").find(line => line.endsWith(" supervise stop <THREAD-ID> --json")).replace("<THREAD-ID>", ID);
+  assert.equal(JSON.parse(spawnSync("/bin/sh", ["-c", stop], receiving).stdout).ok, true);
+  assert.equal(JSON.parse(control(["status"]).stdout).data.state, "stopped", "The completion step ends the child's supervision");
   assert.equal(existsSync(receiving.env.CODEX_HOME), false);
 });
 
