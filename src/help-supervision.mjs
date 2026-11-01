@@ -2,13 +2,13 @@ import { NODE_VERSION_MISMATCH, OPTIONS_INVALID, STORE_UNSAFE, SUPERVISOR_NOT_RE
 const THREAD_OPTION = { name: "THREAD", text: "対象タスク。ローカルUUID、codex://threads/<UUID>[?hostId=...]、Cloudのtask_ IDか公式タスクURL、Desktop Cloudのdurable_ IDかhostId=durableのリンク。正規化して本文に埋め込む。" };
 const MESSAGE_OPTION = { name: "MESSAGE", default: "標準方針", text: "監督方針。指定すると標準方針全体を置き換える。引用して一つの引数で渡す。空白だけはINVALID_SUPERVISION_POLICY、--で始まる文はOPTIONS_INVALID。" };
 const AGENT_IDENTITY = "監督IDのowner（register --owner）と本文のsend --source（claudeはclaude-code）にもなる。claude/codex以外は生成前にOPTIONS_INVALIDで拒否する。";
-const CONNECTION_OPTION = { name: "--connection shared|desktop|cloud|desktop-cloud", default: "shared", text: "本文の全コマンドに埋め込む接続。sharedは既存wrapper、desktopは既存の共有制御ソケットで観測専用。省略時、task_ IDはcloud、durable_ IDはdesktop-cloudを選び、同じ監督・送信・観測を使う。明示値がIDと合わなければ拒否し、切り替えない。詳細はhelp connection・help cloud。" };
-const PATH_CLI_TEXT = "本文のコマンドをPATH上のcodexteerにする。CLIの保存・Nodeの固定・CODEX_HOMEの埋め込みをせず、各コマンドは実行環境のPATHとCODEX_HOMEを使う。CLIの更新は次の実行から反映される。";
+const CONNECTION_OPTION = { name: "--connection shared|desktop|cloud|desktop-cloud", default: "shared", text: "本文の実行コマンドに固定する接続。sharedは既存wrapper、desktopは既存の共有制御ソケットで観測専用。省略時、task_ IDはcloud、durable_ IDはdesktop-cloudを選び、同じ監督・送信・観測を使う。明示値がIDと合わなければ拒否し、切り替えない。詳細はhelp connection・help cloud。" };
+const PATH_CLI_TEXT = "本文のコマンドをPATH上のcodexteerにする。CLIの保存・起動ファイルの生成・Nodeの固定・CODEX_HOMEの埋め込みをせず、各コマンドは実行環境のPATHとCODEX_HOMEを使う。CLIの更新は次の実行から反映される。";
 const AGENT_ARGS_OPTION = { name: "-- <AGENT-ARGS...>", text: "最初の -- 以降はすべて起動するエージェントの引数。codexteerは--help/--version/--jsonも解釈しない。MESSAGE/GOALとcodexteer自身のオプションは -- より前に置く。" };
 const REMOTE_OPTIONS = [
   { name: "--host HOST-ID", text: "リモートの対象を選ぶ。hostId付きリンクでも選べ、両方が違えばHOST_MISMATCH。リモートでは--connectionはsharedだけ。詳細はhelp remote。" },
   { name: "--remote-transport native|control|paired", default: "native", text: "nativeは観測専用の監督を生成する。controlはRemote Control v3で既存activeターンへexpectedTurnId付きで介入する（help remote-control）。pairedは専用鍵の経路（help remote-device）。" },
-  { name: "--context-thread LOCAL-THREAD", default: "CODEX_THREAD_ID", text: "ローカルの呼出し元タスク。nativeでは必須で、どちらもなければREMOTE_CONTEXT_REQUIRED。値があれば全コマンドに埋め込む。" },
+  { name: "--context-thread LOCAL-THREAD", default: "CODEX_THREAD_ID", text: "ローカルの呼出し元タスク。nativeでは必須で、どちらもなければREMOTE_CONTEXT_REQUIRED。値があれば実行コマンドに固定する。" },
 ];
 const PROJECT_OPTION = { name: "--project ID|NAME", text: "必須。対象プロジェクトのIDか完全一致名。生成時は照合せず、本文を受けたオーケストレーターがprojects listで照合する。" };
 const GOAL_TEXT = "達成したい目標。引用した一つの引数か、標準入力を読む -。改行・引用符・プレースホルダーは評価せずそのまま本文に入れる。";
@@ -68,7 +68,7 @@ const LAUNCH_NOTES = [
   "起動側はDesktopへ接続しない。接続と対象の確認は、起動したエージェントが本文の開始手順で行う。",
 ];
 const SESSION_NOTES = [
-  "生成のたびに新しい監督ID（--supervisor）を作り、--connectionとともに本文の全コマンドへ埋め込む。",
+  "生成のたびに新しい監督ID（--supervisor）を作り、--connectionとともに本文の実行コマンドへ固定する。固定済みのオプションを重ねて指定するとOPTIONS_INVALIDで止まる。",
   "superviseは起動前にregisterし、エージェント終了時にstopする。supervise promptは未登録で、受け取った側が本文のregisterを実行して開始する。",
   "同じ監督IDの再registerは状態を変えない（pausedは解除しない）。停止済みIDは復活しない。",
   "pauseは送信だけを止め、read/watchは続けられる。resumeで送信を再開する。stopはその監督IDの観測と送信を止める。",
@@ -83,18 +83,20 @@ const SESSION_NOTES = [
   "MESSAGEを指定しても、対象ID・実行コマンド・開始/観測/介入/停止の手順は本文に残る。手順はhelp monitorと共通。",
   "MESSAGEは改行等もそのまま本文に入れ、プレースホルダー展開やシェル実行はしない。今回の生成だけに使い、既定設定や保存済みCLIは変えない。",
   "controlの本文は既存activeターンへの介入だけで、new-turn・UI送信・自動再送はしない。端末鍵を使えなければ接続前に止まる（help remote-control）。",
-  "リモートの本文は全コマンドで同じ--host・--remote-transport・--context-threadを保持する。",
+  "リモートの本文は--host・--remote-transport・--context-threadも実行コマンドに固定する。",
 ];
 const SAVED_CLI_NOTES = [
   "既定ではCLI一式と依存をCODEX_HOME/codex-steer/runtimes/<version>-<sha256>へ検証して保存し、そのコピーを本文のコマンドに使う。",
   "同じ内容の保存先があれば検証して再利用する。既存のコピーは上書き・自動削除しない。",
   "保存・検証に失敗すると本文を出力せず、エージェントも起動しない。",
-  "本文の各コマンドは、生成時に検証したCODEX_HOMEの実体パス、Nodeの実体の絶対パス、--require-node-versionを含む。",
+  "本文の実行コマンドは起動ファイルCODEX_HOME/codex-steer/bin/codexteer-s-<hash>（orchestrateはcodexteer-p-<hash>）のパス1語。生成時に検証したCODEX_HOMEの実体パス、Nodeの実体の絶対パス、--require-node-version、保存したCLI、監督ID・接続を固定する。",
+  "起動ファイルは本人専用（0700）のシェルスクリプトで、名前は内容のハッシュ。同じ内容なら検証して再利用し、上書きしない。生成時に一度実行して使えることを確かめる。",
   "監督役のCODEX_HOMEや作業ディレクトリが違っても、生成元の接続先と履歴を使う。別のプロファイルを監督するときはそこで生成し直す。",
   "Node本体はコピーしない。版が変わるとNODE_VERSION_MISMATCHで操作前に止まる。同じ版のNodeの差し替えや共有ライブラリは固定しない。",
   "元のnpxキャッシュやチェックアウトを更新・削除しても、保存したコピーを使い続ける。",
   "監督中は同じPCで、保存したコピーと元のNodeを残す。使えなくなったら介入を止めて報告し、意図した環境から生成し直す。",
-  "本文を受けたAIは、ヘルプ中のcodexteerを本文の実行コマンド（先頭のCODEX_HOME指定・引用・オプションを含む）に置き換える。",
+  "本文を受けたAIは、ヘルプ中のcodexteerを本文の実行コマンドに置き換え、固定済みのオプションを付け直さない。",
+  "以前の版が生成した本文の長い実行コマンド（CODEX_HOME指定から始まる形式）も、そのまま使える。",
 ];
 
 const ORCH_SHARED_NOTES = [
@@ -159,7 +161,7 @@ export const topics = {
       { name: "--use-path-cli", text: `${PATH_CLI_TEXT}--supervisor・--connectionと監督制御は維持する。生成時は何も書き込まない。` },
       ...REMOTE_OPTIONS,
     ],
-    returns: "通常は本文だけを標準出力へ返す。--json: data.thread_id、data.prompt、data.cli_mode（saved|path）、data.deployment（codex_home・directory・wrapper_path・version・sha256・reused）、data.node（path・version）、data.supervisor（session_id・owner・connection）。--use-path-cliではdeploymentとnodeはnull。リモートではhost_id・remote_transport・observation_onlyも返す。",
+    returns: "通常は本文だけを標準出力へ返す。--json: data.thread_id、data.prompt、data.command（本文の実行コマンド。既定は起動ファイルのパス）、data.cli_mode（saved|path）、data.deployment（codex_home・directory・wrapper_path・version・sha256・reused）、data.node（path・version）、data.supervisor（session_id・owner・connection）。--use-path-cliではdeploymentとnodeはnull。リモートではhost_id・remote_transport・observation_onlyも返す。",
     errors: [...GENERATION_ERRORS, ...SAVED_CLI_ERRORS, ...SESSION_ERRORS],
     examples: [
       "codexteer supervise prompt <THREAD>",
@@ -224,7 +226,7 @@ export const topics = {
       { name: "--agent claude|codex", default: "なし（null）", text: "子の監督IDのownerと送信元のCLI識別。エージェントは起動しない。省略時は受け取ったオーケストレーターが子の生成前に<AGENT>を選ぶ。" },
       { name: "--use-path-cli", text: `${PATH_CLI_TEXT}生成時は何も書き込まない。` },
     ],
-    returns: "通常は本文だけ（末尾改行付き）。--json: command=orchestrate.prompt、data.project_selector（開始時に照合する指定文字列で、所属確認ではない）、goal、agent（省略時null）、prompt、connection、cli_mode、deployment、node。--use-path-cliではdeploymentとnodeはnull。pairedリモートではhost_id・remote_transportも返す。",
+    returns: "通常は本文だけ（末尾改行付き）。--json: command=orchestrate.prompt、data.project_selector（開始時に照合する指定文字列で、所属確認ではない）、goal、agent（省略時null）、prompt、command（プロジェクト用の実行コマンド）、connection、cli_mode、deployment、node。--use-path-cliではdeploymentとnodeはnull。pairedリモートではhost_id・remote_transportも返す。",
     errors: [...ORCHESTRATION_ERRORS, ...SAVED_CLI_ERRORS],
     examples: [
       "codexteer orchestrate prompt --project 'My Project' '利用者が動作を確認し、変更を指示できる状態にする'",
