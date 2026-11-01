@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { normalizeTaskId } from "./task-id.mjs";
 import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
 import { collectEvidence } from "./evidence.mjs";
-import { decodeCursor, digest } from "./observe.mjs";
+import { digest } from "./observe.mjs";
+import { parseCursor } from "./cursor.mjs";
 import { verifyCheckpoint } from "./checkpoint.mjs";
 
 const failure = (message, code) => Object.assign(new Error(message), { code });
@@ -33,7 +34,7 @@ export async function createFinding(threadInput, { key, title, condition, eviden
   const threadId = normalizeTaskId(threadInput);
   if (typeof key !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,150}$/.test(key)) throw failure("--key requires a stable short identifier for this concern.", "FINDING_INVALID");
   text(title, "--title", 240); text(condition, "--condition");
-  const refs = await collectEvidence(evidence), observed = basedOn ? decodeCursor(basedOn, threadId) : null;
+  const refs = await collectEvidence(evidence), observed = basedOn ? parseCursor(basedOn, threadId) : null;
   return withStoreLock(`message-${threadId}`, async () => {
     const existing = (await listRecords("findings", storage)).find(record => record?.thread_id === threadId && record.key === key);
     if (existing) return { ...await findingStatus(threadId, existing.id, storage), reused: true };
@@ -130,7 +131,7 @@ export async function reopenFinding(threadInput, id, { reason, evidence, basedOn
   const threadId = normalizeTaskId(threadInput);
   text(reason, "--reason"); if (condition !== undefined) text(condition, "--condition");
   const refs = evidence === undefined ? undefined : await collectEvidence(evidence);
-  const observed = basedOn === undefined ? undefined : decodeCursor(basedOn, threadId);
+  const observed = basedOn === undefined ? undefined : parseCursor(basedOn, threadId);
   return changeFinding(threadId, id, async record => {
     await knownDelivery(record, storage);
     const updated = { ...record, condition: condition ?? record.condition, evidence: refs ?? record.evidence, based_on: basedOn ?? record.based_on, user_revision: observed?.user_revision ?? record.user_revision };

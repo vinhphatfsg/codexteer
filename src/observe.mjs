@@ -8,41 +8,12 @@ import { discoverRuntime } from "./runtime.mjs";
 import { RpcClient, RpcFailure } from "./rpc.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 import { assertSupervisor, recordSupervisorFailure, recordSupervisorObservation } from "./supervision.mjs";
-import { targetHost, hostFields, remoteTransport } from "./target.mjs";
+import { hostFields } from "./target.mjs";
+import { encodeCursor, parseCursor, invalidCursor } from "./cursor.mjs";
 
 export const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const mutableStatus = new Set(["inProgress", "running", "pending"]);
 const protocolFailure = message => new RpcFailure(message, { code: "PROTOCOL_ERROR" });
-export function invalidCursor() { return Object.assign(new Error("Cursor is invalid or history changed. Read again without --since."), { code: "STALE_CURSOR" }); }
-
-export function decodeCursor(value, threadId) {
-  try {
-    if (typeof value !== "string" || value.length > 1024 * 1024) throw invalidCursor();
-    const c = JSON.parse(Buffer.from(value, "base64url").toString());
-    if ((c.host_id ?? "local") !== targetHost()) throw invalidCursor();
-    if (targetHost() !== "local" && (c.remote_transport ?? "native") !== remoteTransport()) throw invalidCursor();
-    if (c?.v === 2) {
-      const hash = x => x === null || (typeof x === "string" && /^[a-f0-9]{64}$/.test(x));
-      const pos = x => x === null || (typeof x === "string" && x.length < 16384);
-      if (c.thread_id !== threadId || typeof c.state !== "string" || !Array.isArray(c.turns) || !Array.isArray(c.groups)
-        || !c.turns.every(t => typeof t.id === "string" && typeof t.status === "string")
-        || new Set(c.turns.map(t => t.id)).size !== c.turns.length
-        || !c.head || !pos(c.head.cursor) || !hash(c.head.hash) || !(c.head.id === null || typeof c.head.id === "string")
-        || !(c.head.turn_id === null || typeof c.head.turn_id === "string") || (c.head.id !== null && c.head.cursor === null)
-        || !(c.last_public === null || typeof c.last_public === "string")
-        || !(c.active_turn_id === null || typeof c.active_turn_id === "string") || typeof c.pending !== "boolean"
-        || !c.groups.every(g => pos(g.cursor) && (g.turn_id === null || typeof g.turn_id === "string") && Number.isInteger(g.count) && g.count > 0 && g.count <= 100
-          && Array.isArray(g.items) && g.items.every(i => Number.isInteger(i.index) && i.index >= 0 && i.index < g.count && typeof i.id === "string" && typeof i.turn_id === "string" && hash(i.hash) && ["running", "tail"].includes(i.mode)))) throw invalidCursor();
-      return c;
-    }
-    if (c.v !== 1 || c.thread_id !== threadId || !Number.isSafeInteger(c.count) || c.count < 0 || !Array.isArray(c.open)
-      || !c.open.every(x => Number.isSafeInteger(x.index) && x.index >= 0 && x.index < c.count && typeof x.hash === "string")
-      || new Set(c.open.map(x => x.index)).size !== c.open.length || typeof c.prefix !== "string"
-      || !(c.latest_turn_id === undefined || c.latest_turn_id === null || (typeof c.latest_turn_id === "string" && c.latest_turn_id))) throw invalidCursor();
-    return c;
-  } catch { throw invalidCursor(); }
-}
-
 export function project(item, turnId) {
   if (!item?.id || ["reasoning", "hookPrompt"].includes(item.type)) return null;
   const event = { id: item.id, turn_id: turnId, type: item.type };
@@ -96,7 +67,7 @@ export function trimEvent(event, maxChars, includeOutput) {
 
 export function readSnapshot(thread, { since, limit = 50, maxChars = 2000, includeOutput = false } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isInteger(maxChars) || maxChars < 100 || maxChars > 20000) throw Object.assign(new Error("Invalid read limit or max-chars."), { code: "OPTIONS_INVALID" });
-  const s = threadSnapshot(thread), old = since ? decodeCursor(since, thread.id) : null;
+  const s = threadSnapshot(thread), old = since ? parseCursor(since, thread.id) : null;
   if (old && old.v !== 1) throw invalidCursor();
   if (old && (old.count > s.events.length || prefixHash(s.hashes, old.count, old.open) !== old.prefix)) throw invalidCursor();
   const updates = old ? old.open.filter(x => s.hashes[x.index] !== x.hash).map(x => x.index) : [];
@@ -109,8 +80,8 @@ export function readSnapshot(thread, { since, limit = 50, maxChars = 2000, inclu
     if (pending || mutableStatus.has(s.events[i].status) || i === count - 1) open.push({ index: i, hash: pending?.hash ?? s.hashes[i] });
   }
   const stateHash = digest(s.state);
-  const cursor = Buffer.from(JSON.stringify({ v: 1, ...hostFields(), thread_id: thread.id, count, open, prefix: prefixHash(s.hashes, count, open), state: stateHash,
-    active_turn_id: s.state.active_turn_id, latest_turn_id: thread.turns?.at(-1)?.id ?? null, user_revision: s.user_revision })).toString("base64url");
+  const cursor = encodeCursor({ v: 1, count, open, prefix: prefixHash(s.hashes, count, open), state: stateHash,
+    active_turn_id: s.state.active_turn_id, latest_turn_id: thread.turns?.at(-1)?.id ?? null, user_revision: s.user_revision }, thread.id);
   return { ...s.state, events: selected.map(i => ({ ...trimEvent(s.events[i], maxChars, includeOutput), change: old && i < old.count ? "updated" : "added" })),
     running_commands: s.events.filter(e => e.type === "commandExecution" && mutableStatus.has(e.status)).map(e => trimEvent(e, maxChars, includeOutput)),
     ...hostFields(), cursor, changed: !old || selected.length > 0 || old.state !== stateHash, has_more: updates.length + added.length > selected.length,
@@ -136,7 +107,7 @@ export async function fetchThread(client, threadId, metadata) {
 }
 
 async function readAttempt(client, threadId, options) {
-  const old = options.since ? decodeCursor(options.since, threadId) : null;
+  const old = options.since ? parseCursor(options.since, threadId) : null;
   if (options.fullHistory && old?.v === 2) throw Object.assign(new Error("A v2 cursor uses paged history. Omit --full-history, or read --full-history without --since to start a full check."), { code: "OPTIONS_INVALID" });
   const { thread } = await client.request("thread/read", { threadId, includeTurns: false });
   if (thread?.id !== threadId || !Array.isArray(thread.turns)) throw protocolFailure("App Server returned invalid task metadata.");
@@ -168,7 +139,7 @@ export async function observeThread(threadInput, options = {}, { discover = disc
     if (connect === RpcClient.connect) connect = cloud.connect;
   }
   if (options.supervisor) await assertSupervisor(threadId, options.supervisor, { connection: options.connection });
-  if (options.since) decodeCursor(options.since, threadId);
+  if (options.since) parseCursor(options.since, threadId);
   const { until = "change", timeoutMs = 30000, pollMs = 1000 } = options;
   if (options.watch && (!["change", "idle", "attention"].includes(until) || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 60000 || !Number.isInteger(pollMs) || pollMs < 250 || pollMs > 10000)) throw Object.assign(new Error("Invalid watch condition, timeout-ms or poll-ms."), { code: "OPTIONS_INVALID" });
   let client;

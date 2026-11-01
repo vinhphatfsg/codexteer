@@ -4,7 +4,8 @@ import { mkdtemp, rm, writeFile, chmod, mkdir, readFile } from "node:fs/promises
 import { spawnSync } from "node:child_process";
 import { parseThreadTarget, normalizeThreadId, threadDeepLink } from "../src/thread-id.mjs";
 import { withTarget, targetHost } from "../src/target.mjs";
-import { readSnapshot, decodeCursor, observeThread } from "../src/observe.mjs";
+import { readSnapshot, observeThread } from "../src/observe.mjs";
+import { parseCursor } from "../src/cursor.mjs";
 import { remoteReadClient, remoteObservationConnection, validateRemoteCatalog } from "../src/remote.mjs";
 import { registeredRemoteProjects } from "../src/projects.mjs";
 import { registerSupervisor, controlSupervisor, supervisorStatus, withSupervisedSend } from "../src/supervision.mjs";
@@ -55,9 +56,9 @@ test("same UUID on three hosts has separate cursors, supervisors and pause contr
   await writeRecord("messages", "message", { thread_id: ID, value: "local" }, { home });
   let remoteCursor;
   await withTarget(HOST, CALLER, async () => {
-    assert.throws(() => decodeCursor(localCursor, ID), { code: "STALE_CURSOR" });
+    assert.throws(() => parseCursor(localCursor, ID), { code: "STALE_CURSOR" });
     remoteCursor = readSnapshot(task()).cursor;
-    assert.equal(decodeCursor(remoteCursor, ID).host_id, HOST);
+    assert.equal(parseCursor(remoteCursor, ID).v, 1);
     assert.equal(await readRecord("messages", "message", { home }), null);
     await registerSupervisor(ID, session, { home });
     await controlSupervisor(ID, "pause", { home });
@@ -66,10 +67,10 @@ test("same UUID on three hosts has separate cursors, supervisors and pause contr
     await assert.rejects(withSupervisedSend(ID, session, () => assert.fail("must not send"), { home }), { code: "REMOTE_READ_ONLY" });
   });
   assert.equal((await supervisorStatus(ID, { home })).state, "active");
-  assert.throws(() => decodeCursor(remoteCursor, ID), { code: "STALE_CURSOR" });
+  assert.throws(() => parseCursor(remoteCursor, ID), { code: "STALE_CURSOR" });
   await withTarget("another", undefined, async () => {
     assert.equal((await supervisorStatus(ID, { home })).state, "unregistered");
-    assert.throws(() => decodeCursor(remoteCursor, ID), { code: "STALE_CURSOR" });
+    assert.throws(() => parseCursor(remoteCursor, ID), { code: "STALE_CURSOR" });
   });
 });
 

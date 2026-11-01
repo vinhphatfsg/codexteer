@@ -5,7 +5,8 @@ import { normalizeTaskId, isCloudTask, taskConnection } from "./task-id.mjs";
 import { cloudConnection } from "./cloud-connection.mjs";
 import { codexHome, discoverRuntime } from "./runtime.mjs";
 import { RpcClient } from "./rpc.mjs";
-import { decodeCursor, digest, readOnClient } from "./observe.mjs";
+import { digest, readOnClient } from "./observe.mjs";
+import { parseCursor } from "./cursor.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 import { assertSupervisor, recordSupervisorObservation, recordSupervisorFailure } from "./supervision.mjs";
 import { NotificationBuffer, notificationOptions } from "./notify.mjs";
@@ -76,7 +77,7 @@ export async function streamThread(threadInput, options, onChange, { discover = 
   }
 
   try {
-    if (cursor) initialStateHash = decodeCursor(cursor, threadId).state;
+    if (cursor) initialStateHash = parseCursor(cursor, threadId).state;
     while (!signal?.aborted) {
       let data;
       try { data = await read(); }

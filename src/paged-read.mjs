@@ -1,5 +1,5 @@
-import { digest, project, trimEvent, decodeCursor, invalidCursor } from "./observe.mjs";
-import { hostFields } from "./target.mjs";
+import { digest, project, trimEvent } from "./observe.mjs";
+import { encodeCursor, parseCursor, resolveTurns, invalidCursor } from "./cursor.mjs";
 
 const PAGE = 100;
 const running = new Set(["inProgress", "running", "pending"]);
@@ -67,24 +67,18 @@ function addGroup(groups, query, rows, lastPublic, consumed = rows.length) {
   if (tracked.length) groups.push({ cursor: query.cursor ?? null, turn_id: query.turnId ?? null, count: consumed, items: tracked });
 }
 
-function validateTurns(old, turns) {
-  if (old.turns.length > turns.length || old.turns.some((t, i) => t.id !== turns[i].id || (t.status !== turns[i].status && !running.has(t.status)))) throw invalidCursor();
-}
-
 function finish(state, cursor, events, commands, old, pending, omitted) {
-  Object.assign(cursor, hostFields());
   cursor.state = digest(state); cursor.active_turn_id = state.active_turn_id; cursor.pending = pending;
-  const encoded = Buffer.from(JSON.stringify(cursor)).toString("base64url");
-  if (encoded.length > 1024 * 1024) throw Object.assign(new Error("Too many in-progress items for a fast cursor. Use --full-history."), { code: "CURSOR_TOO_LARGE" });
-  return { ...state, events, running_commands: [...commands.values()], cursor: encoded, changed: !old || events.length > 0 || old.state !== cursor.state,
+  return { ...state, events, running_commands: [...commands.values()], cursor: encodeCursor(cursor, state.thread_id), changed: !old || events.length > 0 || old.state !== cursor.state,
     has_more: pending, omitted_older_events: omitted, history_scope: "tail-and-tracked-items", running_commands_complete: !pending, observed_at: new Date().toISOString() };
 }
 
 export async function readPaged(client, thread, { since, limit = 50, maxChars = 2000, includeOutput = false } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isInteger(maxChars) || maxChars < 100 || maxChars > 20000) throw Object.assign(new Error("Invalid read limit or max-chars."), { code: "OPTIONS_INVALID" });
-  const old = since ? decodeCursor(since, thread.id) : null;
-  if (old && old.v !== 2) throw invalidCursor();
+  const claim = since ? parseCursor(since, thread.id) : null;
+  if (claim && claim.v !== 2) throw invalidCursor();
   const turns = await turnMetadata(client, thread.id), state = stateOf(thread, turns), commands = new Map();
+  const old = claim && resolveTurns(claim, turns, thread.id);
   const clip = e => trimEvent(e, maxChars, includeOutput);
   const command = e => { if (e?.type === "commandExecution" && running.has(e.status)) commands.set(eventKey(e), clip(e)); };
   if (!old) {
@@ -136,7 +130,6 @@ export async function readPaged(client, thread, { since, limit = 50, maxChars = 
     return finish(state, cursor, events, commands, null, false, position ? null : Math.max(0, publicCount + turns.length - events.length));
   }
 
-  validateTurns(old, turns);
   const cursor = structuredClone(old), events = [], emitted = new Set(); let pending = false;
   const emit = (e, change) => {
     if (emitted.has(eventKey(e))) return true;
@@ -211,11 +204,11 @@ export async function readPaged(client, thread, { since, limit = 50, maxChars = 
 }
 
 export async function verifyPagedFreshness(client, threadId, encoded) {
-  const old = decodeCursor(encoded, threadId);
-  if (old.v !== 2 || old.pending) throw Object.assign(new Error("Read all pending changes before sending from this observation."), { code: "STALE_OBSERVATION" });
+  const claim = parseCursor(encoded, threadId);
+  if (claim.v !== 2 || claim.pending) throw Object.assign(new Error("Read all pending changes before sending from this observation."), { code: "STALE_OBSERVATION" });
   const { thread } = await client.request("thread/read", { threadId, includeTurns: false });
   if (thread?.id !== threadId) throw invalidCursor();
-  const turns = await turnMetadata(client, threadId); validateTurns(old, turns);
+  const turns = await turnMetadata(client, threadId), old = resolveTurns(claim, turns, threadId);
   // With orphaned turns both active IDs can be null even when a new turn
   // started. Pin the chronological tail as well, including empty new turns.
   if (turns.at(-1)?.id !== old.turns.at(-1)?.id || stateOf(thread, turns).active_turn_id !== old.active_turn_id) {
