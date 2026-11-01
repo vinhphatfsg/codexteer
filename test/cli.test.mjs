@@ -208,9 +208,11 @@ test("unknown option errors name at most three short tokens and never echo an in
   assert.equal(status, 1); assert.equal(result.error.code, "OPTIONS_INVALID"); assert.equal(result.error.help, "send");
   const [first, long, third] = result.error.unknown_options;
   assert.equal(result.error.unknown_options.length, 3); assert.equal(first, "--a"); assert.equal(third, "--b");
-  assert(long.startsWith("--fix x") && long.length <= 40 && !long.includes("\n"), long);
-  assert(!result.error.message.includes("private fixture tail") && !result.error.message.includes(body));
-  assert.match(result.error.message, /--a, --fix x+…, --b and 2 more\./);
+  assert.equal(long, "--fix");
+  assert(!result.error.message.includes("private fixture tail") && !result.error.message.includes("xxx"));
+  assert.match(result.error.message, /--a, --fix, --b and 2 more\./);
+  const capped = cli(["send", ID, `--${"y".repeat(100)}`, "--dry-run"], undefined, env).result.error.unknown_options[0];
+  assert.equal(capped, `--${"y".repeat(37)}…`);
   const text = spawnSync(process.execPath, ["bin/codexteer.mjs", "send", ID, "--kidn", "review", "hi"], { encoding: "utf8", env: { ...process.env, ...env } });
   assert.equal(text.status, 1); assert.match(text.stderr, /^codexteer: Unknown send option: --kidn\. /);
   const create = cli(["thread", "create", "--project", "x", "--modle", "y", "first"], undefined, env);
@@ -220,6 +222,21 @@ test("unknown option errors name at most three short tokens and never echo an in
   assert.equal(literal.result.error.code, "RUNTIME_UNAVAILABLE", "text after -- passes option validation and reaches the runtime");
   const orchestrate = cli(["orchestrate", "prompt", "--project", "x", "--gaol", "goal"], undefined, env);
   assert.equal(orchestrate.result.error.code, "OPTIONS_INVALID"); assert.deepEqual(orchestrate.result.error.unknown_options, ["--gaol"]);
+});
+
+test("an unknown option token is echoed only up to its first whitespace in text and JSON errors", t => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "ct-unknown-whitespace-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { CODEX_HOME: home };
+  for (const [token, word, leaked] of [["--secret-token-abc123\nsecond line of body", "--secret-token-abc123", "second"], ["--secret token with words", "--secret", "token"]]) {
+    const { status, result } = cli(["send", ID, token, "--dry-run"], undefined, env);
+    assert.equal(status, 1); assert.equal(result.error.code, "OPTIONS_INVALID");
+    assert.deepEqual(result.error.unknown_options, [word]);
+    assert(result.error.message.startsWith(`Unknown send option: ${word}. `) && !result.error.message.includes(leaked), result.error.message);
+    const text = spawnSync(process.execPath, ["bin/codexteer.mjs", "send", ID, token, "--dry-run"], { encoding: "utf8", env: { ...process.env, ...env } });
+    assert.equal(text.status, 1); assert.equal(text.stdout, "");
+    assert(text.stderr.startsWith(`codexteer: Unknown send option: ${word}. `) && !text.stderr.includes(leaked), text.stderr);
+  }
 });
 
 test("diff on a local task fails as invalid usage instead of being sent as a message", t => {

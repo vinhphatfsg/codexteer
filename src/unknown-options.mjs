@@ -1,10 +1,10 @@
 const SHOWN = 3, MAX_CHARS = 40;
 
 // Reported tokens may hold the start of an instruction body that was meant to
-// follow --, so only a short, single-line prefix of each is ever echoed.
+// follow --, so only the option-like word before the first whitespace is echoed.
 const shown = token => {
-  const line = token.replace(/\s+/g, " ");
-  return line.length > MAX_CHARS ? `${line.slice(0, MAX_CHARS - 1)}…` : line;
+  const [word] = token.split(/\s/, 1);
+  return word.length > MAX_CHARS ? `${word.slice(0, MAX_CHARS - 1)}…` : word;
 };
 
 export function rejectUnknownOptions(tokens, subject, hint, toError) {
