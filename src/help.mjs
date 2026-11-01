@@ -48,41 +48,56 @@ const sharedErrors = new Map(Object.values(shared).map(entry => [entry.code, ent
 const valueOptions = new Set(["--supervisor", "--connection", "--require-node-version", "--host", "--remote-transport", "--context-thread", "--thread"]);
 const threadLike = word => /^(codex:\/\/|[0-9a-f]{8}-)/i.test(word) || isCloudTask(word) || isDesktopCloudTask(word);
 
-function commandWords(argv) {
-  const words = [];
+const literal = token => /^[a-z][a-z-]*(\|[a-z][a-z-]*)*$/.test(token);
+
+function invocation(argv) {
+  const words = [], options = new Map();
   for (let i = 0; i < argv.length && argv[i] !== "--"; i++) {
-    if (valueOptions.has(argv[i])) i++;
+    if (valueOptions.has(argv[i])) options.set(argv[i], argv[++i]);
     else if (!argv[i].startsWith("--")) words.push(argv[i]);
   }
-  return words;
+  return { words, options };
+}
+
+function usageLine(text) {
+  const tokens = text.split(" "), options = new Map();
+  let i = 0;
+  for (; valueOptions.has(tokens[i]); i += 2) options.set(tokens[i], tokens[i + 1]);
+  const literals = [];
+  for (; i < tokens.length && literal(tokens[i]); i++) literals.push(tokens[i]);
+  return { text, options, literals };
 }
 
 export function topicFor(argv) {
-  const [first, second] = commandWords(argv);
+  const [first, second] = invocation(argv).words;
   if (first === undefined) return null;
   const name = ["supervise", "orchestrate"].includes(first) && second === "prompt" ? `${first} prompt` : threadLike(first) ? "send" : first;
   return Object.hasOwn(topics, name) ? name : null;
 }
 
 function failingUsage(topic, argv) {
-  const words = commandWords(argv);
-  const score = line => {
-    const literals = [];
-    for (const token of line.split(" ")) {
-      if (!/^[a-z][a-z-]*(\|[a-z][a-z-]*)*$/.test(token)) break;
-      literals.push(token);
-    }
-    return literals.every((token, i) => token.split("|").includes(words[i])) ? literals.length : -1;
+  const { words, options } = invocation(argv), connection = options.get("--connection") ?? "shared";
+  const accepts = (option, spec) => {
+    const value = option === "--connection" ? connection : options.get(option);
+    return value === undefined || !literal(spec) || spec.split("|").includes(value);
   };
-  const lines = topics[topic].usage, scores = lines.map(score), best = Math.max(...scores);
-  return best < 0 ? lines : lines.filter((_, i) => scores[i] === best);
+  const lines = topics[topic].usage.map(usageLine);
+  const fitting = lines.filter(line => [...line.options].every(([option, spec]) => accepts(option, spec)));
+  const routed = fitting.filter(line => line.options.has("--connection"));
+  const pool = connection !== "shared" && routed.length ? routed : fitting.length ? fitting : lines;
+  const best = (list, score) => {
+    const scores = list.map(score), max = Math.max(...scores);
+    return { max, list: list.filter((_, i) => scores[i] === max) };
+  };
+  const named = best(pool, line => (line.literals.every((token, i) => token.split("|").includes(words[i])) ? line.literals.length : -1));
+  if (named.max < 0) return pool.map(line => line.text);
+  return best(named.list, line => [...line.options.keys()].reduce((sum, option) => sum + (options.has(option) ? 1 : -1), 0)).list.map(line => line.text);
 }
 
 export function errorRemedy(argv, code) {
   const topic = topicFor(argv);
   if (!topic) return null;
-  const entry = topics[topic].errors?.find(e => e.code === code) ?? sharedErrors.get(code)
-    ?? Object.values(topics).flatMap(t => t.errors ?? []).find(e => e.code === code);
+  const entry = topics[topic].errors?.find(e => e.code === code) ?? sharedErrors.get(code);
   return { help: topic, ...(/OPTIONS_INVALID$/.test(code) ? { usage: failingUsage(topic, argv) } : {}), ...(entry ? { action: entry.action } : {}) };
 }
 

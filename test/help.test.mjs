@@ -5,7 +5,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { topics, helpData, renderHelp, renderErrors } from "../src/help.mjs";
+import { topics, helpData, renderHelp, renderErrors, errorRemedy } from "../src/help.mjs";
+import * as sharedErrors from "../src/help-errors.mjs";
 import { OPTIONS_INVALID, SUPERVISOR_PAUSED } from "../src/help-errors.mjs";
 import { registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
 
@@ -102,6 +103,54 @@ test("a topic's own action for a code wins over the shared one", () => {
   assert.equal(error.code, "OPTIONS_INVALID");
   assert.equal(error.help, "diff");
   assert.equal(error.action, documented);
+});
+
+const usageLines = (topic, prefix) => topics[topic].usage.filter(line => line.startsWith(prefix));
+
+test("an argument error under a connection names that connection's usage, not the local one", async t => {
+  const home = await mkdtemp("/private/tmp/cs-help-");
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const env = { CODEX_HOME: home };
+  const desktopCloud = cli(["--connection", "desktop-cloud", "thread", "create", "--json"], env).error;
+  assert.equal(desktopCloud.code, "DESKTOP_CLOUD_OPTIONS_INVALID");
+  assert.deepEqual(desktopCloud.usage, usageLines("thread", "--connection desktop-cloud thread create "));
+  const cloud = cli(["--connection", "cloud", "thread", "create", "--json"], env).error;
+  assert.equal(cloud.code, "CLOUD_OPTIONS_INVALID");
+  assert.deepEqual(cloud.usage, usageLines("thread", "--connection cloud thread create "));
+  const local = cli(["thread", "create", "--bogus", "--json"], env).error;
+  assert.equal(local.code, "OPTIONS_INVALID");
+  assert.deepEqual(local.usage, usageLines("thread", "thread create "));
+  const list = cli(["--connection", "desktop-cloud", "threads", "list", "--limit", "101", "--json"], env).error;
+  assert.equal(list.code, "DESKTOP_CLOUD_OPTIONS_INVALID");
+  assert.deepEqual(list.usage, usageLines("threads", "--connection desktop-cloud threads list "));
+  const unsupported = cli(["--connection", "desktop-cloud", "thread", "verify", "fixture-attempt", "--json"], env).error;
+  assert.equal(unsupported.code, "CLOUD_OPTIONS_INVALID");
+  assert.deepEqual(unsupported.usage, usageLines("thread", "--connection desktop-cloud "));
+});
+
+test("a code the invoked topic does not document carries no action borrowed from another topic", async t => {
+  const home = await mkdtemp("/private/tmp/cs-help-");
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const documents = (topic, code) => (topics[topic].errors ?? []).some(entry => entry.code === code);
+  assert.ok(documents("history", "DESKTOP_CLOUD_OPTIONS_INVALID") && !documents("threads", "DESKTOP_CLOUD_OPTIONS_INVALID"));
+  const args = ["--connection", "desktop-cloud", "threads", "list", "--limit", "101"];
+  const { status, error } = cli([...args, "--json"], { CODEX_HOME: home });
+  assert.equal(status, 1);
+  assert.equal(error.code, "DESKTOP_CLOUD_OPTIONS_INVALID");
+  assert.equal(error.help, "threads");
+  assert.equal(Object.hasOwn(error, "action"), false);
+  const text = cli(args, { CODEX_HOME: home });
+  assert.equal(text.status, 1);
+  assert.equal(text.stderr.split("\n").some(line => line.startsWith("対処:")), false);
+});
+
+test("every remedy action comes from the invoked topic or the shared registry", () => {
+  const shared = new Map(Object.values(sharedErrors).map(entry => [entry.code, entry.action]));
+  const codes = new Set([...shared.keys(), ...Object.values(topics).flatMap(topic => (topic.errors ?? []).map(entry => entry.code))]);
+  for (const name of Object.keys(topics)) for (const code of codes) {
+    const own = topics[name].errors?.find(entry => entry.code === code)?.action;
+    assert.equal(errorRemedy(name.split(" "), code)?.action, own ?? shared.get(code), `${name} ${code}`);
+  }
 });
 
 test("a paused supervisor's refused send carries the send topic's action", async t => {

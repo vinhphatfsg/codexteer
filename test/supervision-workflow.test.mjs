@@ -99,10 +99,10 @@ test("finding outputs name each observed cursor by based_on_sha256 while the sto
   const storage = await fixture(t), changed = thread();
   changed.turns[0].items.push({ id: "next", type: "userMessage", content: [{ type: "text", text: "also cover cancellation" }] });
   const first = readSnapshot(thread()).cursor, second = readSnapshot(changed).cursor;
-  const reference = token => createHash("sha256").update(token).digest("hex").slice(0, 16);
+  const reference = token => createHash("sha256").update(token).digest("hex");
   const created = await createFinding(ID, { ...storage, key: "cursor-reference", title: "Cursor reference", condition: "Timeout tests pass", basedOn: first });
   assert.equal(created.based_on_sha256, reference(first));
-  assert.match(created.based_on_sha256, /^[0-9a-f]{16}$/);
+  assert.match(created.based_on_sha256, /^[0-9a-f]{64}$/);
   const reopened = await reopenFinding(ID, created.id, { ...storage, reason: "The user added a requirement", condition: "Timeout and cancellation tests pass", basedOn: second });
   assert.equal(reopened.based_on_sha256, reference(second));
   assert.equal(reopened.revisions[0].based_on_sha256, reference(first));
