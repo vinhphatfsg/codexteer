@@ -67,6 +67,15 @@ test("backend options before Cloud targets use the Cloud path and dry runs remai
   await assert.rejects(f.invoke(["send", "--backend", "ui", task, "preview", "--dry-run"]), e => e.result?.error.code === "CLOUD_TARGET_CONFLICT");
 });
 
+test("Cloud send names an unknown option before -- and sends text after it literally", async t => {
+  const f = await fixture(t);
+  await assert.rejects(f.invoke(["send", task, "--kidn", "review", "preview", "--dry-run"]), e => e.result?.error.code === "CLOUD_OPTIONS_INVALID"
+    && e.result.error.unknown_options.length === 1 && e.result.error.unknown_options[0] === "--kidn" && e.result.error.message.startsWith("Unknown send option: --kidn."));
+  const literal = JSON.parse(await f.raw(["send", task, "--dry-run", "--no-sound", "--json", "--", "--kidn", "review"])).data;
+  assert.equal(literal.sent, false); assert.equal(literal.message_characters, "--kidn review".length);
+  assert.equal(JSON.parse(await readFile(f.state)).posts, 0);
+});
+
 test("cloud history adaptation keeps command positions stable when the final answer arrives", () => {
   const snapshot={task_id:task,status:"in_progress",turns:[{turn_id:first,role:"assistant",status:"in_progress",messages:[],commands:[{id:"command_fixture",command:"printf ok",status:"inProgress",output:"",exit_code:null}]}]};
   const a=cloudThread(snapshot);snapshot.turns[0].messages.push({text:"done"});snapshot.turns[0].commands[0].status="completed";snapshot.turns[0].status="completed";snapshot.status="completed";
