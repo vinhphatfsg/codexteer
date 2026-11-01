@@ -373,6 +373,7 @@ export const topics = {
       "thread repair <THREAD> [--dry-run | --apply]",
       "--connection cloud thread create --project ENV_ID_OR_NAME [--branch BRANCH] [--dry-run] <MESSAGE...>|-",
       "--connection cloud thread receipt <ATTEMPT_ID>",
+      "--connection cloud|desktop-cloud thread resolve <THREAD>",
       "--connection desktop-cloud thread create --environment ID|NAME [--title TEXT] [--dry-run] <MESSAGE...>|-",
       "--connection desktop-cloud thread assign TARGET --project ID|NAME",
       "--connection desktop-cloud thread receipt <ATTEMPT_ID> [--resolve-unknown --note TEXT]",

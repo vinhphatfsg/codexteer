@@ -6,6 +6,7 @@ import { topics as cloudRemote } from "./help-cloud-remote.mjs";
 import * as shared from "./help-errors.mjs";
 import { isCloudTask } from "./cloud-id.mjs";
 import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
+import { selectedCloudInvocation } from "./task-id.mjs";
 import { VERSION } from "./version.mjs";
 
 export { VERSION };
@@ -76,7 +77,7 @@ export function topicFor(argv) {
 }
 
 function failingUsage(topic, argv) {
-  const { words, options } = invocation(argv), connection = options.get("--connection") ?? "shared";
+  const { words, options } = invocation(argv), connection = options.get("--connection") ?? (selectedCloudInvocation(argv) || "shared");
   const accepts = (option, spec) => {
     const value = option === "--connection" ? connection : options.get(option);
     return value === undefined || !literal(spec) || spec.split("|").includes(value);

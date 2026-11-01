@@ -125,7 +125,30 @@ test("an argument error under a connection names that connection's usage, not th
   assert.deepEqual(list.usage, usageLines("threads", "--connection desktop-cloud threads list "));
   const unsupported = cli(["--connection", "desktop-cloud", "thread", "verify", "fixture-attempt", "--json"], env).error;
   assert.equal(unsupported.code, "CLOUD_OPTIONS_INVALID");
-  assert.deepEqual(unsupported.usage, usageLines("thread", "--connection desktop-cloud "));
+  assert.deepEqual(unsupported.usage, topics.thread.usage.filter(line => /^--connection (\S+\|)?desktop-cloud(\|\S+)? /.test(line)));
+});
+
+test("an argument error routed by its task ID names that connection's usage, as text and JSON", async t => {
+  const home = await mkdtemp("/private/tmp/cs-help-");
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const env = { CODEX_HOME: home };
+  const resolve = usageLines("thread", "--connection cloud|desktop-cloud thread resolve ");
+  for (const [args, usage] of [
+    [["thread", "assign", "durable_aaaaaaaa-aaaa-4aaa-8aaa-000000000001", "--bogus"], usageLines("thread", "--connection desktop-cloud thread assign ")],
+    [["thread", "resolve", "durable_aaaaaaaa-aaaa-4aaa-8aaa-000000000001", "--bogus"], resolve],
+    [["thread", "resolve", "task_e_0123456789abcdef", "--bogus"], resolve],
+    [["doctor", "--thread", "task_e_0123456789abcdef", "--bogus"], usageLines("doctor", "--connection desktop|cloud|desktop-cloud doctor ")],
+    [["thread", "resolve", THREAD, "--bogus"], usageLines("thread", "thread resolve ")],
+  ]) {
+    assert.equal(usage.length, 1, args.join(" "));
+    const { status, error } = cli([...args, "--json"], env);
+    assert.equal(status, 1, args.join(" "));
+    assert.match(error.code, /OPTIONS_INVALID$/, args.join(" "));
+    assert.deepEqual(error.usage, usage, args.join(" "));
+    const text = cli(args, env);
+    assert.equal(text.status, 1, args.join(" "));
+    assert.deepEqual(text.stderr.split("\n").filter(line => line.startsWith("使い方: ")), usage.map(line => `使い方: codexteer ${line}`), args.join(" "));
+  }
 });
 
 test("a code the invoked topic does not document carries no action borrowed from another topic", async t => {
