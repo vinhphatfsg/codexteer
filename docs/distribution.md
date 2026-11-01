@@ -9,6 +9,8 @@
 
 `0.19.0`は、`help`の全トピックを同じ構成に揃えて実装と照合し、Desktop Cloudで受付不明の記録が残ると以後の送信・割り当てが止まる問題、ローカル`send`の未知オプションの送信、`--supervisor`付きローカル`resource`の監督状態の未確認を修正します。利用者向けの失敗にはエラーコードを付けました。実行中のターンがない送信の`NOT_SENT`は`TASK_IDLE`・`TASK_BUSY`に変わるため、コードで分岐している呼び出し側は更新してください。runtime protocolとcapability契約はv1を維持し、Desktopの再起動は必要ありません。保存済み旧CLIで動く監督には反映されないため、更新後のCLIで監督を起動し直すか、プロンプトを生成し直してください。
 
+`0.20.0`は、実際の監督・オーケストレーションの記録に合わせて生成プロンプトを直し、監督役が読む量と打ち込む量を減らします。保存済みCLI方式の実行コマンドは、`CODEX_HOME/codex-steer/bin/`に置く所有者専用の起動ファイル1語になります。起動ファイルを実行できない環境では生成時に`LAUNCHER_UNUSABLE`で止まるので、`--use-path-cli`を使ってください。`read`・`watch`・`status`のcursorは`c1`で始まる短い形式になり、旧形式の`eyJ`も引き続き読めます。0.19.0以前のCLIに`c1`のcursorを渡すと`STALE_CURSOR`になるため、`--since`なしで読み直してください。失敗した呼び出しは`error.help`・`error.action`・`error.usage`で対処を返し、`help <topic>`の既定の出力はエラー一覧を含みません（`help <topic> --errors`で表示し、`--json`は`errors`の代わりに`errors_command`を返します）。`findings`・`history`・`instructions list`の出力は`based_on`の代わりに`based_on_sha256`を返し、保存する記録は変わりません。これらのJSONの項目で分岐している呼び出し側は更新してください。生成済みのプロンプトは変わらないので、監督を続ける場合は更新後のCLIで生成し直してください。runtime protocolとcapability契約はv1を維持し、Desktopの再起動は不要です。
+
 `package.json` は `private` を持たず、`publishConfig` でnpm公式レジストリへのpublic公開を指定しています。公開可能な設定であることと、実際に公開済みであることは別です。
 
 公開後の基本的な実行形式は次のとおりです。通常はバージョン指定なしで使えます。監督開始後は保存したCLIを使い続けるため、監督中の一貫性を保つために版を明示する必要はありません。起動側と操作側の製品バージョンも、必要な通信仕様が対応していれば異なっていても使えます。
