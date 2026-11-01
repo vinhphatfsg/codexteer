@@ -186,7 +186,7 @@ export const topics = {
       "既存keyでcreateすると既存の指摘をそのまま返し、title・condition・evidenceは更新しない。変更はreopenで行う。",
       "statusはopen・awaiting_response・delivery_unknown・awaiting_verification・needs_review・resolved・dismissedのいずれか。",
       "send --finding <ID>は指摘IDと現在のrevisionを配送記録に結び付ける。同じrevisionにnot_sent以外の送信があればDUPLICATE_INTERVENTION。",
-      "明確なnot_sentだけ再送できる。dry-runは重複を判定するが予約はしない。",
+      "再送できるのは、明確なnot_sentと、ユーザーが--resolve-unknownで解除した送信だけ。dry-runは重複を判定するが予約はしない。",
       C_SUPERVISED_SEND,
       "reopenはreasonに加えて根拠か解決条件の変更が必要。成功するとrevisionが1増え、openに戻り、評価はunratedに戻る。",
       "過去revisionの解決条件・根拠・解決・評価・reopenの理由はrevisionsに残る。",
@@ -280,7 +280,7 @@ export const topics = {
     ],
     options: [
       { name: "MESSAGE-ID", text: "置き換え・撤回する元の指示のID（history listで確認）。同じタスクのactiveかexpiredの指示だけ指定できる。" },
-      { name: "--all", text: "listでactive以外（expired・superseded・retracted・withdrawal_notice・pending_delivery・not_sent）も含める。" },
+      { name: "--all", text: "listでactive以外（expired・superseded・retracted・withdrawal_notice・pending_delivery・released・not_sent）も含める。" },
       { name: "--supersedes MESSAGE-ID", text: "sendのオプション。新しい指示を送り、受付後に元の指示をsupersededにする。" },
       { name: "--expires-at ISO-TIMESTAMP", text: "未来の時差付きISO日時（末尾Zか±hh:mm）。期限後はexpiredになる。" },
       { name: "--reason TEXT", text: "retractで必須。撤回の理由がそのまま送信本文になる。" },
@@ -305,6 +305,7 @@ export const topics = {
     notes: [
       "このタスクへ記録付きで送ったすべての送信が指示として扱われる。受付済みで、置換・撤回・期限切れでなければactive。",
       "instruction_statusのwithdrawal_noticeは撤回を伝えた送信自体、pending_deliveryは受付未確認の送信。",
+      "releasedは、ユーザーがhistory mark --resolve-unknownで解除した受付不明の送信。元の指示を保留させず、置き換え・撤回をやり直せる。",
       "置換・撤回もCodexへメッセージを送り、見出しに対象の指示IDを示す。元の記録は削除しない。",
       "置換・撤回の送信がacceptedになって初めて、元の指示がsuperseded・retractedになる。",
       "置換・撤回の配送がunknownの間、元の指示はactiveのままpending_changesに出る。history checkでstoredになると確定する。",

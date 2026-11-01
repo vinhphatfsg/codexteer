@@ -11,6 +11,7 @@ import { discoverRuntime } from "./runtime.mjs";
 import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 import { RpcClient } from "./rpc.mjs";
 import { prepareDirective } from "./directive.mjs";
+import { releasedDelivery } from "./findings.mjs";
 import { assertSupervisor, withSupervisedSend } from "./supervision.mjs";
 
 export async function getMessage(threadInput, id, options = {}) {
@@ -32,12 +33,12 @@ export async function listMessages(threadInput, { includeText = false, pending =
 }
 
 export function instructionStates(entries, now = Date.now()) {
-  const states = new Map(entries.map(e => [e.id, { ...e, instruction_status: e.delivery_status === "not_sent" ? "not_sent" : e.delivery_status !== "accepted" ? "pending_delivery" : e.metadata?.retracts ? "withdrawal_notice" : e.metadata?.expires_at && Date.parse(e.metadata.expires_at) <= now ? "expired" : "active" }]));
+  const states = new Map(entries.map(e => [e.id, { ...e, instruction_status: e.delivery_status === "not_sent" ? "not_sent" : releasedDelivery(e) ? "released" : e.delivery_status !== "accepted" ? "pending_delivery" : e.metadata?.retracts ? "withdrawal_notice" : e.metadata?.expires_at && Date.parse(e.metadata.expires_at) <= now ? "expired" : "active" }]));
   for (const entry of entries) {
     const target = states.get(entry.metadata?.supersedes ?? entry.metadata?.retracts);
     if (!target) continue;
     if (entry.delivery_status === "accepted") Object.assign(target, { instruction_status: entry.metadata.retracts ? "retracted" : "superseded", replaced_by: entry.id });
-    else if (entry.delivery_status !== "not_sent") target.pending_change_ids = [...target.pending_change_ids ?? [], entry.id];
+    else if (entry.delivery_status !== "not_sent" && !releasedDelivery(entry)) target.pending_change_ids = [...target.pending_change_ids ?? [], entry.id];
   }
   return [...states.values()];
 }

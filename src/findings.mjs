@@ -47,14 +47,14 @@ export async function createFinding(threadInput, { key, title, condition, eviden
 }
 
 // The user's noted resolution of an unknown delivery releases it; absence alone never does.
-const released = entry => entry.delivery_status === "unknown" && Boolean(entry.resolution);
+export const releasedDelivery = entry => entry.delivery_status === "unknown" && Boolean(entry.resolution);
 
 export async function assertFindingSend(threadInput, id, storage = {}) {
   const record = await getFinding(threadInput, id, storage);
   if (record.disposition !== "open") throw failure("This finding is closed. Reopen it with new evidence or a changed requirement before sending again.", "FINDING_CLOSED");
   // The journal is the reservation: even a crash before writing a receipt leaves
   // an unknown attempt here. Never infer not-sent from a missing response.
-  const previous = (await findingMessages(record, storage)).find(message => message.delivery_status !== "not_sent" && !released(message));
+  const previous = (await findingMessages(record, storage)).find(message => message.delivery_status !== "not_sent" && !releasedDelivery(message));
   if (previous) throw Object.assign(failure("This finding revision already has a pending or accepted intervention. Check its history; do not resend it.", "DUPLICATE_INTERVENTION"), { existing_message_id: previous.id });
   return record;
 }
@@ -63,7 +63,7 @@ export async function findingStatus(threadInput, id, storage = {}) {
   const record = await getFinding(threadInput, id, storage), entries = await findingMessages(record, storage);
   const messages = entries.map(entry => ({ id: entry.id, delivery_status: entry.delivery_status, attempt_state: entry.attempt_state,
     response: entry.response, stored: entry.verification?.status ?? "unchecked" }));
-  const latest = entries.filter(entry => entry.delivery_status !== "not_sent" && !released(entry)).at(-1);
+  const latest = entries.filter(entry => entry.delivery_status !== "not_sent" && !releasedDelivery(entry)).at(-1);
   let status = record.disposition, verification = null;
   if (record.disposition === "open" && latest) status = latest.delivery_status === "unknown" ? "delivery_unknown"
     : latest.response?.status === "applied" ? "awaiting_verification" : "awaiting_response";
@@ -103,7 +103,7 @@ async function changeFinding(threadInput, id, update, storage) {
 }
 
 async function knownDelivery(record, storage) {
-  if ((await findingMessages(record, storage)).some(entry => entry.delivery_status === "unknown" && !released(entry))) throw failure("Delivery is unknown. Reconcile the existing message before closing or revising this finding.", "FINDING_DELIVERY_UNKNOWN");
+  if ((await findingMessages(record, storage)).some(entry => entry.delivery_status === "unknown" && !releasedDelivery(entry))) throw failure("Delivery is unknown. Reconcile the existing message before closing or revising this finding.", "FINDING_DELIVERY_UNKNOWN");
 }
 
 export async function resolveFinding(threadInput, id, { checkpoint, note, ...storage }) {

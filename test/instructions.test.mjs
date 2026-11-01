@@ -33,6 +33,18 @@ test("uncertain replacement keeps old instruction active until delivery is recon
   assert.equal(list.instructions.length, 1); assert.equal(list.instructions[0].id, entry.id);
 });
 
+test("a user-resolved unknown replacement releases the original instruction for another change", async t => {
+  const deps = await setup(t); const a = await sendTrackedMessage(ID, "first", {}, deps); let error;
+  await assert.rejects(sendTrackedMessage(ID, "corrected", { supersedes: a.message_id }, { ...deps, send: async () => { throw Object.assign(new Error("unknown"), { delivery_status: "unknown", sent: null }); } }), e => { error = e; return true; });
+  const entry = await getMessage(ID, error.message_id, deps);
+  await writeRecord("messages", entry.id, { ...entry, resolution: { by: "user", at: new Date().toISOString(), note: "not delivered" } }, deps);
+  const list = await listInstructions(ID, deps);
+  assert.deepEqual(list.instructions.map(e => e.id), [a.message_id]);
+  assert.equal(list.pending_changes.length, 0);
+  const b = await sendTrackedMessage(ID, "corrected again", { supersedes: a.message_id }, deps);
+  assert.deepEqual((await listInstructions(ID, deps)).instructions.map(e => e.id), [b.message_id]);
+});
+
 test("wrong-task targets and stale targets are rejected; expiry is explicit", async t => {
   const deps = await setup(t); const a = await sendTrackedMessage(ID, "first", {}, deps);
   await assert.rejects(sendTrackedMessage("aaaaaaaa-aaaa-4aaa-8aaa-000000000002", "wrong", { supersedes: a.message_id }, deps), { code: "MESSAGE_NOT_FOUND" });
