@@ -8,7 +8,7 @@ import { codexHome } from "./runtime.mjs";
 import { supervisorPrompt as pathSupervisorPrompt, validateSupervisionPolicy } from "./prompt.mjs";
 import { registerSupervisor, controlSupervisor } from "./supervision.mjs";
 import { connectionMode } from "./connection.mjs";
-import { preparePromptCommand, shellArgument, SUPERVISOR_AGENTS } from "./prompt-command.mjs";
+import { prepareBoundCommand, SUPERVISOR_AGENTS } from "./prompt-command.mjs";
 import { launchAgent } from "./agent-launch.mjs";
 import { targetHost, targetContext, hostFields, remoteTransport } from "./target.mjs";
 
@@ -28,16 +28,14 @@ export async function prepareSupervisorPrompt(threadInput, policy, { agent = "cl
     if (source.hostId !== undefined && source.hostId !== "local") throw Object.assign(new Error("Remote supervision needs a local --context-thread."), { code: "REMOTE_CONTEXT_INVALID" });
     context = source.threadId;
   }
-  const sessionOptions = `--supervisor ${shellArgument(supervisor.session_id)} --connection ${connection}${targetHost() === "local" ? "" : ` --host ${shellArgument(targetHost())} --remote-transport ${remoteTransport()}${context ? ` --context-thread ${shellArgument(context)}` : ""}`}`;
-  const { command: baseCommand, ...runtime } = await preparePromptCommand(usePathCli);
-  const command = `${baseCommand} ${sessionOptions}`;
+  const { command, ...runtime } = await prepareBoundCommand({ session: supervisor.session_id, connection, context }, usePathCli);
   if (usePathCli) {
-    return { ...pathSupervisorPrompt(threadId, command, policy, supervisor, { usePathCli: true }), ...runtime, supervisor };
+    return { ...pathSupervisorPrompt(threadId, command, policy, supervisor, { usePathCli: true }), command, ...runtime, supervisor };
   }
   // Render with the saved distribution's implementation as well as its CLI.
   // An update to the source/cache after placement cannot mix prompt and code.
   const { supervisorPrompt } = await import(pathToFileURL(path.join(runtime.deployment.directory, "src/prompt.mjs")).href);
-  return { ...supervisorPrompt(threadId, command, policy, supervisor), ...runtime, supervisor };
+  return { ...supervisorPrompt(threadId, command, policy, supervisor), command, ...runtime, supervisor };
 }
 
 export async function superviseAgent(threadInput, { agent = "claude", agentArgs = [], policy, connection = "shared", usePathCli = false } = {}) {

@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile, rm, chmod, symlink, link, lstat } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, chmod, symlink, link, lstat } from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { describeDistribution, prepareDeployment } from "../src/distribution.mjs";
+import { describeDistribution, placeLauncher, prepareDeployment } from "../src/distribution.mjs";
 
 const exec = promisify(execFile);
 async function fixture(t) {
@@ -38,6 +38,16 @@ test("concurrent installers reuse one complete deployment without replacing it",
   const results = await Promise.all(Array.from({ length: 3 }, () => prepareDeployment(home, options)));
   assert.equal(new Set(results.map(r => r.directory)).size, 1);
   assert.equal(results.filter(r => !r.reused).length, 1);
+});
+
+test("concurrent placements of one launcher share one verified file and leave no stage or lock", async t => {
+  const { home, options } = await fixture(t);
+  const deployment = await prepareDeployment(home, options), script = "#!/bin/sh\nexec true\n";
+  const placed = await Promise.all(Array.from({ length: 3 }, () => placeLauncher(deployment, "p", script)));
+  assert.equal(new Set(placed).size, 1);
+  assert.equal(await readFile(placed[0], "utf8"), script);
+  assert.equal((await lstat(placed[0])).mode & 0o777, 0o700);
+  assert.deepEqual(await readdir(path.dirname(placed[0])), [path.basename(placed[0])]);
 });
 
 test("same version with changed contents gets another deployment and preserves the old files", async t => {

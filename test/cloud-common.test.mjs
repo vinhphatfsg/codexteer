@@ -183,7 +183,7 @@ test("common Cloud commands preserve supervisor controls, findings, active inter
 test("Cloud supervisor launch registers the actual launcher, pins saved/PATH commands and stops on agent exit",async t=>{
   const f=await fixture(t);
   await writeFile(`${f.bin}/claude`,`#!${process.execPath}
-const fs=require('node:fs');const prompt=process.argv.at(-1);const record=JSON.parse(fs.readFileSync(process.env.CODEX_HOME+'/codex-steer/cloud-supervisors/task_fixture_common.json'));if(record.state!=='active'||record.connection!=='cloud'||record.launcher_pid!==process.ppid)throw new Error('Supervisor binding was not registered');console.log(JSON.stringify({registered:true,saved:prompt.includes('--require-node-version'),task:record.thread_id}));`,{mode:0o700});
+const fs=require('node:fs');const prompt=process.argv.at(-1);const record=JSON.parse(fs.readFileSync(process.env.CODEX_HOME+'/codex-steer/cloud-supervisors/task_fixture_common.json'));if(record.state!=='active'||record.connection!=='cloud'||record.launcher_pid!==process.ppid)throw new Error('Supervisor binding was not registered');console.log(JSON.stringify({registered:true,saved:prompt.includes('/codex-steer/bin/codexteer-s-'),task:record.thread_id}));`,{mode:0o700});
   for(const pathMode of [false,true]){
     const result=JSON.parse(await f.raw(['supervise',task,'Observe only; do not send.','--agent','claude',...(pathMode?['--use-path-cli']:[])]));
     assert.equal(result.registered,true);assert.equal(result.saved,!pathMode);assert.equal(result.task,task);

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -124,7 +124,7 @@ test("a saved project prompt creates a bound child prompt after the original sou
   const { data } = JSON.parse(generated.stdout);
   assert.equal(data.cli_mode, "saved");
   assert.deepEqual(data.node, { path: realpathSync(process.execPath), version: process.version });
-  assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["runtimes"]);
+  assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["bin", "runtimes"]);
   rmSync(source, { recursive: true });
   const receiving = { ...options, env: { ...options.env, PATH: "/missing-cli", CODEX_HOME: path.join(options.cwd, "other-home") } };
   const versionCommand = data.prompt.split("\n").find(line => line.endsWith(" --version"));
@@ -141,7 +141,8 @@ test("a saved project prompt creates a bound child prompt after the original sou
   assert.ok(childData.prompt.includes(ORCHESTRATED_SUPERVISION_POLICY));
   for (const rule of [/--new-turn[^。]*監督方針で再開/, /--new-turnでの再開[^。]*idle/, /監督方針の終了条件/, /監視の終了条件[^。]*全体の完了/]) assert.match(childData.prompt, rule, "The child prompt carries its own resume delegation and end condition");
   const bootstrap = childData.prompt.split("\n").find(line => line.includes(` supervise register ${ID} `));
-  assert.ok(bootstrap.includes(`--supervisor '${childData.supervisor.session_id}'`));
+  assert.match(path.basename(childData.command), /^codexteer-s-[0-9a-f]{12}$/);
+  assert.ok(bootstrap.startsWith(`${childData.command} `), "The child observes through its own launcher, not the project one");
   const registered = spawnSync("/bin/sh", ["-c", bootstrap], receiving);
   assert.equal(registered.status, 0, registered.stderr);
   const savedCli = path.join(data.deployment.directory, "bin/codexteer.mjs");
@@ -155,6 +156,22 @@ test("a saved project prompt creates a bound child prompt after the original sou
   assert.equal(JSON.parse(spawnSync("/bin/sh", ["-c", stop], receiving).stdout).ok, true);
   assert.equal(JSON.parse(control(["status"]).stdout).data.state, "stopped", "The completion step ends the child's supervision");
   assert.equal(existsSync(receiving.env.CODEX_HOME), false);
+});
+
+test("the project launcher is reused by content, and a modified one is refused without being rewritten", t => {
+  const options = fixture(t);
+  const generate = () => cli(options, ["orchestrate", "prompt", "--project", "P", "goal", "--json"]);
+  const first = JSON.parse(generate().stdout).data, again = JSON.parse(generate().stdout).data;
+  assert.match(path.basename(first.command), /^codexteer-p-[0-9a-f]{12}$/);
+  assert.equal(again.command, first.command);
+  assert.equal(statSync(again.command).ino, statSync(first.command).ino, "Reuse must not replace the file");
+  const tampered = readFileSync(first.command, "utf8").replace("--connection shared", "--connection desktop");
+  writeFileSync(first.command, tampered);
+  const rejected = generate();
+  assert.equal(rejected.status, 1);
+  const parsed = JSON.parse(rejected.stdout);
+  assert.equal(parsed.error.code, "LAUNCHER_MODIFIED"); assert.equal(Object.hasOwn(parsed, "data"), false);
+  assert.equal(readFileSync(first.command, "utf8"), tampered);
 });
 
 test("PATH orchestration retains PATH mode when generating the child's managed prompt", t => {

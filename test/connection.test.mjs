@@ -164,9 +164,11 @@ test("CLI binds copied observation prompts to the selected endpoint and rejects 
   const observed = JSON.parse((await exec("/bin/sh", ["-c", read], { cwd: "/private/tmp", env: recipientEnv })).stdout).data;
   assert.equal(observed.connection_mode, "desktop");
   assert.equal((await f.cli(["supervise", "status", ID])).data.observation.connection, "observed");
-  const switched = read.replace("--connection desktop", "--connection shared");
-  await assert.rejects(exec("/bin/sh", ["-c", switched], { cwd: "/private/tmp", env: recipientEnv }), error => JSON.parse(error.stdout).error.code === "SUPERVISOR_MISMATCH");
-  await assert.rejects(exec("/bin/sh", ["-c", register.replace("--connection desktop", "--connection shared")], { cwd: "/private/tmp", env: recipientEnv }), /another connection/);
+  await assert.rejects(exec("/bin/sh", ["-c", `${data.command} --connection shared read ${ID} --json`], { cwd: "/private/tmp", env: recipientEnv }), error => JSON.parse(error.stdout).error.code === "OPTIONS_INVALID");
+  // Bypassing the launcher with the same supervisor ID on another connection is still refused.
+  const bypass = args => exec(data.node.path, [`${data.deployment.directory}/bin/codexteer.mjs`, "--supervisor", data.supervisor.session_id, "--connection", "shared", ...args], { cwd: "/private/tmp", env: { ...recipientEnv, CODEX_HOME: data.deployment.codex_home } });
+  await assert.rejects(bypass(["read", ID, "--json"]), error => JSON.parse(error.stdout).error.code === "SUPERVISOR_MISMATCH");
+  await assert.rejects(bypass(["supervise", "register", ID, "--owner", "codex"]), /another connection/);
   const before = f.calls.length;
   for (const args of [["send", ID, "test"], [ID, "test"], ["send", ID, "test", "--new-turn"], ["send", ID, "test", "--backend", "ui"], ["instructions", "retract", ID, "unused", "--reason", "test"], ["desktop", "start"]]) {
     assert.equal((await f.cli(args, false)).error.code, "DESKTOP_READ_ONLY");

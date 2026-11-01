@@ -53,7 +53,7 @@ test("direct orchestration starts either CLI in saved and PATH modes with the ex
     assert.ok(expected.includes(`--agent ${agent}${pathMode ? " --use-path-cli" : ""} --json`));
     assert.equal(existsSync(path.join(options.env.CODEX_HOME, "codex-steer", "supervisors")), false, "A project launch cannot fabricate a single-task registration");
     if (pathMode) assert.deepEqual(readdirSync(options.env.CODEX_HOME), []);
-    else assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["runtimes"]);
+    else assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["bin", "runtimes"]);
     for (const marker of ["INJECTED", "INJECTED_TOO"]) assert.equal(existsSync(path.join(options.cwd, marker)), false);
   }
 });

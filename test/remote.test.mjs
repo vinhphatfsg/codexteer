@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, chmod, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, chmod, mkdir, readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { parseThreadTarget, normalizeThreadId, threadDeepLink } from "../src/thread-id.mjs";
 import { withTarget, targetHost } from "../src/target.mjs";
@@ -180,7 +180,8 @@ test("saved remote prompt renderer preserves host restrictions across module cop
   assert.equal(result.ok, true);
   assert.equal(result.data.observation_only, true);
   assert.equal(result.data.host_id, HOST);
-  assert(result.data.prompt.includes(`--host '${HOST}'`));
+  assert(result.data.prompt.split("\n").filter(line => line.startsWith("/")).every(line => line === result.data.command || line.startsWith(`${result.data.command} `)));
+  assert((await readFile(result.data.command, "utf8")).includes(`--host '${HOST}' --remote-transport native --context-thread '${CALLER}' "$@"`), "The launcher pins the remote route");
   assert(!result.data.prompt.includes(` send ${ID}`));
 });
 

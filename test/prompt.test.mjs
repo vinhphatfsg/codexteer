@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,7 +37,8 @@ test("every supervision policy keeps the shared idle reply, decision kind and sh
 });
 
 
-const withoutSession = text => text.replaceAll(/--supervisor '[0-9a-f-]{36}'/g, "--supervisor '<SESSION>'");
+// Each supervisor ID gets its own launcher, so its name changes with the session.
+const withoutSession = text => text.replaceAll(/--supervisor '[0-9a-f-]{36}'/g, "--supervisor '<SESSION>'").replaceAll(/codexteer-s-[0-9a-f]{12}/g, "codexteer-s-<SESSION>");
 
 function versionCommand(text) {
   const command = text.split("\n").find(line => line.endsWith(" --version"));
@@ -73,7 +74,82 @@ test("supervise prompt emits only orchestrator instructions, normalizes the targ
   const resolved = spawnSync(process.execPath, [BIN, "supervise", "prompt", url], options);
   assert.equal(resolved.status, 0);
   assert.equal(withoutSession(resolved.stdout), withoutSession(plain.stdout), "Only the normalized ID is interpolated, not URL query text");
-  assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["runtimes"], "Generation prepares only the distribution, without connections or journal state");
+  assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["bin", "runtimes"], "Generation prepares only the distribution and its launchers, without connections or journal state");
+});
+
+test("a saved prompt runs every command through one owner-only launcher word instead of the long form", t => {
+  const options = fixture(t);
+  const result = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID, "--json"], options);
+  assert.equal(result.status, 0, result.stderr);
+  const { data } = JSON.parse(result.stdout);
+  assert.equal(path.dirname(data.command), path.join(realpathSync(options.env.CODEX_HOME), "codex-steer/bin"));
+  assert.match(path.basename(data.command), /^codexteer-s-[0-9a-f]{12}$/);
+  const info = lstatSync(data.command);
+  assert.ok(info.isFile() && !info.isSymbolicLink()); assert.equal(info.mode & 0o777, 0o700); assert.equal(info.uid, process.getuid());
+  const commandLines = data.prompt.split("\n").filter(line => line.startsWith("/"));
+  assert.ok(commandLines.length >= 15);
+  for (const line of commandLines) assert.ok(line === data.command || line.startsWith(`${data.command} `), line);
+  assert.doesNotMatch(data.prompt, /CODEX_HOME=|--require-node-version|codex-steer\/runtimes|--supervisor '/);
+  assert.equal(data.prompt.includes(realpathSync(process.execPath)), false);
+  const status = spawnSync("/bin/sh", ["-c", `${data.command} supervise stop ${ID} --json`], { ...options, env: { ...options.env, PATH: "/no-cli" } });
+  assert.equal(JSON.parse(status.stdout).error.code, "SUPERVISOR_CONTROL_FORBIDDEN", "The launcher carries the supervisor ID");
+});
+
+test("a launcher rejects a re-added binding option and keeps the Node version guard", t => {
+  const options = fixture(t);
+  const { data } = JSON.parse(spawnSync(process.execPath, [BIN, "supervise", "prompt", ID, "--json"], options).stdout);
+  const run = (line, env = {}) => spawnSync("/bin/sh", ["-c", line], { ...options, env: { ...options.env, PATH: "/no-cli", ...env } });
+  const other = "aaaaaaaa-aaaa-4aaa-8aaa-000000000099";
+  for (const line of [`${data.command} supervise status ${ID} --supervisor '${other}' --json`, `${data.command} --connection desktop read ${ID} --json`, `${data.command} --require-node-version ${process.version} --version --json`]) {
+    const rejected = run(line);
+    assert.equal(rejected.status, 1, line); assert.equal(JSON.parse(rejected.stdout).error.code, "OPTIONS_INVALID", line);
+  }
+  // Stands in for a Node upgrade at the pinned path: the launcher's Node now reports another version.
+  const upgrade = path.join(options.cwd, "upgraded-node.cjs");
+  writeFileSync(upgrade, 'Object.defineProperty(process, "version", { value: "v0.0.1" });\n');
+  const mismatch = run(`${data.command} --version --json`, { NODE_OPTIONS: `--require ${upgrade}` });
+  assert.equal(mismatch.status, 1); assert.equal(JSON.parse(mismatch.stdout).error.code, "NODE_VERSION_MISMATCH");
+  assert.equal(run(`${data.command} --version`).stdout.trim(), data.deployment.version);
+});
+
+test("an old long-form command from an earlier prompt still runs against the same profile", t => {
+  const options = fixture(t);
+  const { data } = JSON.parse(spawnSync(process.execPath, [BIN, "supervise", "prompt", ID, "--json"], options).stdout);
+  const q = value => `'${value.replaceAll("'", "'\\''")}'`;
+  const longForm = `CODEX_HOME=${q(data.deployment.codex_home)} ${q(data.node.path)} ${q(path.join(data.deployment.directory, "bin/codexteer.mjs"))} --require-node-version ${q(data.node.version)} --supervisor ${q(data.supervisor.session_id)} --connection shared`;
+  const receiving = { ...options, env: { ...options.env, PATH: "/no-cli", CODEX_HOME: path.join(options.cwd, "other-home") } };
+  for (const shell of ["/bin/sh", "/bin/zsh"]) {
+    const registered = spawnSync(shell, ["-f", "-c", `${longForm} supervise register ${ID} --owner claude`], receiving);
+    assert.equal(registered.status, 0, registered.stderr);
+  }
+  const status = spawnSync("/bin/sh", ["-c", `${data.command} supervise status ${ID} --json`], receiving);
+  assert.equal(JSON.parse(status.stdout).data.session_id, data.supervisor.session_id, "The long form and the launcher reach the same profile and session");
+  assert.equal(existsSync(receiving.env.CODEX_HOME), false);
+});
+
+test("generation fails with LAUNCHER_UNUSABLE and no prompt when the launcher may not be executed", { skip: !existsSync("/usr/bin/sandbox-exec") && "sandbox-exec is unavailable" }, t => {
+  const options = fixture(t);
+  mkdirSync(options.env.CODEX_HOME, { mode: 0o700 });
+  // Like a Codex sandbox that denies executing files under CODEX_HOME.
+  const profile = `(version 1)(allow default)(deny process-exec (subpath ${JSON.stringify(path.join(realpathSync(options.env.CODEX_HOME), "codex-steer/bin"))}))`;
+  const sandboxed = args => spawnSync("/usr/bin/sandbox-exec", ["-p", profile, process.execPath, BIN, ...args], options);
+  for (const args of [["supervise", "prompt", ID, "--json"], ["orchestrate", "prompt", "--project", "P", "goal", "--json"]]) {
+    const result = sandboxed(args);
+    assert.equal(result.status, 1, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.error.code, "LAUNCHER_UNUSABLE"); assert.equal(Object.hasOwn(parsed, "data"), false);
+  }
+  const plain = sandboxed(["supervise", "prompt", ID]);
+  assert.equal(plain.status, 1); assert.equal(plain.stdout, ""); assert.match(plain.stderr, /--use-path-cli/);
+});
+
+test("a linked launcher directory is refused without writing through the link", t => {
+  const options = fixture(t), elsewhere = path.join(options.cwd, "elsewhere");
+  mkdirSync(elsewhere, { mode: 0o700 }); mkdirSync(path.join(options.env.CODEX_HOME, "codex-steer"), { recursive: true, mode: 0o700 });
+  symlinkSync(elsewhere, path.join(options.env.CODEX_HOME, "codex-steer/bin"));
+  const result = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID, "--json"], options);
+  assert.equal(result.status, 1); assert.equal(JSON.parse(result.stdout).error.code, "DEPLOYMENT_UNSAFE");
+  assert.deepEqual(readdirSync(elsewhere), []);
 });
 
 test("JSON prompt output preserves the text as one field with the standard CLI envelope", t => {
@@ -179,8 +255,6 @@ test("generated commands use the saved CLI despite missing or shadowed PATH comm
   const result = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID], options);
   assert.equal(result.status, 0, result.stderr);
   const command = versionCommand(result.stdout);
-  assert.ok(command.includes(realpathSync(process.execPath)));
-  assert.ok(command.includes("/codex-steer/runtimes/"));
   assert.equal(command.includes(realpathSync(BIN)), false);
   assert.doesNotMatch(result.stdout, /^(?:command -v codexteer|codexteer |npx )/m);
   const prefix = command.slice(0, -" --version".length);
@@ -188,7 +262,7 @@ test("generated commands use the saved CLI despite missing or shadowed PATH comm
     assert.ok(result.stdout.includes(`\n${prefix} ${operation}`), `Missing bound command: ${operation}`);
   }
   const expected = spawnSync(process.execPath, [BIN, "--version"], options).stdout;
-  for (const shell of ["/bin/zsh", "/bin/bash"]) {
+  for (const shell of ["/bin/sh", "/bin/zsh", "/bin/bash"]) {
     for (const PATH of [poison, path.join(options.cwd, "no-bin")]) {
       const executed = spawnSync(shell, ["-f", "-c", command], { ...options, env: { ...options.env, PATH } });
       assert.equal(executed.status, 0, executed.stderr);
@@ -196,7 +270,7 @@ test("generated commands use the saved CLI despite missing or shadowed PATH comm
       assert.equal(executed.stderr, "");
     }
   }
-  assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["runtimes"]);
+  assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["bin", "runtimes"]);
 });
 
 test("pasted commands retain the generating profile when the receiving environment or home alias changes", async t => {

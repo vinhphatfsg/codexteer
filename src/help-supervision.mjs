@@ -40,9 +40,11 @@ const GENERATION_ERRORS = [
   { code: "HOST_CONNECTION_MISMATCH", when: "リモート対象にshared以外の--connectionを指定した。", action: "--connectionを省略する（shared）。" },
 ];
 const SAVED_CLI_ERRORS = [
-  { code: "DEPLOYMENT_BUSY", when: "同じ版の保存処理のロック（runtimes/.install-<id>）が約5秒たっても解放されない。", action: "同時実行の終了を待って再実行する。残り続けるならユーザーにロックの確認を求める。自動では奪わない。" },
+  { code: "DEPLOYMENT_BUSY", when: "同じ版の保存処理か起動ファイルの配置のロック（runtimes/.install-<id>、bin/.install-<名前>）が約5秒たっても解放されない。", action: "同時実行の終了を待って再実行する。残り続けるならユーザーにロックの確認を求める。自動では奪わない。" },
   { code: "DEPLOYMENT_MODIFIED", when: "保存済みCLIの中身が実行中の配布物と一致しない、または不完全。", action: "本文は出力されない。自動で上書き・削除しないため、ユーザーに報告する。" },
-  { code: "DEPLOYMENT_UNSAFE", when: "CODEX_HOME・保存先・配布物の所有者・権限・リンク・種類が安全条件を満たさない。", action: "権限等を直してから再実行する。自動修復はしない。" },
+  { code: "LAUNCHER_MODIFIED", when: "同じ名前の起動ファイル（CODEX_HOME/codex-steer/bin/codexteer-<s|p>-<hash>）が、このCLIの生成する内容・権限と一致しない。", action: "本文は出力されない。起動ファイルは上書きしないため、ユーザーに確認と削除を依頼してから生成し直す。" },
+  { code: "LAUNCHER_UNUSABLE", when: "生成した起動ファイルを試しに実行できなかった（noexecのホーム、sandboxによる実行拒否など）。", action: "本文は出力されない。起動ファイルを実行できる環境で生成し直すか、--use-path-cliを使う。" },
+  { code: "DEPLOYMENT_UNSAFE", when: "CODEX_HOME・保存先・起動ファイル・配布物の所有者・権限・リンク・種類が安全条件を満たさない。", action: "権限等を直してから再実行する。自動修復はしない。" },
   { code: "SUPERVISION_PATH_UNSAFE", when: "埋め込むパス（CODEX_HOME・Node・保存先など）に制御文字がある。", action: "制御文字のないパスの環境から生成し直す。" },
   NODE_VERSION_MISMATCH,
 ];
