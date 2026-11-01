@@ -196,3 +196,13 @@ test("local send rejects unknown options before the -- separator and sends text 
     assert.equal(status, 0, args.join(" ")); assert.equal(result.data.dry_run, true); assert.equal(result.data.message_characters, "--force --dry-run".length);
   }
 });
+
+test("diff on a local task fails as invalid usage instead of being sent as a message", t => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "ct-local-diff-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  for (const args of [["diff", ID], ["diff", `codex://threads/${ID}`], ["diff"], ["--connection", "desktop", "diff", ID], ["--host", "remote-control:env_fixture", "diff", ID]]) {
+    const { status, result } = cli(args, undefined, { CODEX_HOME: home });
+    assert.equal(status, 1, args.join(" ")); assert.equal(result.error.code, "OPTIONS_INVALID", args.join(" "));
+  }
+  assert.equal(cli(["help", "diff"]).status, 0);
+});

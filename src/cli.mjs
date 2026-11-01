@@ -219,6 +219,7 @@ async function mainOnTarget(argv) {
     }
 
     let command = args.shift();
+    if (command === "diff") throw usage("diff reads a Web Cloud task's recorded patch and is not available for local or remote Desktop tasks. Use read --include-output to inspect file changes.");
     const control = isControlTransport();
     if (targetHost() !== "local" && ["desktop", "debug-ui"].includes(command)) throw Object.assign(new Error("Desktop process/update and Accessibility diagnostics cannot target the remote host. No local operation was run."), { code: "REMOTE_HOST_OPERATION_UNSUPPORTED" });
     if (targetHost() !== "local" && !["remote", "projects", "read", "status", "watch", "doctor", "supervise", "findings", "history", "instructions", "thread", "open", ...(control ? ["send"] : []), ...(remoteTransport() === "paired" ? ["threads", "resource", "checkpoint", "orchestrate"] : [])].includes(command)
