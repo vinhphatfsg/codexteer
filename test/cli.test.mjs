@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -205,6 +205,28 @@ test("diff on a local task fails as invalid usage instead of being sent as a mes
     assert.equal(status, 1, args.join(" ")); assert.equal(result.error.code, "OPTIONS_INVALID", args.join(" "));
   }
   assert.equal(cli(["help", "diff"]).status, 0);
+});
+
+test("a repeated binding option is rejected on every route before any operation, and literal text after -- is not an option", t => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "ct-repeated-binding-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-000000000055", OTHER = "aaaaaaaa-aaaa-4aaa-8aaa-000000000056";
+  for (const args of [
+    ["--supervisor", SESSION, "read", ID, "--supervisor", OTHER],
+    ["--connection", "shared", "send", ID, "x", "--dry-run", "--no-sound", "--connection", "shared"],
+    ["--require-node-version", process.version, "--require-node-version", process.version, "--version"],
+    ["--remote-transport", "native", "--remote-transport", "control", "read", ID],
+    ["--context-thread", ID, "read", ID, "--context-thread", ID],
+    ["--host", "local", "--host", "local", "threads", "list"],
+    ["--connection", "cloud", "--supervisor", SESSION, "read", "task_e_fixture", "--supervisor", OTHER],
+    ["--connection", "desktop-cloud", "read", "durable_fixture", "--connection", "desktop-cloud"],
+  ]) {
+    const { status, result } = cli(args, undefined, { CODEX_HOME: home });
+    assert.equal(status, 1, args.join(" ")); assert.equal(result.error.code, "OPTIONS_INVALID", args.join(" "));
+  }
+  const literal = cli(["orchestrate", "prompt", "--project", "P", "--use-path-cli", "--connection", "shared", "--", "--connection"], undefined, { CODEX_HOME: home });
+  assert.equal(literal.status, 0); assert.equal(literal.result.data.goal, "--connection");
+  assert.deepEqual(readdirSync(home), []);
 });
 
 test("local usage failures carry a code callers can branch on", t => {

@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -75,6 +75,25 @@ async function readSafe(file, privateMode) {
     if (bytes.length !== info.size || after.size !== info.size || after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs) throw failure("Distribution changed while being read.");
     return { bytes, info };
   } finally { await handle.close(); }
+}
+
+const present = file => lstat(file).then(() => true, e => { if (e.code !== "ENOENT") throw e; return false; });
+
+// An abandoned lock is never stolen. A concurrent caller can reuse the
+// completed placement after its owner releases this lock.
+async function exclusively(lock, operation) {
+  let lockInfo;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try { await mkdir(lock, { mode: 0o700 }); lockInfo = await ownedDirectory(lock); break; }
+    catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      await ownedDirectory(lock).catch(e => { if (e.code !== "ENOENT") throw e; });
+      await delay(50);
+    }
+  }
+  if (!lockInfo) throw failure(`Placement is busy or an earlier placement was interrupted. Inspect ${lock} before retrying.`, "DEPLOYMENT_BUSY");
+  try { return await operation(); }
+  finally { if (sameFile(lockInfo, await lstat(lock).catch(() => ({})))) await rm(lock, { recursive: true }); }
 }
 
 async function writeExclusive(file, bytes, mode) {
@@ -155,38 +174,44 @@ export async function prepareDeployment(home, { sourceRoot = PACKAGE_ROOT } = {}
   const canonicalHome = await prepareCodexHome(home);
   const stateRoot = path.join(canonicalHome, "codex-steer"), root = path.join(stateRoot, "runtimes");
   await ownedDirectory(stateRoot, true); await ownedDirectory(root, true);
-  const target = path.join(root, distribution.id), lock = path.join(root, `.install-${distribution.id}`);
-  let lockInfo;
-  // An abandoned lock is never stolen. A concurrent caller can reuse the
-  // completed distribution after its installer releases this lock.
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try { await mkdir(lock, { mode: 0o700 }); lockInfo = await ownedDirectory(lock); break; }
-    catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      await ownedDirectory(lock).catch(e => { if (e.code !== "ENOENT") throw e; });
-      await delay(50);
+  const target = path.join(root, distribution.id);
+  return exclusively(path.join(root, `.install-${distribution.id}`), async () => {
+    let stage, stageInfo;
+    try {
+      if (await present(target)) return { ...await verifyDeployment(target, distribution), codex_home: canonicalHome, reused: true };
+      stage = await mkdtemp(path.join(root, ".stage-")); stageInfo = await ownedDirectory(stage);
+      for (const file of distribution.manifest.files) {
+        const parts = file.path.split("/"); parts.pop(); let parent = stage;
+        for (const part of parts) { parent = path.join(parent, part); await ownedDirectory(parent, true); }
+        await writeExclusive(path.join(stage, file.path), distribution.contents.get(file.path), file.mode);
+      }
+      await writeExclusive(path.join(stage, RECORD), JSON.stringify({ manifest: distribution.manifest, sha256: distribution.sha256 }) + "\n", 0o600);
+      await verifyDeployment(stage, distribution);
+      // All cooperating installers hold the exclusive lock, and the parent is
+      // private. Refuse even an empty existing directory rather than replacing it.
+      if (await present(target)) throw failure("Deployment destination appeared during placement.");
+      await rename(stage, target); stage = null;
+      return { ...await verifyDeployment(target, distribution), codex_home: canonicalHome, reused: false };
+    } finally {
+      if (stage && sameFile(stageInfo, await lstat(stage).catch(() => ({})))) await rm(stage, { recursive: true });
     }
-  }
-  if (!lockInfo) throw failure("Runtime placement is busy or an earlier installation was interrupted. Inspect the installation lock before retrying.", "DEPLOYMENT_BUSY");
-  let stage, stageInfo;
-  try {
-    const existing = await lstat(target).catch(e => { if (e.code !== "ENOENT") throw e; return null; });
-    if (existing) return { ...await verifyDeployment(target, distribution), codex_home: canonicalHome, reused: true };
-    stage = await mkdtemp(path.join(root, ".stage-")); stageInfo = await ownedDirectory(stage);
-    for (const file of distribution.manifest.files) {
-      const parts = file.path.split("/"); parts.pop(); let parent = stage;
-      for (const part of parts) { parent = path.join(parent, part); await ownedDirectory(parent, true); }
-      await writeExclusive(path.join(stage, file.path), distribution.contents.get(file.path), file.mode);
+  });
+}
+
+// A launcher is named by its own content, so reuse and tamper detection are
+// one comparison. An existing file is verified, never rewritten.
+export async function placeLauncher(deployment, kind, script) {
+  const bytes = Buffer.from(script), stateRoot = path.join(deployment.codex_home, "codex-steer"), bin = path.join(stateRoot, "bin");
+  await ownedDirectory(stateRoot); await ownedDirectory(bin, true);
+  const name = `codexteer-${kind}-${hash(bytes).slice(0, 12)}`, file = path.join(bin, name);
+  return exclusively(path.join(bin, `.install-${name}`), async () => {
+    if (!await present(file)) {
+      const stage = path.join(bin, `.stage-${randomBytes(8).toString("hex")}`);
+      try { await writeExclusive(stage, bytes, 0o700); await rename(stage, file); }
+      finally { await rm(stage, { force: true }); }
     }
-    await writeExclusive(path.join(stage, RECORD), JSON.stringify({ manifest: distribution.manifest, sha256: distribution.sha256 }) + "\n", 0o600);
-    await verifyDeployment(stage, distribution);
-    // All cooperating installers hold the exclusive lock, and the parent is
-    // private. Refuse even an empty existing directory rather than replacing it.
-    if (await lstat(target).catch(e => { if (e.code !== "ENOENT") throw e; return null; })) throw failure("Deployment destination appeared during placement.");
-    await rename(stage, target); stage = null;
-    return { ...await verifyDeployment(target, distribution), codex_home: canonicalHome, reused: false };
-  } finally {
-    if (stage && sameFile(stageInfo, await lstat(stage).catch(() => ({})))) await rm(stage, { recursive: true });
-    if (sameFile(lockInfo, await lstat(lock).catch(() => ({})))) await rm(lock, { recursive: true });
-  }
+    const { bytes: found, info } = await readSafe(file, true);
+    if ((info.mode & 0o777) !== 0o700 || !found.equals(bytes)) throw failure(`The launcher ${file} differs from the one this CLI generates. It was left unchanged; ask the user to inspect or remove it before generating again.`, "LAUNCHER_MODIFIED");
+    return file;
+  });
 }

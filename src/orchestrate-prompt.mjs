@@ -65,7 +65,7 @@ Codex担当の反証は根拠を確認して採否を決め、妥当なら計画
 コードの作業場所を分けても、ビルド・画面・DB・設定・配布が共有なら実行順を一元的に調整します。resourceは協調用リースで、OSの強制ロックでも公平な待ち行列でもありません。利用順を各担当で別々に推測させず、待機が増えるなら並行数と進め方を見直します。
 担当ごとに目的、thread ID、supervisor ID、作業場所と基点、依存と共有資源、進捗、監視状態と読了cursor、提出物と次の対応を既存ボードか小さな記録に残します。この本文もファイルに保存し、会話の要約や再起動の後は、本文・記録と第7節で保存した担当ごとのdata.promptを読み直し、その手順で監視を再開します。無関係な変更を保護し、統合の担当と順番を決めます。`,
       `6. 実行コマンドと開始
-${usePathCli ? "PATH上のcodexteerを使い、PATHとCODEX_HOMEを同じ対象Desktopのプロファイルで維持してください。CLI・Nodeの保存や絶対パスの固定は行いません。" : "生成時に検証・保存したCLIと、元のNode・canonical CODEX_HOMEを使います。先頭のCODEX_HOME、各パスの引用符、--require-node-versionを含む実行コマンドを保持してください。保存したCLIを更新・移動・削除せず、別のNode・CLIやnpxへ自動で切り替えません。同じPCとプロファイルで使い、CLIが使えない場合やNodeの版が変わった場合は理由を報告して停止します。"}
+${usePathCli ? "PATH上のcodexteerを使い、PATHとCODEX_HOMEを同じ対象Desktopのプロファイルで維持してください。CLI・Nodeの保存や絶対パスの固定は行いません。" : "次の起動ファイルが実行コマンドです。検証・保存したCLI、元のNodeと版、canonical CODEX_HOME、接続指定を固定しています。起動ファイルと保存したCLIを編集・移動・削除せず、別のNode・CLIやnpxへ切り替えません。同じPCとプロファイルで使い、起動ファイルが使えない場合やNODE_VERSION_MISMATCHでは理由を報告して停止し、本文の再生成を求めます。"}
 ${command}
 これはプロジェクト用の実行コマンドで、特定スレッドの--supervisorを持ちません。作成はこのコマンドを使い、担当への観測・送信は後で生成する個別の監督コマンドを使います。監督のpause/stopを迂回するためにこちらからsendしないでください。どちらのコマンドもシェル変数や関数に入れず、毎回全文を書いてください。
 ${usePathCli ? "command -v codexteer\n" : ""}${command} --version
@@ -80,7 +80,7 @@ ${command} thread create --project <PROJECT-ID> --title <TITLE> - --json < <WORK
 ${agent === undefined ? "<AGENT>は、この本文を実行する監督CLIに合わせてclaudeまたはcodexへ置き換えます。特定の実行役を既定とせず、自分のCLI識別を選び、ユーザーへ選択の確認を求める必要はありません。" : `監督CLIの識別は指定された${agent}を使います。`}--agentは子の監督IDのownerと送信元の識別に使うもので、オーケストレーターの能力や役割を特定モデルに結び付けません。エージェントを起動する操作でもありません。
 ${childPrompt}
 data.supervisor.session_idを子の記録に結び付け、data.promptの開始手順を実行します。生成だけで監督登録や監視開始にはなりません。初回は共通手順を読み、各担当についてdoctor・register・readと履歴・有効指示・findingsの確認を行い、読み残しをdrainしたcursorからwatchを開始します。
-担当ごとの生成コマンドと--supervisor・--connectionをそのまま保持してください。既存の監督と競合したら勝手に置き換えずユーザーへ知らせます。作成した子の監視を開始できなければ追加作成を止め、すでに動いている担当と監視不能の状態を報告します。`,
+担当ごとに生成された実行コマンド（data.command）をその担当の操作だけに使い、--supervisor・--connectionを付け直さないでください。既存の監督と競合したら勝手に置き換えずユーザーへ知らせます。作成した子の監視を開始できなければ追加作成を止め、すでに動いている担当と監視不能の状態を報告します。`,
       `8. 観測・追加指示・継続
 担当ごとのdata.promptのread/watch・介入・継続・配送照合・停止手順を守ります。実行環境にMonitorがあればwatch --stream --notify digest、なければ最大30000msの単発watchを繰り返します。has_moreはchanged=falseでも読み切り、実際に読んだcursorを担当別に保持します。Monitorの期限切れ後はそのcursorから再開します。active登録だけを継続監視の証拠にしません。
 判断待ち、失敗、完了、接続断を見落とさず、reconnecting中は介入せず復帰後に差分を読み切ります。送信は現在のユーザー決定と有効指示を確認して、指摘ごとに安定したkeyのfindingsと--based-on読了cursorを使います。同じ指摘の結果待ちや新しい根拠がない時は重ねて送信しません。unknownはhistory checkで照合し、not_observedを未配送の証拠にしません。

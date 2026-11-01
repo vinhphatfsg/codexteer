@@ -14,7 +14,7 @@ const ATTEMPT_WEB_ONLY = "history show|check --attemptはWeb Cloud専用。Deskt
 
 const ENV_VS_PROJECTS = "environments listはCloud実行環境構成、--connection desktop-cloud projects listはDesktopのプロジェクト一覧で、別物。";
 
-const REMOTE_KEEP_ROUTE = "生成された--host・--remote-transport・--context-thread・--supervisor・--connectionを全コマンドでそのまま保持する。";
+const REMOTE_KEEP_ROUTE = "生成された実行コマンドをそのまま使う。--host・--remote-transport・--context-thread・--supervisor・--connectionはその中に固定され、付け直さない。";
 const REMOTE_ROUTES_SEPARATE = "native・control・pairedのカーソルと監督IDは交換できない。経路が違えばSTALE_CURSORまたはSUPERVISOR_MISMATCH。";
 const REMOTE_NO_FALLBACK = "失敗しても別ホスト・別経路・UI・SSHへの自動切替や再起動はしない。";
 
@@ -87,7 +87,7 @@ export const topics = {
       "通常sendは実行中の親ターンを指定し、それを中断して同じタスクの後続ターンを始める。",
       "送信直前に親ターンとユーザー入力の鮮度を再確認するが、サーバー側での原子的な固定は保証しない。",
       CLOUD_COMMON_SUPERVISION,
-      "監督中は生成された--supervisorと--connection cloudを全コマンドで保持する。",
+      "監督中は、--supervisorと--connection cloudを固定した生成済みの実行コマンドをそのまま使う。",
       "pauseは送信を、stopは観測と送信を拒否する。",
       "pause・stopはCloud上の作業自体を取り消さない。",
       "watch --streamは止めるまで続き、既存Monitorのdigest・接続通知・復帰待ちを使う。",

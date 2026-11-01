@@ -14,7 +14,7 @@ codexteer orchestrate --project 'Example Project' '達成したい目標' --agen
 
 目標は一つの引用した引数か`-`で渡します。`--`で始まる目標はstdinの`-`を使ってください。stdinの目標は起動前に読み取るため、その入力は対話CLIへ再送しません。通常の引数で目標を渡す場合はstdinもそのまま対話CLIへ引き継ぎます。
 
-`--use-path-cli`は本文内のcodexteerコマンドをPATH方式にし、保存コピーを作りません。省略時は保存済みCLI・Node版・canonical `CODEX_HOME`を本文へ固定します。起動するエージェント自体は、どちらの方式でもPATHから選びます。PATH方式の直接起動でも`CODEX_HOME`の所有者と権限を検証し、必要ならディレクトリを作成します。入力不正や保存コピーの改変、unsafe profileではエージェントを起動しません。
+`--use-path-cli`は本文内のcodexteerコマンドをPATH方式にし、保存コピーを作りません。省略時は保存済みCLI・Node版・canonical `CODEX_HOME`・接続指定を固定した起動ファイル（`CODEX_HOME/codex-steer/bin/codexteer-p-<hash>`）のパスを、本文の実行コマンドにします。起動するエージェント自体は、どちらの方式でもPATHから選びます。PATH方式の直接起動でも`CODEX_HOME`の所有者と権限を検証し、必要ならディレクトリを作成します。入力不正や保存コピーの改変、unsafe profileではエージェントを起動しません。
 
 起動側はDesktopへ接続せず、本文を受け取ったオーケストレーターがプロジェクト照合・作成・監視を開始します。プロジェクト用の単一スレッド監督IDは作りません。各子の監督登録と制御は本文の手順に従います。
 
@@ -86,7 +86,7 @@ Felix Riesebergの[How to be more ambitious](https://felixrieseberg.com/how-to-b
 5. 個別の監督ID、読了cursor、findings、配送照合を使って介入する。必要な継続は同じ委任の未完了作業に限る。
 6. 最終差分と検証・成果物を検収し、統合と統合後の確認を担当へ依頼して全体の目的達成まで追う。
 
-作成用コマンドは特定スレッドの `--supervisor` を持ちません。子の観測・送信は、生成した個別の監督コマンドを使います。既定の保存済みCLI方式とPATH方式を子の生成にも引き継ぎます。既存監督IDからの `orchestrate prompt` と、観測専用の `--connection desktop` は拒否します。
+作成用コマンドは特定スレッドの `--supervisor` を持ちません。子の観測・送信は、子ごとに生成した監督用の起動ファイル（`supervise prompt --json`の`data.command`）を使います。既定の保存済みCLI方式とPATH方式を子の生成にも引き継ぎます。既存監督IDからの `orchestrate prompt` と、観測専用の `--connection desktop` は拒否します。
 
 担当ごとの生成方針には、目的の継続（idleの担当への`--new-turn`による再開の許可）、監視の終了条件（ユーザーの停止指示か全体の完了）、Codexの独立した判断、三つの観点を含めます。共通手順は方針による再開の許可と終了条件を受け付けますが、単一スレッド監督の標準方針はどちらも定めないため、その挙動は変わりません。
 

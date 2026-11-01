@@ -12,6 +12,7 @@ import { observeThread, printObservation } from "./observe.mjs";
 import { monitorCommand } from "./monitor.mjs";
 import { notificationOptions } from "./notify.mjs";
 import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
+import { rejectRepeatedBinding } from "./prompt-command.mjs";
 import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, assertSupervisorRegistration, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
 import { createFinding, findingStatus, listFindings, resolveFinding, dismissFinding, reopenFinding, evaluateFinding, findingStats } from "./findings.mjs";
 import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, resolveUnknownDelivery, listInstructions } from "./journal.mjs";
@@ -67,6 +68,7 @@ export const cloudInvocation = argv => !!selectedCloudInvocation(argv);
 // Only parsing/routing is backend-specific. Supervision, monitoring, directives,
 // findings, journaling and saved-agent launch use the same local implementation.
 export async function mainCloud(argv) {
+  rejectRepeatedBinding(argv);
   const args = [...argv], json = flag(args, "--json"), connection = option(args, "--connection", selectedCloudInvocation(argv) || "cloud");
   const desktopCloud = connection === "desktop-cloud";
   const targetId = desktopCloud ? desktopCloudId : value => {

@@ -13,7 +13,8 @@ import { WebSocketServer } from "ws";
 import { describeDistribution } from "../src/distribution.mjs";
 
 
-const withoutSession = text => text.replaceAll(/--supervisor '[0-9a-f-]{36}'/g, "--supervisor '<SESSION>'");
+// Each supervisor ID gets its own launcher, so its name changes with the session.
+const withoutSession = text => text.replaceAll(/--supervisor '[0-9a-f-]{36}'/g, "--supervisor '<SESSION>'").replaceAll(/codexteer-s-[0-9a-f]{12}/g, "codexteer-s-<SESSION>");
 
 const exec = promisify(execFile), repo = fileURLToPath(new URL("../", import.meta.url));
 const root = await mkdtemp("/private/tmp/cs-package-");
@@ -89,7 +90,7 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
     assert.equal(launched.version, sourcePackage.version);
     assert.ok(launched.prompt.includes(`--agent ${agent}${pathMode ? " --use-path-cli" : ""} --json`));
     if (pathMode) assert.match(launched.prompt, /^codexteer --connection shared --version$/m);
-    else assert.ok(launched.prompt.includes(source.id));
+    else assert.ok((await readFile(launched.prompt.split("\n").find(line => line.endsWith(" --version")).slice(0, -" --version".length), "utf8")).includes(`/codex-steer/runtimes/${source.id}/`), "The project launcher runs the content-addressed saved CLI");
   }
   assert.equal(await lstat(path.join(home, "codex-steer", "supervisors")).catch(error => { if (error.code !== "ENOENT") throw error; return null; }), null);
   const agent = JSON.parse((await exec("npx", [...npxArgs, "supervise", ID, "--agent", "claude"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
@@ -97,7 +98,9 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   const codexAgent = JSON.parse((await exec("npx", [...npxArgs, "supervise", ID, "--agent", "codex"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
   assert.equal(codexAgent.version, sourcePackage.version);
   assert.match(codexAgent.prompt, /--owner codex/);
-  assert.ok(agent.prompt.includes(`${home}/codex-steer/runtimes/${source.id}/`), "The agent must receive a content-addressed saved path");
+  const agentCommand = agent.prompt.split("\n").find(line => line.endsWith(" --version")).slice(0, -" --version".length);
+  assert.match(agentCommand, new RegExp(`^${home}/codex-steer/bin/codexteer-s-[0-9a-f]{12}$`), "The agent must receive one launcher word");
+  assert.ok((await readFile(agentCommand, "utf8")).includes(`${home}/codex-steer/runtimes/${source.id}/`), "The launcher must run a content-addressed saved path");
   assert.equal(agent.prompt.includes(`${cache}/_npx/`), false, "The agent must not depend on the mutable npx cache");
   assert.equal(agent.prompt.includes(repo), false, "The packaged prompt must not bind to the development checkout");
   const copiedPrompt = JSON.parse((await exec("npx", [...npxArgs, "supervise", "prompt", ID, "--json"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout).data.prompt;

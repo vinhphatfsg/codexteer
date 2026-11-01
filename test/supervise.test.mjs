@@ -11,7 +11,8 @@ const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 
 
-const withoutSession = text => text.replaceAll(/--supervisor '[0-9a-f-]{36}'/g, "--supervisor '<SESSION>'");
+// Each supervisor ID gets its own launcher, so its name changes with the session.
+const withoutSession = text => text.replaceAll(/--supervisor '[0-9a-f-]{36}'/g, "--supervisor '<SESSION>'").replaceAll(/codexteer-s-[0-9a-f]{12}/g, "codexteer-s-<SESSION>");
 
 function capturedAgent(output) {
   const data = JSON.parse(output); data.args = data.args.map(withoutSession); return data;
@@ -60,7 +61,7 @@ test("supervise preserves forwarded argv and prompt boundaries, inherits cwd and
   assert.deepEqual(capturedAgent(result.stdout), { args: [...forwarded, "--", prompt(options)], cwd: options.cwd, input: "interactive input\n" });
   assert.equal(existsSync(path.join(options.cwd, "INJECTED")), false);
   assert.equal(existsSync(path.join(options.cwd, "INJECTED_TOO")), false);
-  assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["locks", "runtimes", "supervisors"], "The launcher saves its session without connecting to Desktop");
+  assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["bin", "locks", "runtimes", "supervisors"], "The launcher saves its session without connecting to Desktop");
 });
 
 test("direct PATH CLI supervision passes the same prompt and cleans up its session without a deployment", t => {
