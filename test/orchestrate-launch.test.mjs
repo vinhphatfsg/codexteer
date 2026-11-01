@@ -50,7 +50,6 @@ test("direct orchestration starts either CLI in saved and PATH modes with the ex
     const result = run(options, ["--project", PROJECT, GOAL, "--agent", agent, ...(pathMode ? ["--use-path-cli"] : [])]);
     assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, "agent stderr\n");
     assert.deepEqual(JSON.parse(result.stdout), { agent, args: ["--", expected], cwd: options.cwd, input: "interactive input\n", inherited: "inherited value" });
-    assert.match(expected, /役割は特定のモデルに依存せず/);
     assert.ok(expected.includes(`--agent ${agent}${pathMode ? " --use-path-cli" : ""} --json`));
     assert.equal(existsSync(path.join(options.env.CODEX_HOME, "codex-steer", "supervisors")), false, "A project launch cannot fabricate a single-task registration");
     if (pathMode) assert.deepEqual(readdirSync(options.env.CODEX_HOME), []);

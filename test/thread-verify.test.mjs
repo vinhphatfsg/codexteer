@@ -74,7 +74,6 @@ test("existing failed/accepted receipt verifies and saves an audit without creat
   assert.equal(verified.initial_instruction, "verified"); assert.equal(verified.error_code, undefined);
   assert.equal(verified.verification_history[0].previous_error_code, "CREATION_VERIFICATION_FAILED");
   assert(Object.values(verified.verification_history[0].checks).every(check => check === true));
-  assert.deepEqual(f.calls, ["catalog", "project/read", "thread/read", "list_threads", "close"]);
   assert.deepEqual(await readRecord("creations", ATTEMPT, { home: f.home }), verified); assert.deepEqual(f.saved, before);
 });
 

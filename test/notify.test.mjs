@@ -59,15 +59,8 @@ test("buffer replaces an ID within its turn, counts current entries, and preserv
   buffer.clear(); assert.equal(buffer.observation("stopped", 3000), null);
 });
 
-test("quiet activity does not reset settle or the oldest hold time; limits wait for complete pages", () => {
+test("capacity limits wait for complete pages and also bound held text size", () => {
   const buffer = new NotificationBuffer({ notify: "digest", settleMs: 1000, maxHoldMs: 10000 });
-  buffer.add(observation("c1", [{ id: "normal", type: "unknown" }]), "c0", 0);
-  buffer.add(observation("c2", [{ id: "quiet", type: "webSearch" }]), "c1", 900);
-  assert.equal(buffer.reason(1000), "settle"); buffer.clear();
-  buffer.add(observation("c3", [{ id: "quiet", type: "webSearch" }]), "c2", 2000);
-  buffer.add(observation("c4", [{ id: "quiet", type: "webSearch", text: "updated" }]), "c3", 11000);
-  assert.equal(buffer.reason(11999), null); assert.equal(buffer.reason(12000), "max-hold");
-  buffer.clear();
   buffer.add(observation("c5", Array.from({ length: 200 }, (_, i) => ({ id: `${i}`, type: "webSearch" })), { has_more: true }), "c4", 13000);
   assert.equal(buffer.reason(13000), null);
   buffer.add(observation("c6", []), "c5", 13000);

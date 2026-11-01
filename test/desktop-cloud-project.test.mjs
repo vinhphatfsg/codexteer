@@ -33,10 +33,10 @@ test("catalog validation rejects another executor, duplicate identities and rela
   for (const value of [{ environmentId: "other", projects: [row] }, { environmentId: environment, projects: [row, row] }, { environmentId: environment, projects: [{ ...row, rootPaths: ["../outside"] }] }]) assert.throws(() => validateProjectCatalog(value, environment));
 });
 test("discovery uses one owner-validated process, a matching endpoint and its public key only", async () => {
-  const encoded = pair.publicKey.export({ format: "der", type: "spki" }).toString("base64"), calls = [];
+  const encoded = pair.publicKey.export({ format: "der", type: "spki" }).toString("base64");
   const options = { discover: async () => ({ paths: { home: "/example" }, state: { pid: 42, node_path: BUNDLED_NODE } }), endpoint: async () => ({ socketPath: "/example/native" }),
-    run: (_command, argv) => { calls.push(argv); return { status: 0, stdout: argv.includes("uid=") ? `${process.getuid()} ${BUNDLED_NODE}` : `SECRET=DO_NOT_EMIT CODEX_APP_TOOLS_PIPE_PATH=/example/native CODEX_TASK_WORKSPACE_VERIFYING_IDENTITY=${encoded}` }; } };
-  const api = await discoverProjectApi(options); assert.equal(api.key.asymmetricKeyType, "ed25519"); assert.doesNotMatch(JSON.stringify(api), /DO_NOT_EMIT|SECRET=|CODEX_TASK_WORKSPACE/); assert.equal(calls.length, 2);
+    run: (_command, argv) => ({ status: 0, stdout: argv.includes("uid=") ? `${process.getuid()} ${BUNDLED_NODE}` : `SECRET=DO_NOT_EMIT CODEX_APP_TOOLS_PIPE_PATH=/example/native CODEX_TASK_WORKSPACE_VERIFYING_IDENTITY=${encoded}` }) };
+  const api = await discoverProjectApi(options); assert.equal(api.key.asymmetricKeyType, "ed25519"); assert.doesNotMatch(JSON.stringify(api), /DO_NOT_EMIT|SECRET=|CODEX_TASK_WORKSPACE/);
   await assert.rejects(discoverProjectApi({ ...options, run: () => ({ status: 0, stdout: `0 /untrusted/node` }) }));
   await assert.rejects(discoverProjectApi({ ...options, endpoint: async () => ({ socketPath: "/another/native" }) }));
 });

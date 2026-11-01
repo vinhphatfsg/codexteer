@@ -48,7 +48,7 @@ test("concurrent claims have at most one winner and a busy run executes nothing"
   const results = await Promise.allSettled([acquireResource("one", { ...f, owner: "a" }), acquireResource("one", { ...f, owner: "b" })]);
   assert.equal(results.filter(x => x.status === "fulfilled").length, 1);
   const marker = `${f.home}/should-not-exist`;
-  await assert.rejects(runWithResource("one", [process.execPath, "-e", "require('fs').writeFileSync(process.argv[1],'bad')", marker], { ...f, owner: "c" }), /held/);
+  await assert.rejects(runWithResource("one", [process.execPath, "-e", "require('fs').writeFileSync(process.argv[1],'bad')", marker], { ...f, owner: "c" }), { code: "RESOURCE_BUSY" });
   await assert.rejects(readFile(marker), { code: "ENOENT" });
 });
 

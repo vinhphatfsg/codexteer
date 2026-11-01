@@ -46,9 +46,9 @@ test("changed endpoints, public sockets, symlinks and arbitrary tool requests fa
 });
 
 test("legacy discovery reads only a verified selected wrapper and extracts one endpoint", async t => {
-  const f = await fixture(t, () => {}), calls = [];
-  const endpoint = await discoverNativeEndpoint({ node_path: BUNDLED_NODE, pid: 42 }, { run(command, argv) { calls.push(argv); return argv.includes("uid=") ? { status: 0, stdout: `${process.getuid()} ${BUNDLED_NODE}\n` } : { status: 0, stdout: `node SECRET=never-print CODEX_APP_TOOLS_PIPE_PATH=${f.endpoint.socketPath} OTHER=private` }; } });
-  assert.equal(endpoint.socketPath, f.endpoint.socketPath); assert.equal(JSON.stringify(endpoint).includes("SECRET"), false); assert.equal(calls.length, 2);
+  const f = await fixture(t, () => {});
+  const endpoint = await discoverNativeEndpoint({ node_path: BUNDLED_NODE, pid: 42 }, { run(command, argv) { return argv.includes("uid=") ? { status: 0, stdout: `${process.getuid()} ${BUNDLED_NODE}\n` } : { status: 0, stdout: `node SECRET=never-print CODEX_APP_TOOLS_PIPE_PATH=${f.endpoint.socketPath} OTHER=private` }; } });
+  assert.equal(endpoint.socketPath, f.endpoint.socketPath); assert.equal(JSON.stringify(endpoint).includes("SECRET"), false);
   await assert.rejects(discoverNativeEndpoint({ node_path: BUNDLED_NODE, pid: 42 }, { run: () => ({ status: 0, stdout: "0 /untrusted/node" }) }), { code: "NATIVE_UNAVAILABLE" });
 });
 

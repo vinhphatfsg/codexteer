@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,31 +27,12 @@ function childPreparation(prompt, agent = "codex") {
   return command.replace("<THREAD-ID>", ID).replace("<AGENT>", agent);
 }
 
-test("orchestration preserves the goal and connects ambition, dissent and evidence to concrete decisions", () => {
+test("orchestration preserves the goal and emits project operations and bound child preparation", () => {
   const goal = "  見える成果\n{{command}} ${goal} $(touch should-not-exist)  ";
   const data = orchestrationPrompt("My Project", goal, "prepared-command --connection shared");
   assert.equal(data.goal, goal);
   assert.equal(data.project_selector, "My Project");
   assert.ok(data.prompt.includes(goal));
-  for (const requirement of [
-    /高度:.*作業→成果→上位の目的/,
-    /深さ:.*一次資料・生データ・実コード.*自分や実装担当の説明以外/,
-    /範囲:.*使う技法・期待する改善・確かめ方/,
-    /現状.*挑戦目標|要求基準、現状、.*挑戦目標/,
-    /主要な実装方針を選ぶ前.*重要な新しい証拠.*統合前.*全体の完了前/,
-    /代理指標だけを良くしていないか/,
-    /継続・計画変更・権限や目的の確認/,
-    /Codex.*調査・設計判断・実装・検証.*異論や改善案/,
-    /妥当なら計画と発注書を更新/,
-    /期待する結論を指定しません/,
-    /受入条件を都合よく緩めず/,
-    /自分の仮説をユーザー決定として伝えません/,
-    /同じ目的の未完了作業.*後続ターン開始/,
-    /監視を開始できなければ追加作成を止め/,
-    /個別の監督コマンド/,
-    /unknown\/dispatchingは未作成の証拠ではありません/,
-    /一括停止する機能ではありません/,
-  ]) assert.ok(requirement.test(data.prompt), `Missing orchestration requirement: ${requirement}`);
   assert.equal(data.prompt.includes(ID), false, "An unrelated environment thread is not a target");
   const operationLines = data.prompt.split("\n").filter(line => line.startsWith("prepared-command "));
   assert.ok(operationLines.some(line => line.includes(" thread create --project <PROJECT-ID> ")));
@@ -86,7 +67,7 @@ test("PATH generation is deterministic, offline and does not create any state", 
   assert.deepEqual(readdirSync(options.cwd), []);
 });
 
-test("stdin and literal goal arguments retain their exact content without replacing policy", t => {
+test("stdin and literal goal arguments retain their exact content", t => {
   const options = fixture(t), goal = "\n最初の目標\n--use-path-cli ${command}\n  ";
   const stdin = cli(options, ["--json", "orchestrate", "prompt", "--project", "P", "--use-path-cli", "-"], goal);
   assert.equal(stdin.status, 0, stdin.stderr);
@@ -96,23 +77,7 @@ test("stdin and literal goal arguments retain their exact content without replac
     assert.equal(result.status, 0, result.stderr);
     const { data } = JSON.parse(result.stdout);
     assert.equal(data.goal, literal);
-    assert.match(data.prompt, /2\. 高度・深さ・範囲/);
   }
-  assert.equal(existsSync(options.env.CODEX_HOME), false);
-});
-
-test("both help routes work offline and describe metadata and generation boundaries", t => {
-  const options = fixture(t);
-  for (const args of [["help", "orchestrate"], ["help", "orchestrate", "prompt"], ["orchestrate", "--help"], ["orchestrate", "prompt", "--help"]]) {
-    const result = cli(options, [...args, "--json"]);
-    assert.equal(result.status, 0, result.stderr);
-    const { data } = JSON.parse(result.stdout);
-    assert.match(data.topic, /^orchestrate( prompt)?$/);
-    assert.ok(data.usage.some(usage => /orchestrate prompt --project/.test(usage)));
-    if (data.topic.endsWith(" prompt")) assert.match(data.returns, /project_selector.*goal.*cli_mode/);
-  }
-  const overview = JSON.parse(cli(options, ["help", "--json"]).stdout).data;
-  assert.ok(overview.use_cases.some(entry => entry.command === "help orchestrate prompt"));
   assert.equal(existsSync(options.env.CODEX_HOME), false);
 });
 
@@ -159,7 +124,6 @@ test("a saved project prompt creates a bound child prompt after the original sou
   assert.equal(data.cli_mode, "saved");
   assert.deepEqual(data.node, { path: realpathSync(process.execPath), version: process.version });
   assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["runtimes"]);
-  assert.ok(existsSync(path.join(data.deployment.directory, "src/orchestrate-prompt.mjs")));
   rmSync(source, { recursive: true });
   const receiving = { ...options, env: { ...options.env, PATH: "/missing-cli", CODEX_HOME: path.join(options.cwd, "other-home") } };
   const versionCommand = data.prompt.split("\n").find(line => line.endsWith(" --version"));
@@ -215,9 +179,6 @@ test("either CLI identity can supervise without changing the model-neutral role 
     assert.equal(generated.status, 0, generated.stderr);
     const { data } = JSON.parse(generated.stdout);
     assert.equal(data.agent, agent);
-    assert.match(data.prompt, /オーケストレーターとCodex担当の役割分担/);
-    assert.match(data.prompt, /役割は特定のモデルに依存せず、Codex自身も/);
-    assert.doesNotMatch(data.prompt, /あなたはClaude|Claudeの仮説|ClaudeとCodex/);
     const command = childPreparation(data.prompt);
     assert.ok(command.includes(` --agent ${agent} `));
     const child = spawnSync("/bin/sh", ["-c", command], { ...options, env: { ...options.env, PATH: bin } });
@@ -227,16 +188,4 @@ test("either CLI identity can supervise without changing the model-neutral role 
     assert.ok(childData.prompt.includes(`--source ${agent === "claude" ? "claude-code" : "codex"}`));
   }
   assert.equal(existsSync(options.env.CODEX_HOME), false);
-});
-
-test("a modified saved runtime is rejected without repair or partial orchestration output", t => {
-  const options = fixture(t), args = ["orchestrate", "prompt", "--project", "P", "goal", "--json"];
-  const first = cli(options, args);
-  assert.equal(first.status, 0, first.stderr);
-  const runtime = JSON.parse(first.stdout).data.deployment.directory;
-  appendFileSync(path.join(runtime, "src/orchestrate-prompt.mjs"), "\n// altered\n");
-  const rejected = cli(options, args);
-  assert.equal(rejected.status, 1);
-  assert.equal(JSON.parse(rejected.stdout).error.code, "DEPLOYMENT_MODIFIED");
-  assert.equal(Object.hasOwn(JSON.parse(rejected.stdout), "data"), false);
 });

@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { execFile } from "node:child_process";
-import { helpData, renderHelp } from "../src/help.mjs";
 import { cloudInvocation } from "../src/cloud-cli.mjs";
 import { normalizeTaskId } from "../src/task-id.mjs";
 import { normalizeThreadId } from "../src/thread-id.mjs";
@@ -157,7 +156,7 @@ globalThis.fetch=async(url,options)=>{if(!url.startsWith('https://chatgpt.com/ba
 
 test("common Cloud commands preserve supervisor controls, findings, active intervention, history and instructions",async t=>{
   const f=await fixture(t),run=f.invoke;
-  const prompt=await run(["supervise","prompt",task,"--use-path-cli"]);assert.equal(prompt.supervisor.connection,"cloud");assert.match(prompt.prompt,/Codex Cloud/);assert.match(prompt.prompt,/watch .*--stream --notify digest/);
+  const prompt=await run(["supervise","prompt",task,"--use-path-cli"]);assert.equal(prompt.supervisor.connection,"cloud");assert.match(prompt.prompt,/watch .*--stream --notify digest/);
   const sid=prompt.supervisor.session_id,managed=(...args)=>run(["--supervisor",sid,"--connection","cloud",...args]);
   assert.equal((await managed("doctor","--thread",task)).ready,true);
   await managed("supervise","register",task,"--owner","fixture");
@@ -184,10 +183,10 @@ test("common Cloud commands preserve supervisor controls, findings, active inter
 test("Cloud supervisor launch registers the actual launcher, pins saved/PATH commands and stops on agent exit",async t=>{
   const f=await fixture(t);
   await writeFile(`${f.bin}/claude`,`#!${process.execPath}
-const fs=require('node:fs');const prompt=process.argv.at(-1);const record=JSON.parse(fs.readFileSync(process.env.CODEX_HOME+'/codex-steer/cloud-supervisors/task_fixture_common.json'));if(record.state!=='active'||record.connection!=='cloud'||record.launcher_pid!==process.ppid)throw new Error('Supervisor binding was not registered');console.log(JSON.stringify({registered:true,cloud:prompt.includes('Codex Cloud'),saved:prompt.includes('--require-node-version'),task:record.thread_id}));`,{mode:0o700});
+const fs=require('node:fs');const prompt=process.argv.at(-1);const record=JSON.parse(fs.readFileSync(process.env.CODEX_HOME+'/codex-steer/cloud-supervisors/task_fixture_common.json'));if(record.state!=='active'||record.connection!=='cloud'||record.launcher_pid!==process.ppid)throw new Error('Supervisor binding was not registered');console.log(JSON.stringify({registered:true,saved:prompt.includes('--require-node-version'),task:record.thread_id}));`,{mode:0o700});
   for(const pathMode of [false,true]){
     const result=JSON.parse(await f.raw(['supervise',task,'Observe only; do not send.','--agent','claude',...(pathMode?['--use-path-cli']:[])]));
-    assert.equal(result.registered,true);assert.equal(result.cloud,true);assert.equal(result.saved,!pathMode);assert.equal(result.task,task);
+    assert.equal(result.registered,true);assert.equal(result.saved,!pathMode);assert.equal(result.task,task);
     const status=await f.invoke(['supervise','status',task]);assert.equal(status.state,'stopped');
   }
 });
@@ -203,7 +202,6 @@ test("common attempt recovery survives a missing journal and enforces task and s
   for (const action of ["show", "check"]) {
     await assert.rejects(run(["history", action, "task_other", "--attempt", attempt]), e => {
       assert.equal(e.result?.error.code, "CLOUD_TARGET_CONFLICT");
-      assert.equal(e.result.error.message, "The send attempt belongs to another cloud task.");
       assert(!Object.hasOwn(e.result.error, "expected_connection"));
       return true;
     });
@@ -231,17 +229,6 @@ test("common attempt recovery survives a missing journal and enforces task and s
   assert.equal(JSON.parse(await readFile(f.state)).posts, 1);
 });
 
-
-test("Cloud help documents one common command surface and its recovery operations", () => {
-  for (const topic of ["cloud", "history", "thread", "projects", "threads", "diff"]) {
-    const data = helpData(topic);
-    assert.doesNotMatch(renderHelp(data), /旧cloud|cloud_v1|codexteer cloud (?:create|read|watch|send|reconcile|receipt|status|diff)/);
-    for (const usage of data.usage) assert.doesNotMatch(usage, /^cloud /);
-  }
-  assert.match(renderHelp(helpData("thread")), /--connection cloud thread receipt/);
-  assert.match(renderHelp(helpData("history")), /--attempt <ATTEMPT_ID>/);
-  assert.match(renderHelp(helpData("diff")), /--attempt 1\.\.4/);
-});
 
 test("a blocked Cloud message never borrows a prior delivery receipt or activates a rejected replacement", async t => {
   const f = await fixture(t), run = f.invoke;

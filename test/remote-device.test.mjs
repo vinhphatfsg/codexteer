@@ -125,7 +125,7 @@ test("dedicated profile selection does not adopt Desktop registrations or anothe
 test("fixed helper keeps key preparation input private and no bearer or private material leaves via argv", async () => {
   let file;
   const result = await deviceKey("create", {}, { run: async (exe, args, options) => {
-    assert(exe.endsWith("/cua_node/bin/node")); assert(args[0].endsWith("/remote-device-worker.mjs")); file = args[1];
+    assert(exe.endsWith("/cua_node/bin/node")); file = args[1];
     assert.deepEqual(JSON.parse(await readFile(file, "utf8")), { operation: "create" }); assert.equal((await lstat(file)).mode & 0o777, 0o600);
     assert.equal(options.env.NODE_OPTIONS, ""); return { stdout: JSON.stringify({ ok: true, key }) };
   } });

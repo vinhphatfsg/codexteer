@@ -64,10 +64,10 @@ test("supervised sends require findings and reviewed cursors, and duplicate acce
   const storage = await fixture(t), session = randomUUID(), finding = await create(storage);
   await registerSupervisor(ID, session, storage);
   const basedOn = readSnapshot(thread()).cursor;
-  let sends = 0;
+  let sends = 0, condition = "The timeout regression test passes";
   const runtime = { ...storage, send: async (_, body, options) => {
     await options.beforeSend(thread()); sends++;
-    assert.match(body, /解決条件:/);
+    assert.ok(body.includes(condition), "The worker receives the current resolution condition");
     return { sent: true, delivery_status: "accepted", client_message_id: options.clientMessageId };
   } };
   await assert.rejects(sendTrackedMessage(ID, "fix", { supervisor: session, finding: finding.id }, runtime), { code: "SUPERVISOR_OBSERVATION_REQUIRED" });
@@ -90,6 +90,7 @@ test("supervised sends require findings and reviewed cursors, and duplicate acce
   await assert.rejects(reopenFinding(ID, finding.id, { ...storage, reason: "The cursor advanced", basedOn: readSnapshot(changed).cursor }), { code: "FINDING_UNCHANGED" });
   const reopened = await reopenFinding(ID, finding.id, { ...storage, reason: "The user added a requirement", condition: "Timeout and cancellation tests pass" });
   assert.equal(reopened.revision, 2);
+  condition = "Timeout and cancellation tests pass";
   await sendTrackedMessage(ID, "new requirement", { finding: finding.id }, runtime);
   assert.equal(sends, 2);
 });

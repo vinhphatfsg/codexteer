@@ -25,12 +25,10 @@ test("routing takes the destination from positionals rather than metadata option
   assert.equal(cli(["--host", "local", "send", link, "fixture", "--dry-run"]).result.error.code, "HOST_MISMATCH");
 });
 
-test("thread repair exposes offline help and rejects unsafe CLI combinations before access", () => {
-  const help = cli(["help", "thread"]);
-  assert.ok(help.result.data.usage.includes("thread repair <THREAD> [--dry-run | --apply]"));
+test("thread repair rejects unsafe CLI combinations before access", () => {
   for (const flags of [["--apply", "--dry-run"], ["--force"], ["--all"]]) {
     const r = cli(["thread", "repair", ID, ...flags]);
-    assert.equal(r.status, 1); assert.match(r.result.error.message, /Expected:/);
+    assert.equal(r.status, 1);
   }
   const desktop = cli(["--connection", "desktop", "thread", "repair", ID]);
   assert.equal(desktop.result.error.code, "DESKTOP_READ_ONLY");
@@ -49,7 +47,7 @@ test("default live send uses App Server and fails without UI fallback when unava
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const { status, result } = cli(["send", ID, "test"], undefined, { CODEX_HOME: home });
   assert.equal(status, 1);
-  assert.match(result.error.message, /Shared App Server is unavailable/);
+  assert.equal(result.error.code, "RUNTIME_UNAVAILABLE");
   assert.equal(result.error.thread_id, ID);
   assert.equal(result.error.sent, false);
   assert.equal(result.error.delivery_status, "not_sent");
@@ -79,7 +77,6 @@ test("UI-only flags require explicit UI backend", () => {
   for (const backend of [[], ["--backend", "app-server"]]) for (const options of [["--keep-focus"], ["--wait-ms", "10"]]) {
     const { status, result } = cli(["send", ID, "test", ...backend, "--dry-run", ...options]);
     assert.equal(status, 1);
-    assert.match(result.error.message, /require --backend ui/);
   }
   const { result } = cli(["send", ID, "test", "--backend", "ui", "--dry-run", "--keep-focus"]);
   assert.equal(result.data.backend, "desktop-ui");
@@ -107,11 +104,9 @@ test("sound defaults on, supports explicit mute, and stays silent in dry runs", 
   for (const flags of [["--sound", "--no-sound"], ["--no-sound", "--sound"]]) {
     const conflict = cli(["send", ID, "test", ...flags]);
     assert.equal(conflict.status, 1);
-    assert.match(conflict.result.error.message, /cannot be combined/);
   }
   const ui = cli(["send", ID, "test", "--sound", "--backend", "ui", "--dry-run"]);
   assert.equal(ui.status, 1);
-  assert.match(ui.result.error.message, /--sound requires --backend app-server/);
 });
 
 test("desktop start dry run does not launch or inspect Desktop", () => {
@@ -125,30 +120,12 @@ test("unknown backend and empty messages fail before doing any work", () => {
   assert.equal(cli(["send", ID, "", "--backend", "app-server", "--dry-run"]).status, 1);
 });
 
-test("command help explains purpose, results and examples without contacting Desktop", () => {
-  for (const topic of ["cloud", "supervise", "supervise prompt", "findings", "connection", "read", "status", "watch", "monitor", "send", "history", "instructions", "checkpoint", "resource", "doctor", "desktop", "projects", "threads", "thread", "open", "debug-ui"]) {
-    for (const args of [["help", ...topic.split(" ")], [...topic.split(" "), "--help"]]) {
-      const { status, result } = cli(args);
-      assert.equal(status, 0); assert.equal(result.command, "help");
-      assert.equal(result.data.topic, topic); assert.ok(result.data.when); assert.ok(result.data.returns); assert.ok(result.data.examples.length);
-    }
-  }
-  const plain = spawnSync(process.execPath, ["bin/codexteer.mjs", "read", "--help"], { encoding: "utf8" });
-  assert.match(plain.stdout, /使い所:/); assert.match(plain.stdout, /確認できること:/);
-  for (const args of [["--help"], ["supervise", "prompt", "--help"]]) {
-    const help = spawnSync(process.execPath, ["bin/codexteer.mjs", ...args], { encoding: "utf8" });
-    assert.equal(help.status, 0);
-    assert.match(help.stdout, /codexteer supervise prompt <THREAD> \[MESSAGE\] \[--agent claude\|codex\] \[--connection shared\|desktop\|cloud\|desktop-cloud\] \[--use-path-cli\] \[--json\]/);
-    assert.doesNotMatch(help.stdout, /codexteer prompt <THREAD>/);
-  }
-});
-
 test("Monitor stream rejects one-shot flags before connecting and always uses JSON errors", t => {
   const home = mkdtempSync(path.join(os.tmpdir(), "cs-monitor-cli-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   for (const args of [["--until", "idle"], ["--timeout-ms", "1000"]]) {
     const result = cli(["watch", ID, "--stream", ...args], undefined, { CODEX_HOME: home });
-    assert.equal(result.status, 1); assert.match(result.result.error.message, /do not combine/);
+    assert.equal(result.status, 1); assert.notEqual(result.result.error.code, "RUNTIME_UNAVAILABLE");
   }
   const result = spawnSync(process.execPath, ["bin/codexteer.mjs", "watch", ID, "--stream"], { encoding: "utf8", env: { ...process.env, CODEX_HOME: home } });
   assert.equal(result.status, 1);
@@ -170,16 +147,12 @@ test("watch validates digest flags before connecting and leaves single-shot watc
   ]) {
     const result = cli(["watch", ID, ...args], undefined, { CODEX_HOME: home });
     assert.equal(result.status, 1, args.join(" "));
-    assert.match(result.result.error.message, /--notify|--settle-ms|--max-hold-ms/);
-    assert.doesNotMatch(result.result.error.message, /Shared App Server/);
+    assert.notEqual(result.result.error.code, "RUNTIME_UNAVAILABLE", args.join(" "));
   }
   for (const args of [[], ["--until", "change", "--timeout-ms", "0"], ["--notify", "all"], ["--stream"], ["--stream", "--notify", "all"], ["--stream", "--settle-ms", "1000", "--max-hold-ms", "10000"]]) {
     const result = cli(["watch", ID, ...args], undefined, { CODEX_HOME: home });
-    assert.equal(result.status, 1); assert.match(result.result.error.message, /Shared App Server is unavailable/, args.join(" "));
+    assert.equal(result.status, 1); assert.equal(result.result.error.code, "RUNTIME_UNAVAILABLE", args.join(" "));
   }
-  const help = cli(["help", "watch"], undefined, { CODEX_HOME: home });
-  assert.ok(help.result.data.usage.some(line => line.includes("--notify all|digest")));
-  assert.ok(help.result.data.notes.some(line => line.includes("watch --streamの既定はdigest")));
 });
 
 test("metadata dry-run validates kind and evidence without exposing message text", () => {

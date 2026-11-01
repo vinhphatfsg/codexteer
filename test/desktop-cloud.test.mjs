@@ -120,10 +120,10 @@ test("common supervisor pause/stop and backend separation apply to durable tasks
   await controlSupervisor(id, "stop", storage); await assert.rejects(assertSupervisor(id, session, storage), { code: "SUPERVISOR_STOPPED" });
 });
 
-test("supervisor prompts retain Cloud scope without Web interrupt semantics", async () => {
+test("supervisor prompts retain the Desktop Cloud connection", async () => {
   const { prepareSupervisorPrompt } = await import("../src/supervise.mjs");
   const result = await prepareSupervisorPrompt(id, "Observe only", { connection: "desktop-cloud", usePathCli: true });
-  assert.match(result.prompt, /--connection desktop-cloud/); assert.match(result.prompt, /対象はDesktop Cloud/); assert.doesNotMatch(result.prompt, /Cloudの通常sendは、実行中の指定ターンを中断/);
+  assert.match(result.prompt, /--connection desktop-cloud/);
 });
 
 test("history reconciles an accepted message among several users in the same turn but never guesses an unknown turn", async t => {

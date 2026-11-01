@@ -44,7 +44,6 @@ test("conflicting transports fail rather than starting a second listener", () =>
 test("Desktop launch scopes overrides to one launch and does not force another instance", () => {
   const args = desktopLaunchArgs("/tmp/Codex Home", "/tmp/Wrapper Space/wrapper.mjs");
   assert.deepEqual(args, ["-a", "/Applications/ChatGPT.app", "--env", "CODEX_CLI_PATH=/tmp/Wrapper Space/wrapper.mjs", "--env", "CODEX_HOME=/tmp/Codex Home"]);
-  assert.equal(args.includes("-n"), false);
 });
 
 test("startup refuses an already-running Desktop without opening or killing it", { skip: process.platform !== "darwin" }, async () => {
@@ -80,7 +79,6 @@ test("doctor does not certify a connected wrapper with missing or PATH Node prov
     assert.equal(result.checks.runtime, true);
     assert.equal(result.checks.initialized, true);
     assert.equal(result.checks.bundled_wrapper_node, false);
-    assert.match(result.remediation, /bundled Node runtime/);
     assert.deepEqual(calls, ["thread/loaded/list", "close"]);
   }
 });

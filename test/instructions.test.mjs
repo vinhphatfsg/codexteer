@@ -12,13 +12,13 @@ test("replacement and withdrawal preserve history and expose only the effective 
   const a = await sendTrackedMessage(ID, "first", {}, deps);
   const b = await sendTrackedMessage(ID, "corrected", { supersedes: a.message_id }, deps);
   assert.deepEqual((await listInstructions(ID, deps)).instructions.map(e => e.id), [b.message_id]);
-  assert.match((await getMessage(ID, b.message_id, deps)).wire_text, /置き換える指示/);
+  assert.ok((await getMessage(ID, b.message_id, deps)).wire_text.includes(a.message_id));
   const c = await sendTrackedMessage(ID, "not needed", { retracts: b.message_id }, deps);
   assert.equal((await listInstructions(ID, deps)).instructions.length, 0);
   const all = (await listInstructions(ID, { ...deps, all: true })).instructions;
   assert.equal(all.find(e => e.id === a.message_id).instruction_status, "superseded");
   assert.equal(all.find(e => e.id === b.message_id).instruction_status, "retracted");
-  assert.match((await getMessage(ID, c.message_id, deps)).wire_text, /撤回する指示/);
+  assert.ok((await getMessage(ID, c.message_id, deps)).wire_text.includes(b.message_id));
 });
 
 test("uncertain replacement keeps old instruction active until delivery is reconciled", async t => {

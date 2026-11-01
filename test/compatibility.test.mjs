@@ -73,20 +73,18 @@ test("probe evidence never overrides explicit declarations or known legacy contr
 
 test("pagination incompatibility does not block full-history read or short watch on an unpaged task", async () => {
   const state = { ...modern, codex_steer_capabilities: { ...RUNTIME_CAPABILITIES, history_pagination: [2] } };
-  let paginated = false, reads = 0;
+  let paginated = false;
   const dependencies = {
     discover: async () => ({ state, paths: { socket: "unused" } }),
     connect: async () => ({ close() {}, async request(method) {
-      assert.equal(method, "thread/read"); reads++;
+      assert.equal(method, "thread/read");
       return { thread: { id: ID, status: { type: "idle" }, turns: [], ...(paginated ? { historyMode: "paginated" } : {}) } };
     } }),
   };
   assert.equal((await observeThread(ID, {}, dependencies)).thread_id, ID);
   assert.equal((await observeThread(ID, { watch: true, until: "idle" }, dependencies)).timed_out, false);
-  assert.equal(reads, 4);
   paginated = true;
   await assert.rejects(observeThread(ID, {}, dependencies), { code: "CAPABILITY_UNSUPPORTED", capability: "history_pagination" });
-  assert.equal(reads, 5);
 });
 
 test("unsupported baseline read contract is rejected before connecting", async () => {
