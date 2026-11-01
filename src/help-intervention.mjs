@@ -106,7 +106,7 @@ export const topics = {
     ],
     notes: [
       "-- 以降はオプションとして解釈しない。--dry-runや--jsonも本文として送られる。本文の途中に置いた -- は本文に残る。",
-      "-- より前の未知の--オプションや値のないオプションはOPTIONS_INVALID（Cloud・Desktop CloudはCLOUD_OPTIONS_INVALID）で拒否し、何も送らない。",
+      "-- より前の未知の--オプションや値のないオプションはOPTIONS_INVALID（Cloud・Desktop CloudはCLOUD_OPTIONS_INVALID）で拒否し、何も送らない。エラー文とerror.unknown_optionsがその語（先頭から3件、各40文字まで）を示す。",
       "--source・--kind・--evidence・--based-on・--supersedes・--expires-at・--checkpoint・--findingか--supervisorがあると本文の前に見出し行を付け、どれもなければ本文だけを送る。",
       "見出しは[codexteer <message_id>]・送信者（既定external）・種類（既定review）と、指定に応じた根拠・観測ターン・置換/撤回対象・期限・checkpoint・指摘と解決条件の行。",
       "decisionは送信者による分類で、新しいユーザー承認を作らない。元のユーザー指示を根拠として示す。",

@@ -15,6 +15,7 @@
 - 失敗した呼び出しは`error.help`に該当トピック、`error.action`にそのトピックに記載した対処を返し、引数エラー（`OPTIONS_INVALID`・`CLOUD_OPTIONS_INVALID`・`DESKTOP_CLOUD_OPTIONS_INVALID`）は`error.usage`に失敗したサブコマンドの使い方も返します。テキスト出力では標準エラーに`使い方:`・`対処:`の行を足します。代わりに`help <topic>`はテキストでも`--json`でもエラー一覧を載せず、`help <topic> --errors`を示す1行だけにしました（`--json`の`errors`配列は`errors_command`に置き換わります）。一覧は`help <topic> --errors`で取得できます。`help send`は約4,300から約2,300 o200kに減ります。エラーコード・メッセージ・終了コードは変わりません。
 - `findings`の`create`・`reopen`・`show`・`list`・`resolve`・`dismiss`・`evaluate`（`revisions`を含む）と`history list`・`show`・`check`・`mark`、`instructions list`は、`based_on`のcursorをそのまま返す代わりに、cursorのSHA-256の先頭16桁を`based_on_sha256`として返します。保存済みの記録は全文のcursorを保持し、以前の記録もそのまま読めます。
 - 生成プロンプトは、会話の要約・再起動の後に保存した本文を読み直し、保存していない場合だけ`help monitor`を読むよう指示します。単発の`watch --until change`の行の後に、完了まで待つ`--until idle`と本文を短くする`--max-chars N`（既定2000）も示します。
+- `send`・`thread create`（ローカル・Cloud・Desktop Cloud）・`orchestrate`で`--`より前の未知のオプションを拒否するとき、エラー文と`error.unknown_options`がその語を示します（例: `Unknown send option: --kidn. Put instruction text that starts with -- after --.`）。示すのは`--`で始まる語を先頭から3件までで、本文を含まないよう各語を1行・40文字までに切り詰めます。拒否する入力・エラーコード・終了コードは変わりません。
 - 生成済みの本文は変わりません。更新後のCLIで生成し直してください。
 
 ## 0.19.0 — 2026-11-01公開
