@@ -2,6 +2,10 @@
 
 公開日は日本時間です。
 
+## Unreleased
+
+- タスクIDと接続指定の不一致エラーに、修正用の`--connection`とJSONの`expected_connection`・`connection`を追加しました。Desktop Cloudには`desktop-cloud`、Web Cloudには`cloud`、ローカルには既定の`shared`を示します。拒否・終了コード・既存エラーコードを維持し、自動切り替えは行いません。
+
 ## 0.18.2 — 2026-11-01公開
 
 - 停止済みの監督IDが、別の監督への交代後に古い本文から再登録できる問題を修正しました。停止履歴を監督記録に保持し、登録前のdoctor・再登録・観測・送信で`SUPERVISOR_STOPPED`を返します。旧形式の停止済み記録も、交代時に履歴へ引き継ぎます。保存済み旧CLIを使う監督には、更新後のCLIでプロンプトを生成し直してください。

@@ -200,8 +200,14 @@ test("common attempt recovery survives a missing journal and enforces task and s
   await rm(`${f.home}/codex-steer/messages/${sent.message_id}.json`);
   const receipt = await run(["history", "show", task, "--attempt", attempt]);
   assert.equal(receipt.task_id, task); assert.equal(receipt.submission_status, "accepted");
-  await assert.rejects(run(["history", "show", "task_other", "--attempt", attempt]), e => e.result?.error.code === "CLOUD_TARGET_CONFLICT");
-  await assert.rejects(run(["history", "check", "task_other", "--attempt", attempt]), e => e.result?.error.code === "CLOUD_TARGET_CONFLICT");
+  for (const action of ["show", "check"]) {
+    await assert.rejects(run(["history", action, "task_other", "--attempt", attempt]), e => {
+      assert.equal(e.result?.error.code, "CLOUD_TARGET_CONFLICT");
+      assert.equal(e.result.error.message, "The send attempt belongs to another cloud task.");
+      assert(!Object.hasOwn(e.result.error, "expected_connection"));
+      return true;
+    });
+  }
   await assert.rejects(run(["history", "check", task, sent.message_id, "--attempt", attempt]), e => e.result?.error.code === "CLOUD_OPTIONS_INVALID");
   const proof = await run(["history", "check", task, "--attempt", attempt]);
   assert.equal(proof.delivery_verification, "stored");

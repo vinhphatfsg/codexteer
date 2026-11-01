@@ -1,6 +1,7 @@
 import { isDesktopCloudTask, desktopCloudId } from "./desktop-cloud-id.mjs";
 import { normalizeThreadId } from "./thread-id.mjs";
 import { isCloudTask, cloudTaskId } from "./cloud-id.mjs";
+import { connectionMismatch } from "./connection-error.mjs";
 
 export { isCloudTask } from "./cloud-id.mjs";
 
@@ -12,12 +13,12 @@ export function normalizeTaskId(value) {
 
 export function taskConnection(value, selected = "shared") {
   if (isDesktopCloudTask(value)) {
-    if (!["shared", "desktop-cloud"].includes(selected)) throw Object.assign(new Error("Desktop Cloud cannot use another connection."), { code: "CLOUD_TARGET_CONFLICT" });
+    if (!["shared", "desktop-cloud"].includes(selected)) throw connectionMismatch("desktop-cloud", selected);
     return "desktop-cloud";
   }
-  if (selected === "desktop-cloud") throw Object.assign(new Error("Use a durable_ ID or hostId=durable link for Desktop Cloud."), { code: "CLOUD_TARGET_CONFLICT" });
+  if (selected === "desktop-cloud") throw connectionMismatch(isCloudTask(value) ? "cloud" : "shared", selected);
   const cloud = isCloudTask(value);
-  if (cloud && selected === "desktop") throw Object.assign(new Error("A cloud task cannot use a Desktop observation endpoint."), { code: "CLOUD_TARGET_CONFLICT" });
-  if (!cloud && selected === "cloud") throw Object.assign(new Error("The cloud connection requires a cloud task ID or link."), { code: "CLOUD_TARGET_CONFLICT" });
+  if (cloud && selected === "desktop") throw connectionMismatch("cloud", selected);
+  if (!cloud && selected === "cloud") throw connectionMismatch("shared", selected);
   return cloud ? "cloud" : selected;
 }

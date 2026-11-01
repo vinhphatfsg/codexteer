@@ -5,6 +5,8 @@ import { desktopCloudConnection, desktopCloudEnvironments } from "./desktop-clou
 import { createDesktopCloudTask, listDesktopCloudTasks, desktopCloudReceipt } from "./desktop-cloud.mjs";
 import { isCloudTask } from "./task-id.mjs";
 import { cloudTaskId } from "./cloud-id.mjs";
+import { normalizeThreadId } from "./thread-id.mjs";
+import { connectionMismatch } from "./connection-error.mjs";
 import { cloudConnection } from "./cloud-connection.mjs";
 import { observeThread, printObservation } from "./observe.mjs";
 import { monitorCommand } from "./monitor.mjs";
@@ -67,8 +69,18 @@ export const cloudInvocation = argv => !!selectedCloudInvocation(argv);
 export async function mainCloud(argv) {
   const args = [...argv], json = flag(args, "--json"), connection = option(args, "--connection", selectedCloudInvocation(argv) || "cloud");
   const desktopCloud = connection === "desktop-cloud";
-  const targetId = desktopCloud ? desktopCloudId : cloudTaskId;
-  if (!["cloud", "desktop-cloud"].includes(connection)) throw failure("A cloud task requires the cloud connection.", "CLOUD_TARGET_CONFLICT");
+  const targetId = desktopCloud ? desktopCloudId : value => {
+    try { return cloudTaskId(value); }
+    catch (error) {
+      // Preserve the Web Cloud ID validator's existing error code.
+      if (isDesktopCloudTask(value)) throw connectionMismatch("desktop-cloud", connection, error.code);
+      let local = false;
+      try { normalizeThreadId(value); local = true; } catch {}
+      if (local) throw connectionMismatch("shared", connection, error.code);
+      throw error;
+    }
+  };
+  if (!["cloud", "desktop-cloud"].includes(connection)) throw Object.assign(connectionMismatch(selectedCloudInvocation(argv) || "cloud", connection), { execution_environment: "cloud" });
   const own = args.slice(0, args.includes("--") ? args.indexOf("--") : args.length);
   if (own.some(value => ["--host", "--remote-transport", "--context-thread"].includes(value))) throw failure("Desktop host routes cannot select a cloud task.", "CLOUD_TARGET_CONFLICT");
   const requiredNode = option(args, "--require-node-version");

@@ -39,6 +39,7 @@ export function fail(error, json) {
   if (json) console.log(JSON.stringify({ ok: false, ...(error.watch ? { command: "watch", data: error.watch } : {}), error: {
     message, code: error.code, ...hostFields(), delivery_status: error.delivery_status,
     operation: error.operation, capability: error.capability,
+    expected_connection: error.expected_connection, connection: error.connection,
     ...((error.execution_environment === "cloud" || (typeof error.code === "string" && error.code.startsWith("CLOUD_"))) ? {
       execution_environment: error.execution_environment, task_id: error.task_id, url: error.url,
       submission_status: error.submission_status, uncertain: error.uncertain,
