@@ -1,7 +1,7 @@
 # 配布と永続実行
 
 パッケージ名は `codexteer`、CLI名は `codexteer`、ライセンスはMITです。
-旧npmパッケージは`@vinhphatfsg/codex-steer`です。リモート操作・Cloud対応・Desktop更新・オフライン履歴修復を含む[`codexteer@0.18.0`](https://www.npmjs.com/package/codexteer/v/0.18.0)は2026-10-29にnpmへ公開済みです。GitHubのPR作成・マージはnpm公開を行う操作ではありません。次の版を公開する際も`npm whoami`でnpm側のユーザーを確認してください。
+旧npmパッケージは`@vinhphatfsg/codex-steer`です。リモート操作・Cloud対応・Desktop更新・オフライン履歴修復を含む[`codexteer@0.18.0`](https://www.npmjs.com/package/codexteer/v/0.18.0)は2026-10-29にnpmへ公開済みです。
 
 `0.18.1`は、保持者と回収者の連続クラッシュでローカルロックが永久に`RECORD_BUSY`になる問題を修正します。更新前に、同じ`CODEX_HOME`を使う旧版CLIの操作と、保存済み旧CLIで動く監督を終了してください。旧版と修正版の回収方式の混在は非対応です。旧`.recover`ディレクトリは修正版では無視されます。監督は更新後のCLIで起動し直すか、プロンプトを生成し直してください。
 
@@ -178,50 +178,6 @@ APIの検証中に`CAPABILITY_UNVERIFIED`または`RUNTIME_PROTOCOL_UNVERIFIED`�
 
 WebSocketの受信上限は1メッセージ64 MiBです。超過は`PAYLOAD_TOO_LARGE`として停止し、サーバーの本文や生のエラーは表示しません。送信APIを呼ぶ前なら`not_sent`、呼び出した後で受付を確認できなければ`unknown`を維持します。個別の履歴ページや旧形式の全履歴が上限を超える場合にも上限は解除しません。
 
-## 公開前の検証
-
-```bash
-npm ci --ignore-scripts
-npm run check
-npm test
-npm run test:package
-npm run test:protocol
-npm run test:connection
-```
-
-`test:package` は実際のtarballを作り、同梱内容・実行権限を確認して、隔離した空のnpmキャッシュからオフラインでインストールします。
-公開を禁止する`private`フィールドがないこと、CLIの`bin`が正規化済みのパスであることも確認します。さらに資格情報を渡さず、外部公開できない接続先・offline・dry-runでnpmの公開準備を検証し、自動補正の警告がなく、テストするtarballと内容ハッシュが一致することを確認します。npmのdry-runは`EPRIVATE`の判定を省略するため、dry-runの成功だけで公開可能とは判断しません。
-リポジトリ外でCLIを実行し、模擬runtimeに対する異なる版でのread/send、機能単位の拒否、キャッシュ削除後の永続配置を検証します。
-改名後のCLIから旧パッケージ名のruntimeへread/sendできることと、旧名の保存先にある履歴を変更せずに読めることも確認します。
-npxから模擬Claudeと模擬Codexを起動して保存したCLIへの参照を確認し、同じ本文を別プロセスへ貼り付けた場合も検証します。元のキャッシュの更新・削除後も保存した版を使い、模擬runtimeへのread/sendを継続できることを確認します。単体テストでは同じ版のソース変更、別の版への更新、保存済みコピーの改変、Nodeバージョンの不一致も検証します。監督側のPATHに別のCLIがある場合やCLIがない場合を含み、実際のエージェントやモデルは起動しません。
-`test:protocol` は実際の同梱CLIと模擬Desktopを使います。実ユーザーのタスクへの送信やDesktopの停止は行いません。
-実際のnpm公開には、アカウントとパッケージの公開権限確認、公開版の確定とユーザーからの公開指示が必要です。
-
-## npmへの公開
-
-レビュー・検証を終えた版を、npm側の公開権限を持つアカウントで公開します。手動公開には2FAを有効にしたアカウントを使ってください。
-
-公開済みのパッケージ名とバージョンの組み合わせは再公開できません。`codexteer@0.18.0`は公開済みのため、次の変更をnpmへ配布する際は新しい版番号を使います。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
-
-```bash
-npm login
-npm whoami
-npm run test:package
-npm publish --access public
-```
-
-公開後は、公開した版と起動コマンドの登録を確認します。公開済みの0.18.0は次のコマンドで確認できます。
-
-```bash
-npm view codexteer@0.18.0 version bin --json
-npx -y codexteer@0.18.0 --version
-```
-
-`EPRIVATE`はリポジトリの`package.json`に公開禁止設定が残っていることを示します。`--access public`はその禁止を解除しません。
-`bin`のパスは`bin/codexteer.mjs`とし、先頭に`./`を付けません。npm 11.6.2では先頭の`./`を正規化する際に「invalid and removed」という警告が出ますが、この場合の実装は`bin`を保持しています。警告を避けるため、正規化済みの表記を配布元から使います。
-
-参考: [npmのfilesとbundleDependencies](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/)、[npm exec/npxのキャッシュ](https://docs.npmjs.com/cli/v11/commands/npm-exec/)、[パッケージの公開](https://docs.npmjs.com/creating-and-publishing-unscoped-public-packages/)。
-
 ## 監督状態・指摘と接続方式
 
 ここからの監督制御、指摘管理、Codex CLI起動、接続方式の選択は0.15.0で追加しました。保存済みCLIの機能自体は0.14.1から利用できます。0.16.0は通知集約と監督プロンプトの改善を含むminor更新です。`watch --stream`の既定はdigestで、`--notify all`を明示すると従来の即時出力になります。単発watchと保存済みCLIの動作は変わりません。runtime protocolと既存capabilityのv1契約は維持し、0.15.0で起動したDesktopとの通信に再起動は不要です。
@@ -237,13 +193,3 @@ npx -y codexteer@0.18.0 --version
 指摘の重複はkeyとrevisionで判定します。cursorだけではrevisionを進めず、新しい根拠か解決条件の変更と理由を要求します。URLは参照だけ、ファイル根拠は送信直前に再照合します。解決のnoteは明示的な判断で、checkpointのrun・入力・成果物の整合性と区別します。評価は未送信候補を含む現在revisionの集計です。操作例と制約はREADME、`help findings`、`help supervise`に記載しています。
 
 `--connection desktop`は既存の`CODEX_HOME/app-server-control/app-server-control.sock`へ読み取り専用で接続します。ホームは所有者一致かつgroup/other書込不可、制御ディレクトリとソケットは所有者専用に限定します。接続前後・各API要求でendpointを検査し、ロード済み対象だけを読み取ります。明示的な選択であり、自動検出による接続切り替え・daemon起動・Desktop再起動はしません。送信機能の診断は`unsupported`、`source: observation-only`です。実機での送信・UI表示・承認継続は未検証のまま残します。
-
-開発用の`npm run test:connection`は、Desktop同梱CLIを一時プロファイルのUnixソケットで起動し、ローカル偽モデルで作った合成履歴の読み取りを確認します。実Desktopへの接続・設定変更や外部モデル利用は行いません。`npm run test:protocol`は既存wrapper・偽Desktopとの送信と承認経路、`npm run test:package`は実tarball・オフラインnpx・偽Claude/Codexの起動と、別CODEX_HOME・キャッシュ削除後の観測/送信・pause/resume・重複拒否を確認します。これらの隔離検証から実Desktopの表示や直接接続での承認往復まで保証するものではありません。
-
-## 0.18.0の公開結果
-
-0.18.0公開時の`package.json`と`package-lock.json`の版、およびnpm registryの`latest`は0.18.0でした。公開tarballが事前検証したファイルと同一であることを確認しました。0.18.0にはリモート操作・Cloud対応・Desktop更新・オフライン履歴修復を含みます。`projects list`と`thread create --project`によるDesktopのチャット作成は0.17.0から利用できます。既存のruntime protocolとcapability契約はv1を維持します。
-
-公開前に構文・全回帰・tarballとoffline install・npm/npx・publish dry-runを検証しました。公開対象119ファイルの内部情報・シークレット検査と依存脆弱性監査で検出は0件でした。公開後はregistryから取得したtarballのSHA-256一致と、隔離キャッシュからのCLI起動を確認しました。次の版でも検証済みtarballを固定して公開してください。PRのReady化やバージョン更新だけではnpmへ公開されません。
-
-検証結果の要約は`remote-cli-validation.json`を参照してください。実環境のホスト・プロジェクト・チャット識別子、ローカルパス、診断ログは公開用の配布物へ含めません。npm公開・Gitタグ作成はPR更新とは別の操作です。

@@ -80,9 +80,7 @@ codexteer --host remote-control:env_example --remote-transport paired checkpoint
 
 checkpointは接続先の`fs/watch`で途中変更を観測し、入力hashも前後照合します。symlinkのcanonical targetが分からない場合、巨大な入力、読取/監視失敗は有効な検証にしません。全体の厳密固定が必要なら隔離した入力を使います。監督ID付きthread-shellは、準備後の送信直前に同じsession・connection・transportとactive状態を再確認し、受付応答までpause/stopと同じロックを保持します。先にpause/stopが完了すれば送信しません。送信中のpause/stopは`RECORD_BUSY`で失敗し、停止済みという誤った応答を返しません。受付応答後はロックを解放するためpause/stopできますが、すでに受け付けたコマンドの取消・終了は保証しません。応答不明でも自動再送せず、観測とleaseの扱いは上記に従います。
 
-## 公開検証情報
-
-回帰テストは架空の識別子・ホスト・一時プロファイルを使います。実アカウントの登録情報、接続先一覧、チャットやプロジェクトの実ID、業務タイトル、実行ログは公開しません。テスト件数、pause競合のローカル再現、依存DB照合の要約は`remote-cli-validation.json`を参照してください。
+## 経路の使い分け
 
 `native`は観測専用、`control`は既存のactiveターンへの送信、`paired`は明示した管理操作を扱います。正式project IDとDesktop登録IDは別の識別子です。Desktopの承認・質問UIや表示は、RPC受付とは別に利用環境で確認してください。
 
