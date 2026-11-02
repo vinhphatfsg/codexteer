@@ -38,7 +38,7 @@ try {
   const { stdout } = await exec("npm", ["pack", "--offline", "--ignore-scripts", "--json", "--pack-destination", root], { cwd: repo, env });
   const [artifact] = JSON.parse(stdout);
   assert.equal(artifact.name, source.manifest.package);
-  const required = new Set([...source.manifest.files.map(f => f.path), "README.md", "CHANGELOG.md", "docs/distribution.md", "docs/orchestration.md", "docs/remote-observation.md", "docs/remote-control.md", "docs/remote-device-enrollment.md", "docs/remote-operations.md", "docs/remote-cli-validation.json", "docs/thread-create.md"]);
+  const required = new Set([...source.manifest.files.map(f => f.path), "README.md", "CHANGELOG.md", "docs/distribution.md", "docs/orchestration.md", "docs/remote-observation.md", "docs/remote-control.md", "docs/remote-device-enrollment.md", "docs/remote-operations.md", "docs/thread-create.md"]);
   for (const file of artifact.files) {
     assert.ok(required.delete(file.path) || cloudDocs.delete(file.path), `Unexpected or duplicate packed file: ${file.path}`);
     if (file.path.startsWith("bin/")) assert.ok(file.mode & 0o100, "packed executable lost its mode");

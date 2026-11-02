@@ -57,9 +57,3 @@ controlとnativeでは公開履歴の項目構造・出力制限が異なるた�
 ## 鍵が利用できない場合
 
 `doctor`が`REMOTE_DEVICE_KEY_UNAVAILABLE`を返す場合、`remote_control_auth`の失敗段階と分類を確認してください。これは鍵がDesktopからも消えている証拠ではありません。Desktopの署名・Keychain ACL・entitlementを変更せず、必要なら利用者が専用鍵のpaired方式を別途選択してください。診断や登録の許可は、チャットへの指示送信の許可を意味しません。
-
-## 検証
-
-`test/remote-control.test.mjs`では、テスト用EC鍵・架空のトークン・フレームを使い、チャレンジと署名の照合、別アカウント/宛先/期限/ホストの拒否、ターン交代拒否、unknown配送とreplay禁止、idle/new-turn拒否、freshness・pause/stop・findingの重複拒否、client IDでの保存履歴照合、保存済みCLIとPATH版の監督本文を検証します。実アカウントは使いません。
-
-`npm run test:remote-control`は一時プロファイルの実同梱Rust App Serverとloopbackの偽モデルを使います。Remote Controlフレームのadapterを通した正しいターンの受付と、誤ったexpectedTurnIdのサーバー側拒否、送信前freshnessの照合を確認済みです。公式ゲートウェイ、実トークン、実device keyは使いません。

@@ -81,10 +81,8 @@ Desktop native所属、現在のプロジェクトID対応と全フォルダ、t
 
 native一覧はDesktopの実schemaに従い最新50件と全pinnedです。対象が見つからない、別host/projectに所属する、重複して見える、schemaやruntimeが変わる場合は成功と推測しません。失敗の`verification_checks`を確認してください。`--timeout-ms`は各RPCの期限です。`--supervisor`と観測専用の`--connection desktop`からは実行できません。保存済みCLIは変更しないため、この機能には修正版CLIが必要です。
 
-## 検証と互換性
+## 互換性
 
-作成とreceipt照合の回帰テストは、架空のプロジェクト・識別子・一時プロファイルを使います。未知の応答、別プロジェクト、追加root、初回指示の不一致では停止し、作成や配送を繰り返しません。実環境で使う前に、その環境のDesktopとCLIでschema・所属・購読・承認動作を確認してください。
-
-この文書のプロジェクト名とIDは説明用の例です。実際のチャットID、プロジェクト一覧、ローカルパス、実行ログは公開資料に含めません。
+未知の応答、別プロジェクト、追加root、初回指示の不一致では停止し、作成や配送を繰り返しません。実環境で使う前に、その環境のDesktopとCLIでschema・所属・購読・承認動作を確認してください。
 
 DesktopのCloud環境構成で作成する場合は[Desktop Cloud](desktop-cloud.md)を参照してください。環境選択とローカルDesktopプロジェクト所属は別で、通常のリモートCloud環境への初回所属登録は未対応です。Desktop自身の実行環境に限定した署名付きAPIの対応範囲は、Desktop Cloudの説明を参照してください。

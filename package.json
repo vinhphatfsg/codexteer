@@ -41,8 +41,7 @@
     "docs/remote-observation.md",
     "docs/remote-control.md",
     "docs/remote-device-enrollment.md",
-    "docs/remote-operations.md",
-    "docs/remote-cli-validation.json"
+    "docs/remote-operations.md"
   ],
   "bundleDependencies": [
     "ws"

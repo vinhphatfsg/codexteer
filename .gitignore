@@ -16,3 +16,4 @@ auth.json
 
 # Local verification skill; keep its files untracked.
 /.claude/skills/verify-codexteer/
+.claude/skills/verify-store-lock/
