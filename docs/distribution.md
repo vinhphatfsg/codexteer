@@ -203,24 +203,18 @@ npxから模擬Claudeと模擬Codexを起動して保存したCLIへの参照を
 
 公開済みのパッケージ名とバージョンの組み合わせは再公開できません。`codexteer@0.18.0`は公開済みのため、次の変更をnpmへ配布する際は新しい版番号を使います。削除しても同じ名前・版番号の組み合わせを再利用できません。[npm publishの仕様](https://docs.npmjs.com/cli/v11/commands/npm-publish/)
 
-公開手順は固定です。AIエージェント（Claude・Codex）が公開を担当する場合もこの手順に従い、変更しません。ログインは必ずユーザーを経由します。
+```bash
+npm login
+npm whoami
+npm run test:package
+npm publish --access public
+```
 
-1. 検証済みのtarballを`npm pack`で作り、sha256とintegrityを記録します。公開ではこのtarballをそのまま使い、作り直しません。
-2. エージェントが`npm login --auth-type=web`を実行し、表示された`https://www.npmjs.com/login?next=/login/cli/...`のURLをユーザーへ知らせます。ユーザーがブラウザで認証するまで待ちます。
-3. `npm whoami`で公開権限を持つアカウントになっていることを確かめます。
-4. tarballのsha256を照合してから`npm publish <tarball> --access public`を実行します。公開時に表示される`https://www.npmjs.com/auth/cli/...`のURLも、同じようにユーザーへ知らせて認証を待ちます。
-5. 公開後に、registryの`dist.integrity`と記録した値の一致、registryから取得したtarballのsha256の一致、`npx -y codexteer@<VERSION> --version`の結果を確認します。
-
-`npm whoami`が401を返した場合やtokenが期限切れの場合も、手順2から始めます。ログインやOTP入力をユーザーの操作に任せたり、エージェントへの指示で`npm login`を禁じたりしません。
+公開後は、公開した版と起動コマンドの登録を確認します。公開済みの0.18.0は次のコマンドで確認できます。
 
 ```bash
-npm pack
-shasum -a 256 codexteer-<VERSION>.tgz
-npm login --auth-type=web
-npm whoami
-npm publish codexteer-<VERSION>.tgz --access public
-npm view codexteer@<VERSION> version dist.integrity dist.tarball --json
-npx -y codexteer@<VERSION> --version
+npm view codexteer@0.18.0 version bin --json
+npx -y codexteer@0.18.0 --version
 ```
 
 `EPRIVATE`はリポジトリの`package.json`に公開禁止設定が残っていることを示します。`--access public`はその禁止を解除しません。
