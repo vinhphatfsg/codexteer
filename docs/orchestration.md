@@ -92,15 +92,19 @@ Felix Riesebergの[How to be more ambitious](https://felixrieseberg.com/how-to-b
 
 ## Web Cloudの担当を使う
 
-ローカルの`orchestrate`と`orchestrate prompt`の本文は、Web Cloud（`task_` ID）の条件付き手順を常に含みます。有効化フラグはなく、オーケストレーターが担当ごとに判断します。Cloudから取得できるソースとブランチで完結し、ローカル未コミット差分・実機・GUIが不要な仕事が対象です。発注書には取得可能な基点、提出物と統合先を含めます。ローカルファイルや差分の暗黙のアップロードは行いません。
+ローカルの`orchestrate`と`orchestrate prompt`の本文は、Web Cloud（`task_` ID）の条件付き手順を常に含みます。有効化フラグはありません。Web Cloudはローカルの画面・ビルド・実機やUnity Editorを占有せず並行作業を増やせるため、Cloudから取得できるソースとブランチで完結し、ローカル未コミット差分・実機・GUIが不要な担当で優先します。条件を満たさない、環境がない・照合できない場合は作成前にDesktopを選びます。発注書には取得可能な基点、提出物と統合先を含めます。ローカルファイルや差分の暗黙のアップロードは行いません。
+
+ローカル共有資源（Unity Editor等）の待ちが増える場合は、その資源なしで進められるコード変更を上記の条件でWeb Cloudへ分けます。ローカル資源は`resource`リースで順番に、統合後の確認・画面確認に使います。Cloudで利用できるビルド・検証手段は環境ごとに確認します。
 
 JSONの`data.cloud_command`は、監督IDを持たないWeb Cloud専用コマンドです。既存の`data.command`はDesktop用のままです。保存方式では同じ配布コピー・Node・canonical CODEX_HOMEを使う別の起動ファイル、PATH方式では`codexteer --connection cloud`になります。Desktop用起動ファイルへ`--connection cloud`を追加したり、内容を書き換えたりしません。pairedリモートでは`cloud_command: null`となり、本文にCloud手順を含めません。
 
 Cloud担当では、本文の専用コマンドで`projects list`を読み、対象リポジトリと環境を照合します。Desktopのproject IDとCloud環境IDは別物です。作成は`thread create --project <ENV-ID> --branch <BRANCH> - --json`へ発注書を渡します。`--title`・`--model`・ローカル権限指定は使いません。作成結果不明時は`thread receipt <ATTEMPT-ID>`を確認し、Desktopの`thread verify`は使いません。部分成功やunknownから自動再作成・再送しません。
 
+`<BRANCH>`はCloud環境から取得できるpush済みの作業ブランチです。必要なpushはGOALや方針で委任されていれば作業ブランチだけに行い、委任がなければユーザーに確認します。既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止です。`--branch`の省略は、環境が一つのリポジトリの既定ブランチを特定でき、その基点でよい場合に限ります。
+
 本文の`<CREATE-COMMAND>`は担当を作成した経路のコマンド全文に置き換え、子の`supervise prompt`生成と`supervise stop`に使います。子の観測・介入は、返された子自身の`data.command`を保持します。Cloudの送信方式・照会間隔・差分の限界と検収は、子の本文と[Cloudの手順](cloud.md)に従います。
 
-Cloud接続での`orchestrate`自体は未対応です。オーケストレーターは同じPCで動き、必要な担当だけをCloudへ割り当てます。
+Cloud接続での`orchestrate`自体は未対応です。オーケストレーターは同じPCで動き、担当の作成先を選びます。
 
 ## 制御と確認範囲
 

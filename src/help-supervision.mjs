@@ -105,6 +105,8 @@ const ORCH_SHARED_NOTES = [
   "保存済みCLI方式（既定）の保存・検証・Nodeの固定はsupervise promptと同じ。",
   "リモートは--host HOST-ID --remote-transport pairedのときだけ使える（help remote）。",
   "ローカル本文にはWeb Cloud担当の条件付き手順を常に含む。監督IDなしcloud_commandで環境照合・作成・子prompt生成・監督停止を行う。保存方式は同じCLI・Node・CODEX_HOMEを固定し、Desktop用コマンドに接続指定を追加しない。pairedではcloud_commandはnullで、Cloud手順は含めない。",
+  "Web Cloudはローカル資源を占有せず並行作業を増やせるため、取得可能なソース・ブランチで完結し、ローカル未コミット差分・実機・GUIが不要な担当で優先する。条件を満たさない、環境がない・照合できない場合は作成前にDesktopを選ぶ。Unity Editor等の共有資源はresourceリースで順番に統合後の確認・画面確認に使う。",
+  "Cloudの基点は環境から取得できるpush済みブランチ。必要なpushはGOALや方針で委任されていれば作業ブランチだけに行い、委任がなければユーザーに確認する。既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止。",
 ];
 
 export const topics = {

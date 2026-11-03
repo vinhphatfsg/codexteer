@@ -63,7 +63,7 @@ ${goal}
 Codex担当の反証は根拠を確認して採否を決め、妥当なら計画と発注書を更新します。重要な設計や複数担当へ影響する変更、確信の弱い修正は、必要に応じて別のCodexへ独立レビューを依頼します。対象の基点・差分・確定要件・確認観点を渡し、期待する結論を指定しません。レビュー担当は対象コードを変更せず、実装担当には指摘への反証の機会を与えます。小さな変更にも一律に追加担当やレビュー待ちを要求しません。`,
       `5. 作業の分割と共有資源
 同じ目的を進める適切な担当は継続利用し、別の成果物や独立した確認が必要な時に新しいスレッドを作ります。途中の変更を互いに必要とする仕事はまとめるか順番にし、独立して進められる仕事だけを並行させます。
-コードの作業場所を分けても、ビルド・画面・DB・設定・配布が共有なら実行順を一元的に調整します。resourceは協調用リースで、OSの強制ロックでも公平な待ち行列でもありません。利用順を各担当で別々に推測させず、待機が増えるなら並行数と進め方を見直します。
+コードの作業場所を分けても、ビルド・画面・DB・設定・配布が共有なら実行順を一元的に調整します。resourceは協調用リースで、OSの強制ロックでも公平な待ち行列でもありません。利用順を各担当で別々に推測させず、待機が増えるなら並行数と進め方を見直します。${cloudCommand ? "ローカル共有資源（Unity Editor等）の待ちが増える場合は、その資源なしで進められるコード変更を第6節の条件に従ってWeb Cloudへ分け、ローカル資源はresourceリースで順番に統合後の確認・画面確認に使います。" : ""}
 担当ごとに目的、thread ID、supervisor ID、作業場所と基点、依存と共有資源、進捗、監視状態と読了cursor、提出物と次の対応を既存ボードか小さな記録に残します。この本文もファイルに保存し、会話の要約や再起動の後は、本文・記録と第7節で保存した担当ごとのdata.promptを読み直し、その手順で監視を再開します。無関係な変更を保護し、統合の担当と順番を決めます。`,
       `6. 実行コマンドと開始
 ${usePathCli ? "PATH上のcodexteerを使い、PATHとCODEX_HOMEを同じ対象Desktopのプロファイルで維持してください。CLI・Nodeの保存や絶対パスの固定は行いません。" : "次の起動ファイルが実行コマンドです。検証・保存したCLI、元のNodeと版、canonical CODEX_HOME、接続指定を固定しています。起動ファイルと保存したCLIを編集・移動・削除せず、別のNode・CLIやnpxへ切り替えません。同じPCとプロファイルで使い、起動ファイルが使えない場合やNODE_VERSION_MISMATCHでは理由を報告して停止し、本文の再生成を求めます。"}
@@ -73,19 +73,20 @@ ${usePathCli ? "command -v codexteer\n" : ""}${command} --version
 ${command} help thread --json
 ${command} projects list --json
 一覧から指定${JSON.stringify(project)}をIDまたは完全一致名で照合し、project_idと全rootsを記録します。同名ならIDをユーザーに確認します。cwdや別の既存チャットから所属を推測しません。以下の<PROJECT-ID>は照合した実在IDに置き換えます。${cloudCommand ? `
-Web Cloudを使う場合だけ、Cloudから取得できるソース・ブランチで完結し、ローカル未コミット差分・実機・GUIを必要としない担当を選びます。次がWeb Cloud専用の作成用コマンドです。同じCLI・プロファイルを使い、--supervisorは持ちません。
+Web Cloudならローカルの画面・ビルド・実機やUnity Editorを占有せず、並行作業を増やせます。Cloudから取得できるソース・ブランチで完結し、ローカル未コミット差分・実機・GUIを必要としない担当はWeb Cloudを優先し、条件を満たさない場合や作成前に環境がない・照合できない場合はDesktopを選びます。次がWeb Cloud専用の作成用コマンドです。同じCLI・プロファイルを使い、--supervisorは持ちません。
 ${cloudCommand}
 ${cloudCommand} projects list --json
 環境のリポジトリと目標の対象を照合し、<ENV-ID>を特定します。Desktopのproject IDや同名だけで選ばず、発注書に取得可能な基点・提出物・統合先を記載します。ローカルのファイルや差分は暗黙にアップロードされません。` : ""}`,
       `7. 担当の作成と監督開始
-発注書をファイルに保存し、<TITLE>と<WORK-ORDER-FILE>を実際のタイトルとファイルに置き換え、シェル引数を正しく引用してください。目標や発注書をシェルコードとして評価しません。Desktop担当は次で作成します。
-${command} thread create --project <PROJECT-ID> --title <TITLE> - --json < <WORK-ORDER-FILE>
-返されたthread_id、attempt_id、native_call_id、creation_status、delivery_status、verification_status、receipt_pathを保存します。createdやacceptedはすでに子が存在し入力を受け付けた状態で、後段の照合失敗でも作り直しません。created/acceptedの照合失敗は ${command} thread verify <ATTEMPT-ID> --json で同じreceiptと子を再照合できます（Desktopは読取りのみ）。unknown/dispatchingは未作成の証拠ではありません。receiptと同じ子を読取り照合し、作成や初回送信を自動再試行しません。
-${cloudCommand ? `Web Cloud担当は次で作成します。<BRANCH>はCloudから取得可能なブランチです。環境が一つのリポジトリの既定ブランチを特定できる場合だけ--branchを省略できます。--title・--model・ローカル権限指定は付けません。
+発注書をファイルに保存し、<TITLE>と<WORK-ORDER-FILE>を実際のタイトルとファイルに置き換え、シェル引数を正しく引用してください。目標や発注書をシェルコードとして評価しません。${cloudCommand ? "第6節で選んだ作成先の手順だけを実行します。" : "Desktop担当は次で作成します。"}
+${cloudCommand ? `Web Cloud担当は次で作成します。<BRANCH>はCloud環境から取得できるpush済みの作業ブランチです。必要なpushはGOALや方針で委任されていれば作業ブランチだけに行い、委任がなければユーザーに確認します。既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止です。--branch省略は環境が一つのリポジトリの既定ブランチを特定でき、その基点でよい場合だけです。--title・--model・ローカル権限指定は付けません。
 ${cloudCommand} thread create --project <ENV-ID> --branch <BRANCH> - --json < <WORK-ORDER-FILE>
 作成結果のtask_id/thread_id・attempt_id・creation_statusとreceiptを保存し、unknownは再作成しません。Cloudにthread verifyは使わず、作成結果不明時は次で保存済みreceiptを確認します。
 ${cloudCommand} thread receipt <ATTEMPT-ID> --json
-以下の<CREATE-COMMAND>は、Desktop担当なら第6節のプロジェクト用、Web Cloud担当ならWeb Cloud専用の実行コマンド全文へ置き換えます。接続指定を追加・変更せず、担当IDと選んだコマンドを記録してください。
+Desktop担当は次で作成します。
+` : ""}${command} thread create --project <PROJECT-ID> --title <TITLE> - --json < <WORK-ORDER-FILE>
+返されたthread_id、attempt_id、native_call_id、creation_status、delivery_status、verification_status、receipt_pathを保存します。createdやacceptedはすでに子が存在し入力を受け付けた状態で、後段の照合失敗でも作り直しません。created/acceptedの照合失敗は ${command} thread verify <ATTEMPT-ID> --json で同じreceiptと子を再照合できます（Desktopは読取りのみ）。unknown/dispatchingは未作成の証拠ではありません。receiptと同じ子を読取り照合し、作成や初回送信を自動再試行しません。
+${cloudCommand ? `以下の<CREATE-COMMAND>は、Desktop担当なら第6節のプロジェクト用、Web Cloud担当ならWeb Cloud専用の実行コマンド全文へ置き換えます。接続指定を追加・変更せず、担当IDと選んだコマンドを記録してください。
 ` : ""}子IDが分かったら、同じCLIから次を一度生成し、そのJSONをファイルに保存します。<THREAD-ID>は実在の子IDへ置き換えます。
 ${agent === undefined ? "<AGENT>は、この本文を実行する監督CLIに合わせてclaudeまたはcodexへ置き換えます。特定の実行役を既定とせず、自分のCLI識別を選び、ユーザーへ選択の確認を求める必要はありません。" : `監督CLIの識別は指定された${agent}を使います。`}--agentは子の監督IDのownerと送信元の識別に使うもので、オーケストレーターの能力や役割を特定モデルに結び付けません。エージェントを起動する操作でもありません。
 ${childPrompt}

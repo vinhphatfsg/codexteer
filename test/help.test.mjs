@@ -24,6 +24,14 @@ test("orchestration and monitoring help distinguish the local Web Cloud handoff 
     assert.match(error.when, /Cloud経路にorchestrateはない/);
   }
   assert.match(helpData("orchestrate prompt").returns, /cloud_command/);
+  for (const name of ["orchestrate", "orchestrate prompt", "cloud"]) {
+    const notes = helpData(name).notes.join(" ");
+    assert.match(notes, /占有せず.*並行作業を増やせる.*優先/);
+    assert.match(notes, /条件を満たさない、環境がない・照合できない場合は作成前にDesktop/);
+    assert.match(notes, /push済みブランチ/);
+    assert.match(notes, /GOALや方針で委任されていれば作業ブランチだけ.*委任がなければユーザーに確認/);
+    assert.match(notes, /既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止/);
+  }
   assert.match(helpData("monitor").notes.join(" "), /help cloud/);
   const cloud = helpData("cloud").notes.join(" ");
   for (const text of ["既定5000ms", "retry_after_ms", "完全なpatch/commit", "help monitor"]) assert.ok(cloud.includes(text));

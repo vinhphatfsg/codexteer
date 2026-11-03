@@ -16,6 +16,8 @@ codexteer supervise prompt task_example --use-path-cli --json
 
 IDはすべて架空の例です。作成時の環境指定は`--project`に統一し、環境IDまたは一意の正確な名前を指定します。`--branch`を省略したときは、一つのリポジトリの既定ブランチを環境が明示している場合だけ使い、`branch_source: environment-default`を返します。不明・複数リポジトリの場合は明示指定が必要です。ローカルの現在ブランチや未コミット差分を暗黙に送信しません。
 
+この作成経路の基点はCloud環境から取得できるpush済みブランチです。必要なpushはGOALや方針で委任されていれば作業ブランチだけに行い、委任がなければユーザーに確認します。既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止です。
+
 Node.js 20以降、PATH上の公式Codex CLI 0.157.1以降、ChatGPTログインとCloud利用権限が必要です。Desktopの起動は不要です。対象は従来型Cloudタスク用環境であり、新世代Cloud環境設定や別サービスを含む一覧ではありません。環境一覧にはID・名前・リポジトリ名・既定ブランチだけを返し、環境変数・secrets・セットアップ内容は出しません。掲載は実行成功の保証ではありません。タスク一覧は最大500件を公式CLIのページに分けて取得し、続きのcursorを返します。
 
 ## 共通の監督と介入
@@ -32,7 +34,7 @@ codexteer --supervisor <SESSION_ID> --connection cloud history check task_exampl
 
 監督プロンプトが返した実際のSESSION_ID・保存済みCLI・Node・CODEX_HOMEをそのまま使います。PATHモードも共通です。監督エージェントの起動前に登録し、終了時にその登録を停止します。自分の状態を解除したり、IDを外して介入したりしないでください。
 
-ローカルの`orchestrate`本文は、必要な担当だけをWeb Cloudで作成する条件付き手順を含みます。専用の`cloud_command`で環境照合・作成・子の監督本文生成・監督停止を行い、Desktop用コマンドの接続指定は変えません。[オーケストレーション](orchestration.md)を参照してください。`--connection cloud orchestrate`自体は未対応です。
+ローカルの`orchestrate`本文は、ローカル資源を占有せず並行作業を増やせるWeb Cloudを、条件に向く担当で優先します。Cloudから取得できるソース・ブランチで完結し、ローカル未コミット差分・実機・GUIが不要な担当が対象です。条件を満たさない、環境がない・照合できない場合は作成前にDesktopを選びます。専用の`cloud_command`で環境照合・作成・子の監督本文生成・監督停止を行い、Desktop用コマンドの接続指定は変えません。[オーケストレーション](orchestration.md)を参照してください。`--connection cloud orchestrate`自体は未対応です。
 
 要約や再起動で保存した監督本文を失った場合は、生成された監督コマンドで`help monitor`と`help cloud`を読み直します。`help monitor`は共通手順で、接続をcloudにしてもCloud固有の注意は含みません。
 

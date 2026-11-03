@@ -177,7 +177,7 @@ test("paired orchestration stays on its host and never prepares a Cloud command 
     assert.equal(data.cloud_command, null);
     assert.equal(data.host_id, "remote-control:env_fixture");
     assert.equal(data.remote_transport, "paired");
-    assert.doesNotMatch(data.prompt, /Web Cloud|<CREATE-COMMAND>|--connection cloud|desktop-cloud|durable_/);
+    assert.doesNotMatch(data.prompt, /Cloud|push済み|<CREATE-COMMAND>|--connection cloud|desktop-cloud|durable_/);
     if (pathMode) {
       assert.match(data.command, /--host 'remote-control:env_fixture' --remote-transport paired/);
       assert.equal(existsSync(options.env.CODEX_HOME), false);
@@ -214,6 +214,17 @@ else { console.error('Unexpected official CLI operation'); process.exitCode=85; 
     const { data } = JSON.parse(generated.stdout);
     assert.equal(data.connection, "shared");
     assert.doesNotMatch(data.prompt, /desktop-cloud|durable_/);
+    const sections = Object.fromEntries(data.prompt.split("\n\n").filter(section => /^[567]\. /.test(section)).map(section => [section[0], section]));
+    assert.match(sections[5], /Unity Editor.*第6節の条件に従ってWeb Cloud.*resourceリース.*統合後の確認・画面確認/);
+    assert.match(sections[6], /占有せず.*並行作業を増やせます/);
+    assert.match(sections[6], /ローカル未コミット差分・実機・GUIを必要としない担当はWeb Cloudを優先/);
+    assert.match(sections[6], /条件を満たさない場合や作成前に環境がない・照合できない場合はDesktop/);
+    assert.match(sections[7], /選んだ作成先の手順だけを実行/);
+    assert.ok(sections[7].indexOf(data.cloud_command + " thread create ") < sections[7].indexOf(data.command + " thread create "), "The preferred Cloud path is presented before Desktop");
+    assert.match(sections[7], /Cloud環境から取得できるpush済みの作業ブランチ/);
+    assert.match(sections[7], /GOALや方針で委任されていれば作業ブランチだけ.*委任がなければユーザーに確認/);
+    assert.match(sections[7], /既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止/);
+    assert.doesNotMatch(data.prompt, /batchmode|EditMode/);
     assert.doesNotMatch(ORCHESTRATED_SUPERVISION_POLICY, /[\r\n\u2028\u2029]/);
     assert.equal(data.prompt.split(ORCHESTRATED_SUPERVISION_POLICY).length - 1, 1, "The child policy is emitted only once");
     const workOrder = path.join(options.cwd, "work-order.txt"); writeFileSync(workOrder, "fixture work order");
@@ -228,13 +239,13 @@ else { console.error('Unexpected official CLI operation'); process.exitCode=85; 
     assert.equal(lines.length, 3, "Execute every concrete Cloud operation in the orchestration body");
     let environments;
     for (const line of lines) {
-      let command = line.replace("<ENV-ID>", "env_fixture").replace("<BRANCH>", "main").replace("<ATTEMPT-ID>", ID).replace("<WORK-ORDER-FILE>", workOrder);
+      let command = line.replace("<ENV-ID>", "env_fixture").replace("<BRANCH>", "feature/fixture").replace("<ATTEMPT-ID>", ID).replace("<WORK-ORDER-FILE>", workOrder);
       if (line.includes(" thread create ")) command = command.replace(" - --json", " - --json --dry-run");
       const result = execute(command);
       if (line.includes(" projects list ")) environments = result.projects;
       if (line.includes(" thread create ")) {
         assert.equal(result.creation_status, "not_created"); assert.equal(result.submission_status, "not_sent");
-        assert.equal(execute(command.replace(" --branch main", "")).branch_source, "environment-default");
+        assert.equal(execute(command.replace(" --branch feature/fixture", "")).branch_source, "environment-default");
       }
     }
     assert.equal(environments[0].project_id, "env_fixture");
