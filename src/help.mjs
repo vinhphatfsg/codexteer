@@ -29,6 +29,7 @@ export const topics = Object.fromEntries([
   "checkpoint",
   "resource",
   "work",
+  "project",
   "diff",
   "connection",
   "doctor",

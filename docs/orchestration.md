@@ -146,3 +146,11 @@ managed threadの操作は次の4種類として扱います。
 4. **読み取り**: read/status、記録一覧、receipt照合。pause中も利用できます。stopped supervisorの観測制限は各既存コマンドの契約を維持します。
 
 `thread repair --apply`は人間が明示的に行うoffline保守です。managed stateをactiveへ変更せず、新しいworker実行やsendを行わないため上記の外部効果には含めません。修復後は古いcursorを使わず読み直してください。
+
+## プロジェクト全体の再同期
+
+`codexteer project sync --project <ID> --json` は常駐プロセスを作らず、project indexの全担当を保存済みcursorから読みます。まず全担当を1ページずつ巡回してからbacklogをdrainするため、1件の巨大履歴より他担当の質問・承認待ちを優先して発見できます。completeな担当だけcursorが進みます。
+
+結果はexecution・attention・observationの3軸と、「動作中」「対応が必要」「検収待ち」「未確認」の4群を返します。未解決の質問・承認・失敗は、完全な観測で解消を確認するまで再掲します。cursor不正は`history_gap:true`、429は再試行せず`retry_after_ms`として、取得済みの他担当と一緒に返します。
+
+出力は既定16000 UTF-8 bytesを予算とし、JSONを途中で切りません。省略時は`omitted_works`・`omitted_events`・`continuation_token`を返します。`project sync --continue <TOKEN> --offset <N>`で同じsnapshotの続きを取得できます。各eventの`full_command`または`project event <TOKEN>`は、syncで要約された長文を切らずに返します。`membership_digest`はsync開始時の対象集合を示します。

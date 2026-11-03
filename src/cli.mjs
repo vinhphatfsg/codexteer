@@ -25,6 +25,7 @@ import { listProjects, registeredRemoteProjects } from "./projects.mjs";
 import { createProjectThread } from "./thread-create.mjs";
 import { startWork } from "./work-start.mjs";
 import { readRecord } from "./store.mjs";
+import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
 import { verifyProjectThread } from "./thread-verify.mjs";
 import { withDeviceAccount, prepareDevice, recoverDeviceKey, enrollDevice, pairDevice, verifyDevice, deviceStatus, deviceIdentityInfo, readPairingCode } from "./remote-device.mjs";
 import { readDevice } from "./remote-device-store.mjs";
@@ -224,6 +225,22 @@ async function mainOnTarget(argv) {
     }
 
     let command = args.shift();
+    if (command === "project") {
+      const action = args.shift();
+      if (action === "sync") {
+        if (supervisor) throw Object.assign(new Error("A bound supervisor cannot sync an entire project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        const project = takeOption(args, "--project", undefined), byteBudget = Number(takeOption(args, "--byte-budget", "16000"));
+        const continuation = takeOption(args, "--continue", undefined), offset = Number(takeOption(args, "--offset", "0"));
+        if (args.length || (!project && !continuation)) throw usage("Expected: project sync --project ID, or project sync --continue TOKEN --offset N.");
+        const data = continuation ? await continueProjectSync(continuation, { byteBudget, offset }) : await syncProject(project, { byteBudget }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) });
+        success("project.sync", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
+      }
+      if (action === "event") {
+        if (args.length !== 1) throw usage("Expected: project event TOKEN.");
+        const data = await projectEvent(args[0]); success("project.event", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
+      }
+      throw usage("Expected: project sync|event.");
+    }
     if (command === "work") {
       if (args.shift() !== "start") throw usage("Expected: work start --project ID|NAME --title TITLE <WORK-ORDER>|-.");
       if (supervisor) throw Object.assign(new Error("A bound supervisor cannot create another managed task."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });

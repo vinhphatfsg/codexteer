@@ -27,6 +27,7 @@ import { VERSION } from "./version.mjs";
 import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, verifyCheckpoint, runCheckpoint, attachArtifacts } from "./checkpoint.mjs";
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 import { startWork } from "./work-start.mjs";
+import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
 
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code, execution_environment: "cloud" });
 function option(args, name, fallback) {
@@ -87,6 +88,16 @@ export async function mainCloud(argv) {
   const dependencies = desktopCloud ? desktopCloudConnection() : cloudConnection();
   if (desktopCloud && await desktopCloudCommands(command, args, { supervisor, output, bound, dependencies })) return;
 
+  if (command === "project") {
+    const action = args.shift();
+    if (action === "sync") {
+      if (supervisor) throw failure("A bound supervisor cannot sync an entire project.", "SUPERVISOR_CONTROL_FORBIDDEN");
+      const project = option(args, "--project"), byteBudget = Number(option(args, "--byte-budget", "16000")), continuation = option(args, "--continue"), offset = Number(option(args, "--offset", "0")); exact(args, 0);
+      output("project.sync", continuation ? await continueProjectSync(continuation, { byteBudget, offset }) : await syncProject(project, { byteBudget }, { read: (threadId, options) => observeThread(threadId, options, dependencies) })); return;
+    }
+    if (action === "event") { exact(args, 1); output("project.event", await projectEvent(args[0])); return; }
+    throw failure("Expected project sync|event.");
+  }
   if (command === "work") {
     if (desktopCloud) throw failure("work start does not support Desktop Cloud because verified project assignment is unavailable.", "WORK_START_CONNECTION_UNSUPPORTED");
     if (args.shift() !== "start" || supervisor) throw failure("Expected an unbound work start command.");

@@ -48,6 +48,7 @@ export const topics = {
       { need: "監督の観測→介入→結果確認の手順、Claude CodeのMonitorから使う", command: "help monitor" },
       { need: "指摘・解決条件・評価を追跡し、同じ指摘の重複介入を防ぐ", command: "help findings" },
       { need: "方針付きの担当を作成から監督・初回観測まで一度に開始する", command: "help work" },
+      { need: "全担当の前回からの変化と人間待ちをまとめて確認する", command: "help project" },
       { need: "作成先プロジェクトのIDとソースフォルダを調べる", command: "help projects" },
       { need: "送信先タスクのIDを探す", command: "help threads" },
       { need: "初回指示付きでタスクを作る・作成結果を照合する・URLをIDにする・残留ターンを修復する", command: "help thread" },
@@ -480,6 +481,26 @@ export const topics = {
       "画面を開くための明示的なコマンドで、送信や承認回答はしない。",
     ],
     see: ["thread", "debug-ui", "cloud", "remote"],
+  },
+
+  project: {
+    title: "managed projectの全担当を差分同期する",
+    when: "オーケストレーターの再起動後や定期確認時に、全担当の進行・失敗・質問・承認待ちを一度に把握するとき。",
+    usage: ["project sync --project ID [--byte-budget N]", "project sync --continue TOKEN [--offset N] [--byte-budget N]", "project event TOKEN"],
+    options: [
+      { name: "--project", text: "work startで登録したproject ID。" },
+      { name: "--byte-budget", default: "16000", text: "構文的に完全なJSON出力へ使うUTF-8 byte予算（4096〜1048576）。" },
+      { name: "--continue / --offset", text: "省略された担当を同じsync snapshotから取り出すtokenと開始位置。" },
+    ],
+    returns: "membership_digest、complete、4群表示、3軸状態、history_gap、retry_after_ms、省略数、continuation_token。event tokenは長文をproject eventで全文取得できる。",
+    examples: ["codexteer project sync --project sample --json", "codexteer project event <TOKEN> --json", "codexteer --connection cloud project sync --project env_example --json"],
+    notes: [
+      "常駐監視は開始しない。全担当を一巡してからbacklogをdrainし、completeな担当だけcursorを進める。",
+      "未解決の質問・承認・失敗は解消を完全な観測で確認するまで再掲する。429は再試行せず、取得済み結果とretry_after_msを返す。",
+      "未確認・history_gap・complete:falseを変化なしとして扱わない。既存read/watchは引き続き利用できる。",
+    ],
+    errors: [OPTIONS_INVALID, supervisorForbiddenError],
+    see: ["work", "read", "watch", "cloud"],
   },
 
   work: {
