@@ -5,6 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertOrchestrationContent } from "../test-support/prompt-contract.mjs";
 import { orchestrationPrompt, ORCHESTRATED_SUPERVISION_POLICY } from "../src/orchestrate-prompt.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
@@ -25,6 +26,7 @@ test("orchestration preserves literal goals, uses four operations and has no fix
   const goal = "  user goal\n${literal} $(touch never)  ";
   const data = orchestrationPrompt("P", goal, "prepared-command --connection shared", { cloudCommand: "prepared-cloud --connection desktop-cloud" });
   assert.equal(data.goal, goal); assert.ok(data.prompt.includes(goal));
+  assertOrchestrationContent(data.prompt);
   for (const operation of ["work start", "project sync", "work tell", "project control"]) assert.ok(data.prompt.includes(operation));
   for (const text of ["CODEXTEER.md", "専門性", "理由と境界", "Unity", "Blender", "GUI", "実機", "確認タスク", "再起動", "unknown", "再公開", "fetch", "main", "高度", "一次資料", "隣接分野"]) assert.ok(data.prompt.includes(text), text);
   assert.doesNotMatch(data.prompt, /supervise prompt|--supervisor|--agent|--based-on|findings create|--connection cloud(?:\s|$)|Web Cloud|Codex担当には/);

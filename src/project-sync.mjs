@@ -10,15 +10,24 @@ const failure = (message, code = "PROJECT_SYNC_INVALID") => Object.assign(new Er
 const gapCodes = new Set(["STALE_CURSOR", "INVALID_CURSOR", "CURSOR_UPGRADE_REQUIRED", "OBSERVATION_CHANGED"]);
 const terminal = new Set(["completed", "failed", "cancelled"]), active = new Set(["active", "inProgress", "in_progress", "pending", "queued", "running"]);
 
+// A command/tool outcome is scoped to that item, not to the delegated work.
+const failedTurn = event => event.type === "turn" && event.status === "failed";
+const failedWork = observation => ["failed", "systemError"].includes(observation?.status) || (observation?.events ?? []).some(failedTurn);
+const provenWorkFailure = entry => ["failed", "systemError"].includes(entry?.reason?.backend_status)
+  || (entry?.events ?? []).some(failedTurn);
+const commandOnlyFailure = entry => entry?.attention === "failure" && entry.reason?.failure_event === true
+  && !entry.reason.question_event && !entry.reason.backend_status && Array.isArray(entry.events) && entry.events.length > 0
+  && entry.events.every(event => event.type === "commandExecution");
+
 function classify(observation, complete, connection) {
   const status = observation?.status ?? "unknown", flags = observation?.attention;
   const events = observation?.events ?? [], questions = events.some(event => Array.isArray(event.questions) && event.questions.length);
-  const failed = status === "systemError" || status === "failed" || events.some(event => event.status === "failed" || (event.type === "commandExecution" && Number.isInteger(event.exit_code) && event.exit_code !== 0));
+  const failed = failedWork(observation);
   const human = questions || (Array.isArray(flags) && flags.length > 0);
   const execution = active.has(status) ? "active" : ["idle", "notLoaded"].includes(status) ? "idle" : terminal.has(status) ? "terminal" : "unknown";
-  const attention = human ? "human" : failed ? "failure" : execution === "terminal" ? "review" : connection === "cloud" || flags === null || flags === undefined ? "unknown" : "none";
+  const attention = human ? "human" : failed ? "failure" : execution === "terminal" ? "review" : !complete || execution === "unknown" || connection === "cloud" || flags === null || flags === undefined ? "unknown" : "none";
   const observationState = complete ? "current" : "incomplete";
-  const group = observationState !== "current" ? "未確認" : ["human", "failure"].includes(attention) ? "対応が必要" : attention === "review" ? "検収待ち" : execution === "active" ? "動作中" : execution === "unknown" || attention === "unknown" ? "未確認" : "動作中";
+  const group = observationState !== "current" ? "未確認" : ["human", "failure"].includes(attention) ? "対応が必要" : attention === "review" ? "検収待ち" : execution === "unknown" || attention === "unknown" ? "未確認" : "動作中";
   return { execution, attention, observation: observationState, group, reason: { backend_status: status, attention_flags: flags ?? null, question_event: questions, failure_event: failed } };
 }
 
@@ -109,14 +118,19 @@ export async function continueProjectSync(token, options = {}, storage = {}) {
 // Attention is a reducer over the entire delta, not a property of its last page.
 // Empty ordinary page flags do not prove that an earlier question was answered.
 function reduceAttention(state, prior, summaries) {
-  const entries = new Map(prior?.entries ?? (prior ? [["legacy", prior]] : []));
+  // Reclassify only persisted evidence that proves the old command-level false
+  // positive. Opaque legacy evidence, real turn failures and questions survive.
+  const priorEntries = (prior?.entries ?? (prior ? [["legacy", prior]] : [])).filter(([, entry]) => !commandOnlyFailure(entry)).map(([id, entry]) => [id, entry.attention === "failure" && !provenWorkFailure(entry)
+    ? { ...entry, attention: "unknown", reason: { unverified_prior_failure: entry.reason ?? null } } : entry]);
+  const entries = new Map(priorEntries);
   const summaryById = new Map(state.events.map((event, i) => [event.id, summaries[i]]));
   for (const page of state.observations) {
+    if (["failed", "systemError"].includes(page.status)) entries.set("backend:failure", { attention: "failure", reason: { backend_status: page.status }, events: [] });
     for (const flag of page.attention ?? []) entries.set(`flag:${flag}`, { attention: "human", reason: { attention_flags: [flag] }, events: [] });
     for (const event of page.events) {
       if (["answered", "resolved"].includes(event.status)) { if (state.complete) entries.delete(event.id); continue; }
       const question = Array.isArray(event.questions) && event.questions.length;
-      const failed = event.status === "failed" || (event.type === "commandExecution" && Number.isInteger(event.exit_code) && event.exit_code !== 0);
+      const failed = failedTurn(event);
       if (question || failed) entries.set(event.id, { attention: question ? "human" : "failure", reason: { question_event: !!question, failure_event: failed }, events: [summaryById.get(event.id)] });
     }
     if (state.complete && page.attention_snapshot?.complete === true && Array.isArray(page.attention_snapshot.attention) && !page.attention_snapshot.attention.length) entries.clear();
@@ -124,10 +138,10 @@ function reduceAttention(state, prior, summaries) {
   }
   if (["failed", "systemError"].includes(state.latest?.status)) entries.set("backend:failure", { attention: "failure", reason: { backend_status: state.latest.status }, events: [] });
   // Incomplete observations cannot erase any previous unresolved evidence.
-  if (!state.complete && prior) for (const [id, entry] of prior.entries ?? [["legacy", prior]]) if (!entries.has(id)) entries.set(id, entry);
+  if (!state.complete && prior) for (const [id, entry] of priorEntries) if (!entries.has(id)) entries.set(id, entry);
   if (!entries.size) return null;
-  const values = [...entries.values()], attention = values.some(e => e.attention === "human") ? "human" : "failure";
-  return { attention, reason: { evidence: values.map(e => e.reason) }, events: [...new Map(values.flatMap(e => e.events).map(e => [e.token, e])).values()], entries: [...entries] };
+  const values = [...entries.values()], attention = values.some(e => e.attention === "human") ? "human" : values.some(e => e.attention === "failure") ? "failure" : "unknown";
+  return { attention, reason: { evidence: values.map(e => e.reason) }, events: [...new Map(values.flatMap(e => e.events ?? []).map(e => [e.token, e])).values()], entries: [...entries] };
 }
 
 export async function syncProject(projectId, options = {}, dependencies = {}) {
@@ -175,14 +189,14 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     const priorAttention = previous?.unresolved_attention?.[state.member.thread_id] ?? null;
     let axes;
     if (state.latest) axes = classify({ ...state.latest, events: [] }, state.complete, state.member.connection);
-    else axes = { execution: "unknown", attention: priorAttention?.attention ?? "unknown", observation: "unavailable", group: priorAttention ? "対応が必要" : "未確認", reason: { error: state.error } };
+    else axes = { execution: "unknown", attention: "unknown", observation: "unavailable", group: "未確認", reason: { error: state.error } };
     state.events = [...new Map(state.events.map(e => [JSON.stringify([e.turn_id ?? null, e.id]), e])).values()];
     const eventSummaries = state.events.map(event => summarizeEvent(event, state.member.thread_id, eventRecords));
     state.eventSummaries = eventSummaries;
     const currentAttention = reduceAttention(state, priorAttention, eventSummaries);
     if (currentAttention) {
       unresolved[state.member.thread_id] = currentAttention;
-      axes.attention = currentAttention.attention; axes.reason = currentAttention.reason; axes.group = "対応が必要";
+      axes.attention = currentAttention.attention; axes.reason = currentAttention.reason; axes.group = currentAttention.attention === "unknown" ? "未確認" : "対応が必要";
     }
     const repeatedEvents = currentAttention?.events.filter(e => !eventSummaries.some(s => s.token === e.token)) ?? [];
     works.push({ thread_id: state.member.thread_id, title: state.latest?.title ?? null, ...axes, history_gap: state.history_gap,
@@ -218,7 +232,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
           const retained = reduceAttention(state, previous?.unresolved_attention?.[work.thread_id], state.eventSummaries);
           if (retained) {
             unresolved[work.thread_id] = retained; work.attention = retained.attention; work.reason = retained.reason;
-            work.group = "対応が必要"; work.resolution_unconfirmed = true;
+            work.group = retained.attention === "unknown" ? "未確認" : "対応が必要"; work.resolution_unconfirmed = true;
             work.attention_repeated = !!previous?.unresolved_attention?.[work.thread_id];
             work.events = [...new Map([...retained.events, ...work.events].map(e => [e.token, e])).values()];
           }

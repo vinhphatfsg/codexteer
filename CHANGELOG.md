@@ -4,6 +4,8 @@
 
 ## 0.22.0 — 未公開
 
+- `project sync`は途中コマンドの非ゼロ終了を担当の失敗と扱わず、turnやbackendの失敗と区別します。担当への発注では、前提への異論・改善案と根拠を求めます。
+
 - `project control pause|stop|resume`で個別または全担当を制御できます。部分失敗とbusyを明示し、stop済みの担当は再開しません。オーケストレーター本文とhelpを4操作へ整理し、担当範囲を方針と発注から決め、確認済みの道具でDesktop Cloudとlocal Desktopを選びます。
 
 - `project sync`の並行実行によるcursorの巻き戻りを防ぎ、未解決attentionの根拠をページをまたいで保持します。担当内のイベントもcontinuationで分割してbyte予算を守り、不正な観測ページや停止済み担当の自動再登録を拒否します。
