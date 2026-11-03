@@ -20,7 +20,7 @@ const rules = {
 test("tracked publication files contain no credential signatures or environment-specific identifiers", async () => {
   // Use the current checkout, including staged additions, without inspecting
   // live profiles. Never print a matched value in a failing test or CI log.
-  const files = execFileSync("git", ["ls-files", "-z"], { cwd: root }).toString().split("\0").filter(Boolean);
+  const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { cwd: root }).toString().split("\0").filter(Boolean);
   const failures = [];
   for (const file of files) {
     let bytes;
