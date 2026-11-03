@@ -19,6 +19,7 @@ function validate(record, threadId) {
     || (record.remote_transport !== undefined && record.remote_transport !== null && !transports.has(record.remote_transport))
     || !optionalString(record.backend_project_id) || !optionalString(record.creation_attempt_id)
     || (record.policy_sha256 !== undefined && record.policy_sha256 !== null && !/^[a-f0-9]{64}$/.test(record.policy_sha256))
+    || (record.sync_revision !== undefined && (!Number.isSafeInteger(record.sync_revision) || record.sync_revision < 0))
     || !optionalString(record.sync_cursor)) throw fail("Invalid managed project membership. Inspect the local project index before continuing.");
   for (const forbidden of ["state", "supervisor_state", "session_id", "generation"]) {
     if (Object.hasOwn(record, forbidden)) throw fail("Project membership must not duplicate supervisor control state.");
@@ -44,7 +45,11 @@ export async function registerManagedThread(threadInput, membership, storage = {
     const current = await readRecord(bucket, key(threadId), storage);
     if (current) {
       validate(current, threadId);
-      if (JSON.stringify({ ...current, registered_at: null }) !== JSON.stringify({ ...record, registered_at: null })) throw fail("Managed project membership already exists with a different route.", "PROJECT_INDEX_CONFLICT");
+      const registration = value => {
+        const { registered_at, sync_cursor, sync_revision, ...identity } = value;
+        return identity;
+      };
+      if (JSON.stringify(registration(current)) !== JSON.stringify(registration(record))) throw fail("Managed project membership already exists with a different route.", "PROJECT_INDEX_CONFLICT");
       return current;
     }
     await writeRecord(bucket, key(threadId), record, storage);
@@ -64,14 +69,26 @@ export async function listManagedThreads(projectId, storage = {}) {
   return result.sort((a, b) => a.thread_id.localeCompare(b.thread_id));
 }
 
-export async function updateManagedThreadCursor(threadInput, syncCursor, storage = {}) {
+export async function updateManagedThreadCursor(threadInput, expectedCursor, syncCursor, storage = {}, expectedRevision = 0) {
   const threadId = normalizeTaskId(threadInput);
   if (typeof syncCursor !== "string" || !syncCursor) throw fail("A sync cursor is required.");
   return withStoreLock(`project-index-${key(threadId)}`, async () => {
     const current = await readRecord(bucket, key(threadId), storage);
     if (!current) throw fail("Managed project membership was not found.", "PROJECT_INDEX_NOT_FOUND");
-    const record = validate({ ...current, sync_cursor: syncCursor }, threadId);
+    validate(current, threadId);
+    if ((current.sync_cursor ?? null) !== (expectedCursor ?? null) || (current.sync_revision ?? 0) !== expectedRevision) throw fail("Another sync advanced this membership.", "SYNC_CURSOR_CONFLICT");
+    const record = validate({ ...current, sync_cursor: syncCursor, sync_revision: expectedRevision + 1 }, threadId);
     await writeRecord(bucket, key(threadId), record, storage);
     return record;
   }, storage);
+}
+
+// Pin all routing fields, but exclude the mutable observation cursor/revision.
+export function managedMembershipDigest(members) {
+  return createHash("sha256").update(JSON.stringify(members.map(m => ({
+    thread_id: m.thread_id, project_id: m.project_id, connection: m.connection,
+    host_id: m.host_id ?? null, remote_transport: m.remote_transport ?? null,
+    backend_project_id: m.backend_project_id ?? null, creation_attempt_id: m.creation_attempt_id ?? null,
+    policy_sha256: m.policy_sha256 ?? null, registered_at: m.registered_at,
+  })))).digest("hex");
 }

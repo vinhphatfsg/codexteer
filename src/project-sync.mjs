@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { listManagedThreads, updateManagedThreadCursor } from "./project-index.mjs";
+import { listManagedThreads, updateManagedThreadCursor, managedMembershipDigest } from "./project-index.mjs";
 import { readRecord, writeRecord, withStoreLock } from "./store.mjs";
 
 const hash = value => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
@@ -35,37 +35,126 @@ export async function projectEvent(token, storage = {}) {
   return record;
 }
 
-export async function continueProjectSync(token, options = {}, storage = {}) {
-  const byteBudget = options.byteBudget ?? 16000, offset = options.offset ?? 0;
-  const saved = await readRecord("project-sync-results", token, storage);
-  if (!saved || !Number.isInteger(offset) || offset < 0) throw failure("Project sync continuation was not found.", "PROJECT_SYNC_CONTINUATION_NOT_FOUND");
-  const result = { project_id: saved.project_id, sync_token: token, membership_digest: saved.membership_digest, complete: saved.complete,
-    works: [], omitted_works: 0, omitted_events: 0, continuation_token: null, continuation_offset: offset, created_at: saved.created_at, output_bytes: 0, byte_budget: byteBudget };
-  let next = offset;
-  for (; next < saved.works.length; next++) {
-    const work = saved.works[next], candidate = { ...work, events: work.events.map(event => ({ ...event, text: null })) };
-    if (result.works.length && bytes({ ...result, works: [...result.works, candidate] }) > byteBudget) break;
-    result.works.push(candidate);
-  }
-  result.omitted_works = saved.works.length - next;
-  result.omitted_events = saved.works.slice(next).reduce((sum, work) => sum + work.events.length, 0);
-  if (next < saved.works.length) { result.continuation_token = token; result.next_offset = next; }
-  for (let previous = -1; result.output_bytes !== previous;) { previous = result.output_bytes; result.output_bytes = bytes(result); }
+function validateBudget(value) {
+  if (!Number.isInteger(value) || value < 4096 || value > 1024 * 1024) throw failure("Invalid sync byte budget.");
+  return value;
+}
+
+export function validateSyncPage(page, threadId, cursor, seen = new Set()) {
+  if (!page || page.thread_id !== threadId || typeof page.cursor !== "string" || !page.cursor
+    || typeof page.has_more !== "boolean" || !Array.isArray(page.events)
+    || page.events.some(e => !e || typeof e !== "object" || Array.isArray(e) || typeof e.id !== "string" || !e.id || typeof e.type !== "string" || !e.type
+      || (e.questions !== undefined && !Array.isArray(e.questions)))
+    || (page.attention !== undefined && page.attention !== null && (!Array.isArray(page.attention) || page.attention.some(f => typeof f !== "string")))
+    || (page.attention_snapshot !== undefined && (!page.attention_snapshot || page.attention_snapshot.complete !== true || !Array.isArray(page.attention_snapshot.attention) || page.attention_snapshot.attention.some(f => typeof f !== "string")))
+    || (page.attention_resolutions !== undefined && (!Array.isArray(page.attention_resolutions) || page.attention_resolutions.some(id => typeof id !== "string")))) throw failure("Invalid project observation page.", "PROJECT_SYNC_PAGE_INVALID");
+  // A stable cursor is valid only for an empty final head verification.
+  if ((page.cursor === cursor && (page.has_more || page.events.length)) || (page.cursor !== cursor && seen.has(page.cursor))) throw failure("Project observation cursor did not progress.", "PROJECT_SYNC_CURSOR_STALLED");
+  return page;
+}
+
+function outputSize(result) {
+  for (let old = -1; old !== result.output_bytes;) { old = result.output_bytes; result.output_bytes = bytes(result); }
   return result;
+}
+
+function compactWork(work) {
+  return { thread_id: work.thread_id, group: work.group, execution: work.execution, attention: work.attention,
+    observation: work.observation, complete: work.complete, history_gap: work.history_gap, retry_after_ms: work.retry_after_ms,
+    error: work.error, attention_repeated: work.attention_repeated, resolution_unconfirmed: work.resolution_unconfirmed,
+    detail_token: work.detail_token, details_omitted: true };
+}
+
+// Split inside a work as well as between works. Tokens always refer to the full
+// durable record; compact envelopes never silently truncate that record.
+function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0) {
+  if (!Number.isInteger(offset) || offset < 0 || offset > saved.works.length || !Number.isInteger(eventOffset) || eventOffset < 0
+    || (offset === saved.works.length ? eventOffset !== 0 : eventOffset > saved.works[offset].events.length)) throw failure("Invalid continuation offset.");
+  const result = { project_id: saved.project_id, sync_token: token, membership_digest: saved.membership_digest,
+    membership_count: saved.works.length, complete: saved.complete, works: [], omitted_works: 0, omitted_events: 0,
+    continuation_token: null, continuation_offset: offset, continuation_event_offset: eventOffset,
+    created_at: saved.created_at, output_bytes: 0, byte_budget: byteBudget };
+  let wi = offset, ei = eventOffset;
+  const finish = () => {
+    result.omitted_works = saved.works.length - wi;
+    result.omitted_events = saved.works.slice(wi).reduce((n, w, i) => n + w.events.length - (i === 0 ? ei : 0), 0);
+    result.continuation_token = wi < saved.works.length ? token : null;
+    result.next_offset = wi; result.next_event_offset = ei;
+    return outputSize(result);
+  };
+  if (bytes(finish()) > byteBudget) throw failure("The fixed sync envelope exceeds the byte budget.", "PROJECT_SYNC_BUDGET_TOO_SMALL");
+  while (wi < saved.works.length) {
+    const work = saved.works[wi], start = ei;
+    let row = { ...work, events: [], event_offset: start, events_complete: false };
+    result.works.push(row);
+    if (bytes(finish()) > byteBudget) { row = { ...compactWork(work), events: [], event_offset: start, events_complete: false }; result.works[result.works.length - 1] = row; }
+    let rejected = false;
+    while (ei < work.events.length) {
+      const event = work.events[ei]; row.events.push(event);
+      if (bytes(finish()) > byteBudget) {
+        row.events[row.events.length - 1] = { token: event.token, thread_id: work.thread_id, details_omitted: true };
+        if (bytes(finish()) > byteBudget) { row.events.pop(); rejected = true; break; }
+      }
+      ei++;
+    }
+    if (ei === work.events.length) { row.events_complete = true; wi++; ei = 0; }
+    if (bytes(finish()) > byteBudget || (rejected && ei === start)) {
+      result.works.pop(); wi = offset + result.works.filter(w => w.events_complete).length; ei = start;
+      if (!result.works.length) throw failure("A minimal work envelope exceeds the byte budget.", "PROJECT_SYNC_BUDGET_TOO_SMALL");
+      break;
+    }
+    if (rejected) break;
+  }
+  return finish();
+}
+
+export async function continueProjectSync(token, options = {}, storage = {}) {
+  const byteBudget = validateBudget(options.byteBudget ?? 16000);
+  if (typeof token !== "string" || !/^[0-9a-f-]{36}$/i.test(token)) throw failure("Invalid sync token.");
+  const saved = await readRecord("project-sync-results", token, storage);
+  if (!saved) throw failure("Project sync continuation was not found.", "PROJECT_SYNC_CONTINUATION_NOT_FOUND");
+  return pageResult(saved, token, byteBudget, options.offset ?? 0, options.eventOffset ?? 0);
+}
+
+// Attention is a reducer over the entire delta, not a property of its last page.
+// Empty ordinary page flags do not prove that an earlier question was answered.
+function reduceAttention(state, prior, summaries) {
+  const entries = new Map(prior?.entries ?? (prior ? [["legacy", prior]] : []));
+  const summaryById = new Map(state.events.map((event, i) => [event.id, summaries[i]]));
+  for (const page of state.observations) {
+    for (const flag of page.attention ?? []) entries.set(`flag:${flag}`, { attention: "human", reason: { attention_flags: [flag] }, events: [] });
+    for (const event of page.events) {
+      if (["answered", "resolved"].includes(event.status)) { if (state.complete) entries.delete(event.id); continue; }
+      const question = Array.isArray(event.questions) && event.questions.length;
+      const failed = event.status === "failed" || (event.type === "commandExecution" && Number.isInteger(event.exit_code) && event.exit_code !== 0);
+      if (question || failed) entries.set(event.id, { attention: question ? "human" : "failure", reason: { question_event: !!question, failure_event: failed }, events: [summaryById.get(event.id)] });
+    }
+    if (state.complete && page.attention_snapshot?.complete === true && Array.isArray(page.attention_snapshot.attention) && !page.attention_snapshot.attention.length) entries.clear();
+    if (state.complete) for (const id of page.attention_resolutions ?? []) entries.delete(id);
+  }
+  if (["failed", "systemError"].includes(state.latest?.status)) entries.set("backend:failure", { attention: "failure", reason: { backend_status: state.latest.status }, events: [] });
+  // Incomplete observations cannot erase any previous unresolved evidence.
+  if (!state.complete && prior) for (const [id, entry] of prior.entries ?? [["legacy", prior]]) if (!entries.has(id)) entries.set(id, entry);
+  if (!entries.size) return null;
+  const values = [...entries.values()], attention = values.some(e => e.attention === "human") ? "human" : "failure";
+  return { attention, reason: { evidence: values.map(e => e.reason) }, events: [...new Map(values.flatMap(e => e.events).map(e => [e.token, e])).values()], entries: [...entries] };
 }
 
 export async function syncProject(projectId, options = {}, dependencies = {}) {
   if (typeof projectId !== "string" || !projectId) throw failure("project sync requires --project.");
-  const byteBudget = options.byteBudget ?? 16000, pageLimit = options.pageLimit ?? 1000, maxPagesPerWork = options.maxPagesPerWork ?? 100;
-  if (!Number.isInteger(byteBudget) || byteBudget < 4096 || byteBudget > 1024 * 1024 || !Number.isInteger(pageLimit) || pageLimit < 1 || pageLimit > 1000) throw failure("Invalid sync byte/page budget.");
+  const byteBudget = validateBudget(options.byteBudget ?? 16000), pageLimit = options.pageLimit ?? 1000, maxPagesPerWork = options.maxPagesPerWork ?? 100;
+  if (!Number.isInteger(maxPagesPerWork) || maxPagesPerWork < 1 || !Number.isInteger(pageLimit) || pageLimit < 1 || pageLimit > 1000) throw failure("Invalid sync byte/page budget.");
+  // Reject an oversized fixed envelope before reading or committing state.
+  pageResult({ project_id: projectId, membership_digest: "0".repeat(64), complete: false, works: [], created_at: new Date().toISOString() }, "0".repeat(36), byteBudget);
   const storage = dependencies.storage ?? {}, read = dependencies.read;
   if (typeof read !== "function") throw failure("Project sync reader is unavailable.");
-  const members = await listManagedThreads(projectId, storage), membershipDigest = hash(members.map(m => ({ thread_id: m.thread_id, connection: m.connection, registered_at: m.registered_at })));
+  const members = await listManagedThreads(projectId, storage), membershipDigest = managedMembershipDigest(members);
   const previous = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage), eventRecords = [], states = new Map();
-  for (const member of members) states.set(member.thread_id, { member, cursor: member.sync_cursor, events: [], pages: 0, complete: false, history_gap: false, retry_after_ms: null, error: null });
+  for (const member of members) states.set(member.thread_id, { member, cursor: member.sync_cursor, events: [], observations: [], seen: new Set([member.sync_cursor]), pages: 0, complete: false, history_gap: false, retry_after_ms: null, error: null });
   const readPage = async state => {
     try {
-      const page = await read(state.member.thread_id, { connection: state.member.connection, since: state.cursor, limit: pageLimit });
+      const page = validateSyncPage(await read(state.member.thread_id, { connection: state.member.connection, since: state.cursor, limit: pageLimit }), state.member.thread_id, state.cursor, state.seen);
+      state.seen.add(page.cursor); state.observations.push(page);
       state.pages++; state.cursor = page.cursor; state.events.push(...(page.events ?? [])); state.latest = page; state.complete = !page.has_more; return page.has_more;
     } catch (error) {
       state.complete = false; state.error = error.code ?? "OBSERVATION_FAILED"; state.history_gap = gapCodes.has(error.code);
@@ -94,41 +183,74 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   for (const state of states.values()) {
     const priorAttention = previous?.unresolved_attention?.[state.member.thread_id] ?? null;
     let axes;
-    if (state.latest) axes = classify(state.latest, state.complete, state.member.connection);
+    if (state.latest) axes = classify({ ...state.latest, events: [] }, state.complete, state.member.connection);
     else axes = { execution: "unknown", attention: priorAttention?.attention ?? "unknown", observation: "unavailable", group: priorAttention ? "対応が必要" : "未確認", reason: { error: state.error } };
+    state.events = [...new Map(state.events.map(e => [JSON.stringify([e.turn_id ?? null, e.id]), e])).values()];
     const eventSummaries = state.events.map(event => summarizeEvent(event, state.member.thread_id, eventRecords));
-    const currentAttention = ["human", "failure"].includes(axes.attention) ? { attention: axes.attention, reason: axes.reason, events: eventSummaries.filter(e => e.type === "agentMessage" || e.status === "failed") } : null;
-    if (currentAttention) unresolved[state.member.thread_id] = currentAttention;
-    else if (!state.complete && priorAttention) unresolved[state.member.thread_id] = priorAttention;
+    state.eventSummaries = eventSummaries;
+    const currentAttention = reduceAttention(state, priorAttention, eventSummaries);
+    if (currentAttention) {
+      unresolved[state.member.thread_id] = currentAttention;
+      axes.attention = currentAttention.attention; axes.reason = currentAttention.reason; axes.group = "対応が必要";
+    }
+    const repeatedEvents = currentAttention?.events.filter(e => !eventSummaries.some(s => s.token === e.token)) ?? [];
     works.push({ thread_id: state.member.thread_id, title: state.latest?.title ?? null, ...axes, history_gap: state.history_gap,
-      retry_after_ms: state.retry_after_ms, complete: state.complete, cursor: state.complete ? state.cursor : null, events: eventSummaries,
+      retry_after_ms: state.retry_after_ms, complete: state.complete, cursor: state.complete ? state.cursor : null, events: [...repeatedEvents, ...eventSummaries], error: state.error,
       turn_identity: state.latest?.latest_turn_id ?? state.latest?.current_turn_id ?? state.latest?.turn_id ?? state.latest?.active_turn_id ?? null,
-      attention_repeated: !!priorAttention });
+      resolution_unconfirmed: !!currentAttention, attention_repeated: !!priorAttention && !!currentAttention });
   }
   works.sort((a, b) => (a.group === "対応が必要" ? -1 : 0) - (b.group === "対応が必要" ? -1 : 0) || a.thread_id.localeCompare(b.thread_id));
-  const syncComplete = works.every(work => work.complete), syncToken = randomUUID(), base = { project_id: projectId, sync_token: syncToken, membership_digest: membershipDigest,
-    membership_count: members.length, complete: syncComplete, works: [], omitted_works: 0, omitted_events: 0, continuation_token: null, created_at: new Date().toISOString() };
-  // Attention rows are mandatory, but their full text remains behind an event
-  // token. Ordinary work rows are omitted whole rather than truncating JSON.
-  for (const work of works) {
-    const essential = work.group === "対応が必要" || work.history_gap || work.retry_after_ms;
-    let candidate = work;
-    if (essential && bytes({ ...base, works: [...base.works, candidate] }) > byteBudget) candidate = { ...work, events: work.events.map(event => ({ ...event, text: null })) };
-    if (essential || bytes({ ...base, works: [...base.works, candidate] }) <= byteBudget) base.works.push(candidate);
-    else { base.omitted_works++; base.omitted_events += work.events.length; }
+  const syncToken = randomUUID(), createdAt = new Date().toISOString();
+  const head = { schema: 1, project_id: projectId, sync_token: syncToken, membership_digest: membershipDigest,
+    complete: works.every(w => w.complete), complete_work_ids: works.filter(w => w.complete).map(w => w.thread_id),
+    unresolved_attention: unresolved, created_at: createdAt };
+  for (const work of works) work.detail_token = randomUUID();
+  // The existing project head lock protects only publication, never network I/O.
+  // A stale reader must not replace a newer attention head, even after a CAS miss.
+  try {
+    await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => {
+      const current = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage);
+      if (hash(current ?? null) !== hash(previous ?? null)) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");
+      // Persist attention evidence before advancing any cursor. A crash during
+      // publication leaves an incomplete head that the next sync can recover.
+      for (const record of eventRecords) await writeRecord("project-sync-events", record.token, { schema: 1, sync_token: syncToken, ...record }, storage);
+      await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), { ...head, complete: false, complete_work_ids: [], publication_pending: true }, storage);
+      // CAS uses the snapshot revision even if an empty read returns the same cursor.
+      for (const state of states.values()) if (state.complete) {
+        const work = works.find(w => w.thread_id === state.member.thread_id);
+        try {
+          const updated = await updateManagedThreadCursor(state.member.thread_id, state.member.sync_cursor, state.cursor, storage, state.member.sync_revision ?? 0);
+          work.sync_revision = updated.sync_revision;
+        } catch (error) {
+          work.complete = false; work.cursor = null; work.error = error.code; work.observation = "incomplete";
+          state.complete = false;
+          const retained = reduceAttention(state, previous?.unresolved_attention?.[work.thread_id], state.eventSummaries);
+          if (retained) {
+            unresolved[work.thread_id] = retained; work.attention = retained.attention; work.reason = retained.reason;
+            work.group = "対応が必要"; work.resolution_unconfirmed = true;
+            work.attention_repeated = !!previous?.unresolved_attention?.[work.thread_id];
+            work.events = [...new Map([...retained.events, ...work.events].map(e => [e.token, e])).values()];
+          }
+        }
+      }
+      head.complete = works.every(w => w.complete);
+      head.complete_work_ids = works.filter(w => w.complete).map(w => w.thread_id);
+      // Save detail records before publishing a head that work tell may consume.
+      const detailStart = eventRecords.length;
+      for (const work of works) {
+        eventRecords.push({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...work } } });
+      }
+      await writeRecord("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, complete: head.complete, works, created_at: createdAt }, storage);
+      for (const record of eventRecords.slice(detailStart)) await writeRecord("project-sync-events", record.token, { schema: 1, sync_token: syncToken, ...record }, storage);
+      await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), head, storage);
+    }, storage);
+  } catch (error) {
+    if (!["SYNC_CURSOR_CONFLICT", "PROJECT_SYNC_CONFLICT", "RECORD_BUSY"].includes(error.code)) throw error;
+    head.complete = false;
+    for (const work of works) { work.complete = false; work.cursor = null; work.error ??= error.code === "SYNC_CURSOR_CONFLICT" ? "SYNC_CURSOR_CONFLICT" : "PROJECT_SYNC_CONFLICT"; work.observation = "incomplete"; }
+    for (const work of works) eventRecords.push({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...work } } });
+    await writeRecord("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, complete: false, works, created_at: createdAt }, storage);
+    for (const record of eventRecords) await writeRecord("project-sync-events", record.token, { schema: 1, sync_token: syncToken, ...record }, storage);
   }
-  if (base.omitted_works || !syncComplete) base.continuation_token = syncToken;
-  await writeRecord("project-sync-results", syncToken, { schema: 1, project_id: projectId, membership_digest: membershipDigest, complete: syncComplete, works, created_at: base.created_at }, storage);
-  for (const record of eventRecords) await writeRecord("project-sync-events", record.token, { schema: 1, sync_token: syncToken, ...record }, storage);
-  for (const state of states.values()) if (state.complete) await updateManagedThreadCursor(state.member.thread_id, state.cursor, storage);
-  const head = { schema: 1, project_id: projectId, sync_token: syncToken, membership_digest: membershipDigest, complete: syncComplete,
-    complete_work_ids: works.filter(work => work.complete).map(work => work.thread_id), unresolved_attention: unresolved, created_at: base.created_at };
-  await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => {
-    const current = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage);
-    if (current?.sync_token && current.sync_token !== previous?.sync_token) head.conflict_tokens = [current.sync_token, syncToken];
-    await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), head, storage);
-  }, storage);
-  const result = { ...base, output_bytes: 0, byte_budget: byteBudget };
-  for (let previous = -1; result.output_bytes !== previous;) { previous = result.output_bytes; result.output_bytes = bytes(result); }
-  return result;
+  return pageResult({ project_id: projectId, membership_digest: membershipDigest, complete: head.complete, works, created_at: createdAt }, syncToken, byteBudget);
 }

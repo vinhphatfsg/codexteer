@@ -81,7 +81,7 @@ export async function assertSupervisorRegistration(threadInput, sessionInput, { 
   return current;
 }
 
-export async function registerSupervisor(threadInput, sessionInput, { owner = "external", launcherPid = null, connection = "shared", ...storage } = {}) {
+export async function registerSupervisor(threadInput, sessionInput, { owner = "external", launcherPid = null, connection = "shared", rejectStopped = false, ...storage } = {}) {
   const threadId = normalizeTaskId(threadInput), sessionId = supervisorId(sessionInput);
   if (typeof owner !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(owner)) throw failure("Supervisor owner must be a short agent name.", "SUPERVISOR_INVALID");
   if (launcherPid !== null && (!Number.isSafeInteger(launcherPid) || launcherPid <= 0)) throw failure("Invalid supervisor launcher PID.", "SUPERVISOR_INVALID");
@@ -89,6 +89,7 @@ export async function registerSupervisor(threadInput, sessionInput, { owner = "e
   // Registrations take the namespace-wide lock before the task lock. Stop,
   // pause and sends only take the task lock and never acquire in reverse order.
   return withStoreLock("supervisor-registration", () => withStoreLock(`supervisor-${threadId}`, async () => {
+    if (rejectStopped && (await getSupervisor(threadId, storage))?.state === "stopped") throw failure("A stopped managed task cannot be reactivated by registration.", "MANAGED_SUPERVISOR_STOPPED");
     const current = await assertSupervisorRegistration(threadId, sessionId, { connection, ...storage });
     if (current?.session_id === sessionId) return current;
     const now = new Date().toISOString();

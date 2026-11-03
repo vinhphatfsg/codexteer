@@ -4,6 +4,8 @@
 
 ## 0.22.0 — 未公開
 
+- `project sync`の並行実行によるcursorの巻き戻りを防ぎ、未解決attentionの根拠をページをまたいで保持します。担当内のイベントもcontinuationで分割してbyte予算を守り、不正な観測ページや停止済み担当の自動再登録を拒否します。
+
 - `work tell`を追加しました。最新のcomplete project syncから送信直前までを再照合し、質問・承認待ち、attention不明、history gap、並行sync、membership変更では送信しません。finding・source・kind・監督IDを内部化し、unknownと同一意図を自動再送しません。
 - managed threadの外部効果を共通gateへ集約しました。受付確認できないDesktop UI sendとpaired `command/exec`は拒否し、方針ファイルの差し替え、作成照合の不一致、stopped supervisorの自動再登録をfail closedにします。
 - `project sync`を追加しました。managed projectの全担当を前回cursorから公平に差分取得し、動作中・対応が必要・検収待ち・未確認へ分類します。未解決attentionを再掲し、history gap・429・不完全取得・出力省略を明示します。長文は`project event`で全文取得できます。

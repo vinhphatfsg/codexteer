@@ -111,3 +111,30 @@ test("policy drift is reported but never injected into the existing task", async
   } });
   assert.equal(result.policy.changed, true); assert.doesNotMatch(wire, /Changed policy/);
 });
+
+test("work tell rejects route identity drift and cursor revision changes after sync", async t => {
+  const { updateManagedThreadCursor } = await import("../src/project-index.mjs");
+  for (const change of ["route", "revision"]) {
+    const f = await fixture(t), member = await getManagedThread(THREAD, f);
+    if (change === "route") await writeRecord("project-index", policyHash(THREAD).slice(0, 40), { ...member, host_id: "different-host", remote_transport: "paired" }, f);
+    else await updateManagedThreadCursor(THREAD, member.sync_cursor, member.sync_cursor, f, member.sync_revision);
+    await assert.rejects(tellWork(THREAD, "do not send", {}, { storage: f, read: f.read, send: async () => assert.fail("dispatch") }), { code: change === "route" ? "WORK_TELL_MEMBERSHIP_CHANGED" : "WORK_TELL_SYNC_CONFLICT" });
+  }
+});
+
+test("work tell cannot answer a retained question absent from the final sync page", async t => {
+  const f = await fixture(t); let count = 0;
+  await syncProject("project-tell", {}, { storage: f, read: async id => {
+    const base = await f.read(id, { since: (await getManagedThread(id, f)).sync_cursor, limit: 1000 });
+    return { ...base, cursor: `question-${Math.min(++count, 2)}`, has_more: count === 1,
+      events: count === 1 ? [{ id: "unanswered", type: "agentMessage", text: "Choose", questions: ["A or B?"] }] : [] };
+  } });
+  await assert.rejects(tellWork(THREAD, "choose A", {}, { storage: f, read: f.read, send: async () => assert.fail("dispatch") }), { code: "WORK_TELL_HUMAN_REQUIRED" });
+});
+
+test("work tell refuses human attention on any freshness page", async t => {
+  const f = await fixture(t); let calls = 0;
+  await assert.rejects(tellWork(THREAD, "never answer approval", {}, { storage: f, read: async id => ({ thread_id: id,
+    cursor: `fresh-${++calls}`, has_more: calls === 1, events: [], attention: calls === 1 ? ["waitingOnApproval"] : [], active_turn_id: "turn-one" }),
+    send: async () => assert.fail("dispatch") }), { code: "WORK_TELL_HUMAN_REQUIRED" });
+});

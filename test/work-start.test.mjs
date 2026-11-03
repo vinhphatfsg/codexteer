@@ -111,3 +111,17 @@ for (const boundary of ["attempt_saved", "before_create_rpc", "create_returned",
     const result = await startWork(input, f.deps); assert.equal(result.stage, "observed"); assert.ok(f.counts.create <= 1, `${boundary}: ${f.counts.create}`);
   });
 }
+
+test("stop after work-start preflight is atomically rejected inside supervisor registration", async t => {
+  const f = await fixture(t), { registerSupervisor, controlSupervisor } = await import("../src/supervision.mjs");
+  let arrived, release;
+  const entered = new Promise(r => { arrived = r; }), barrier = new Promise(r => { release = r; });
+  f.deps.hook = async name => { if (name === "before_supervisor_registration") { arrived(); await barrier; } };
+  const pending = startWork({ project: "project-one", title: "atomic stop", order: "implement", root: f.root }, f.deps);
+  const checked = assert.rejects(pending, { code: "MANAGED_SUPERVISOR_STOPPED" });
+  await entered;
+  await registerSupervisor(THREAD, "22222222-2222-4222-8222-999999999999", { home: f.home });
+  await controlSupervisor(THREAD, "stop", { home: f.home });
+  release(); await checked;
+  assert.equal((await getSupervisor(THREAD, { home: f.home })).state, "stopped");
+});

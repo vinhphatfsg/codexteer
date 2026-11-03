@@ -1,15 +1,16 @@
 import { createHash } from "node:crypto";
-import { getManagedThread, listManagedThreads } from "./project-index.mjs";
+import { getManagedThread, listManagedThreads, managedMembershipDigest } from "./project-index.mjs";
 import { getSupervisor } from "./supervision.mjs";
 import { createFinding } from "./findings.mjs";
 import { sendTrackedMessage, reconcileMessages } from "./journal.mjs";
 import { readRecord, listRecords, withStoreLock } from "./store.mjs";
+import { validateSyncPage } from "./project-sync.mjs";
 import { readRepositoryPolicy } from "./work-start.mjs";
 
 const sha = value => createHash("sha256").update(value).digest("hex");
 const fail = (message, code, details = {}) => Object.assign(new Error(message), { code, ...details });
 const projectKey = projectId => sha(projectId).slice(0, 40);
-const membershipDigest = members => sha(JSON.stringify(members.map(member => ({ thread_id: member.thread_id, connection: member.connection, registered_at: member.registered_at }))));
+const membershipDigest = managedMembershipDigest;
 const turnIdentity = observation => observation?.latest_turn_id ?? observation?.current_turn_id ?? observation?.turn_id ?? observation?.active_turn_id ?? null;
 
 async function policyStatus(threadId, member, storage, readPolicy) {
@@ -29,6 +30,9 @@ async function syncBasis(threadId, member, token, storage) {
   if (!result || result.complete !== true || !work || work.complete !== true || work.history_gap || !work.cursor) throw fail("The target is absent, incomplete, or has a history gap in the sync basis.", "WORK_TELL_SYNC_INCOMPLETE", { sync_token: head.sync_token });
   const members = await listManagedThreads(member.project_id, storage), digest = membershipDigest(members);
   if (digest !== result.membership_digest) throw fail("Project membership changed after sync. Run project sync before sending.", "WORK_TELL_MEMBERSHIP_CHANGED", { sync_token: head.sync_token, membership_digest: digest });
+  const currentMember = members.find(m => m.thread_id === threadId);
+  if (currentMember?.sync_cursor !== work.cursor || (currentMember?.sync_revision ?? 0) !== (work.sync_revision ?? 0)) throw fail("The sync cursor changed after the reviewed basis.", "WORK_TELL_SYNC_CONFLICT");
+  if (head.unresolved_attention?.[threadId]?.attention === "human") throw fail("Unresolved questions or approvals remain in the sync basis.", "WORK_TELL_HUMAN_REQUIRED");
   return { head, result, work, digest };
 }
 
@@ -41,7 +45,8 @@ function assertNoHumanAttention(observation) {
 async function freshObservation(threadId, member, basis, read) {
   let cursor = basis.work.cursor, latest, pages = 0; const seen = new Set([cursor]), events = [];
   do {
-    latest = await read(threadId, { connection: member.connection, since: cursor, limit: 1000 });
+    latest = validateSyncPage(await read(threadId, { connection: member.connection, since: cursor, limit: 1000 }), threadId, cursor, seen);
+    assertNoHumanAttention(latest);
     if (!latest?.cursor || ++pages > 1000 || (latest.has_more && seen.has(latest.cursor))) throw fail("Freshness read did not advance its cursor.", "WORK_TELL_FRESHNESS_INCOMPLETE");
     seen.add(latest.cursor); cursor = latest.cursor; events.push(...(latest.events ?? []));
   } while (latest.has_more);

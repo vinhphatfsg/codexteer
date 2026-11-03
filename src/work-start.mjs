@@ -4,7 +4,7 @@ import { constants } from "node:fs";
 import path from "node:path";
 import { readRecord, writeRecord, withStoreLock } from "./store.mjs";
 import { getSupervisor, registerSupervisor } from "./supervision.mjs";
-import { registerManagedThread, updateManagedThreadCursor } from "./project-index.mjs";
+import { registerManagedThread, getManagedThread, updateManagedThreadCursor } from "./project-index.mjs";
 
 const MAX_POLICY_BYTES = 64 * 1024;
 const fail = (message, code = "WORK_START_FAILED") => Object.assign(new Error(message), { code });
@@ -111,11 +111,13 @@ export async function startWork(input, dependencies = {}) {
     if (!record.supervisor_registered) {
       const existing = await getSupervisor(record.thread_id, storage);
       if (existing?.state === "stopped") throw fail("A stopped managed task cannot be reactivated by work start. A human must explicitly establish new supervision.", "MANAGED_SUPERVISOR_STOPPED");
+      await hook("before_supervisor_registration", record);
       record.supervisor_session_id ??= randomUUID();
-      await registerSupervisor(record.thread_id, record.supervisor_session_id, { ...storage, owner: "codexteer-orchestrator", connection });
+      await registerSupervisor(record.thread_id, record.supervisor_session_id, { ...storage, owner: "codexteer-orchestrator", connection, rejectStopped: true });
       record.supervisor_registered = true; record.stage = "supervisor_registered"; await writeRecord("work-starts", key, record, storage); await hook("supervisor_registered", record);
     }
     if (!record.sync_cursor) {
+      const membership = await getManagedThread(record.thread_id, storage);
       let observation, cursor; const seen = new Set(); let pages = 0;
       do {
         observation = await dependencies.read(record.thread_id, { connection, ...(cursor ? { since: cursor } : {}) });
@@ -126,7 +128,7 @@ export async function startWork(input, dependencies = {}) {
       } while (observation.has_more);
       await hook("initial_read", { ...record, observation });
       record.sync_cursor = cursor; record.initial_state = observation.status ?? "unknown"; record.stage = "observed";
-      await updateManagedThreadCursor(record.thread_id, record.sync_cursor, storage);
+      await updateManagedThreadCursor(record.thread_id, membership.sync_cursor, record.sync_cursor, storage, membership.sync_revision ?? 0);
       await writeRecord("work-starts", key, record, storage);
     }
     return { ...summary(record), prompt_sha256: record.prompt_sha256, initial_status: record.initial_state };

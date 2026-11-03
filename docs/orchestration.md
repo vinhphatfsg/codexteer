@@ -161,4 +161,12 @@ managed threadの操作は次の4種類として扱います。
 
 結果はexecution・attention・observationの3軸と、「動作中」「対応が必要」「検収待ち」「未確認」の4群を返します。未解決の質問・承認・失敗は、完全な観測で解消を確認するまで再掲します。cursor不正は`history_gap:true`、429は再試行せず`retry_after_ms`として、取得済みの他担当と一緒に返します。
 
-出力は既定16000 UTF-8 bytesを予算とし、JSONを途中で切りません。省略時は`omitted_works`・`omitted_events`・`continuation_token`を返します。`project sync --continue <TOKEN> --offset <N>`で同じsnapshotの続きを取得できます。各eventの`full_command`または`project event <TOKEN>`は、syncで要約された長文を切らずに返します。`membership_digest`はsync開始時の対象集合を示します。
+出力は既定16000 UTF-8 bytesを予算とし、JSONを途中で切りません。省略時は`omitted_works`・`omitted_events`・`continuation_token`を返します。`project sync --continue <TOKEN> --offset <NEXT_OFFSET> --event-offset <NEXT_EVENT_OFFSET>`で同じsnapshotの続きを取得できます。各eventの`full_command`または`project event <TOKEN>`は、syncで要約された長文を切らずに返します。`membership_digest`はsync開始時の対象集合を示します。
+
+`project sync`の出力はUTF-8のJSON byte予算を守ります。続きがあるときは、`continuation_token`、`next_offset`、`next_event_offset`をそのまま次の呼出しへ渡します。同じ担当のイベントも複数ページへ分割されます。
+
+```sh
+codexteer project sync --continue <TOKEN> --offset <NEXT_OFFSET> --event-offset <NEXT_EVENT_OFFSET> --byte-budget 4096 --json
+```
+
+`details_omitted:true`の詳細は、イベントの`token`または担当行の`detail_token`を`project event`へ渡して取得できます。byte予算は4096〜1048576です。未解決の質問・承認・失敗は、後続ページから消えただけでは解消扱いにしません。解消の明示的な観測証拠がない間は、以前の理由とイベントtokenを再掲します。不完全な観測では解消を確定せず、並行syncと競合した結果は送信の基点に使えません。

@@ -486,14 +486,14 @@ export const topics = {
   project: {
     title: "managed projectの全担当を差分同期する",
     when: "オーケストレーターの再起動後や定期確認時に、全担当の進行・失敗・質問・承認待ちを一度に把握するとき。",
-    usage: ["project sync --project ID [--byte-budget N]", "project sync --continue TOKEN [--offset N] [--byte-budget N]", "project event TOKEN"],
+    usage: ["project sync --project ID [--byte-budget N]", "project sync --continue TOKEN [--offset N] [--event-offset N] [--byte-budget N]", "project event TOKEN"],
     options: [
       { name: "--project", text: "work startで登録したproject ID。" },
       { name: "--byte-budget", default: "16000", text: "構文的に完全なJSON出力へ使うUTF-8 byte予算（4096〜1048576）。" },
       { name: "--continue / --offset", text: "省略された担当を同じsync snapshotから取り出すtokenと開始位置。" },
     ],
     returns: "membership_digest、complete、4群表示、3軸状態、history_gap、retry_after_ms、省略数、continuation_token。event tokenは長文をproject eventで全文取得できる。",
-    examples: ["codexteer project sync --project sample --json", "codexteer project event <TOKEN> --json", "codexteer --connection cloud project sync --project env_example --json"],
+    examples: ["codexteer project sync --project sample --json", "codexteer project event <TOKEN> --json", "codexteer --connection desktop-cloud project sync --project sample --json"],
     notes: [
       "常駐監視は開始しない。全担当を一巡してからbacklogをdrainし、completeな担当だけcursorを進める。",
       "未解決の質問・承認・失敗は解消を完全な観測で確認するまで再掲する。429は再試行せず、取得済み結果とretry_after_msを返す。",

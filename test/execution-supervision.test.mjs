@@ -50,11 +50,20 @@ test("an accepted resource run renews and completes after pause, while a new run
 
 test("checkpoint releases supervisor lock after dispatch and saves accepted completion after stop", async t => {
   const f = await fixture(t), cp = await createCheckpoint(THREAD, "fixture", { ...f, paths: ["input"], connection: "shared" });
-  const running = runCheckpoint(THREAD, cp.id, [process.execPath, "-e", "setTimeout(()=>{},700)"], { ...f, connection: "shared" });
+  const ready = `${f.home}/ready`, release = `${f.home}/release`, completed = `${f.home}/completed`;
+  // Completion is impossible until the parent releases the barrier after stop.
+  const script = "const fs=require('fs');fs.writeFileSync(process.argv[1],'ready');const t=setInterval(()=>{if(fs.existsSync(process.argv[2])){clearInterval(t);fs.writeFileSync(process.argv[3],'completed')}},5)";
+  const running = runCheckpoint(THREAD, cp.id, [process.execPath, "-e", script, ready, release, completed], { ...f, connection: "shared", timeoutMs: 10000 });
+  t.after(() => writeFile(release, "cleanup").catch(() => {}));
+  for (let i = 0; i < 1000 && !existsSync(ready); i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(existsSync(ready), true);
   for (let i = 0; i < 100 && !(await getCheckpoint(THREAD, cp.id, f)).runs.some(run => run.status === "running"); i++) await new Promise(resolve => setTimeout(resolve, 10));
   let stopped;
   for (let i = 0; i < 100 && !stopped; i++) try { stopped = await controlSupervisor(THREAD, "stop", f); } catch (error) { if (error.code !== "RECORD_BUSY") throw error; await new Promise(resolve => setTimeout(resolve, 5)); }
   assert.equal(stopped.state, "stopped");
+  assert.equal(existsSync(completed), false, "completion has not happened at stop acknowledgement");
+  assert.equal((await getCheckpoint(THREAD, cp.id, f)).runs.at(-1).status, "running");
+  await writeFile(release, "release after stop");
   const result = await running; assert.equal(result.status, "completed");
   assert.equal((await getCheckpoint(THREAD, cp.id, f)).runs.at(-1).status, "completed");
 });
