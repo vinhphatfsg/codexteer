@@ -40,7 +40,7 @@ test("attention survives byte budgeting, repeats until resolved, and full long t
   if (first.continuation_token) { const continuation = await continueProjectSync(first.continuation_token, { byteBudget: 4096 }, f); assert.ok(continuation.works.length); assert.ok(Buffer.byteLength(JSON.stringify(continuation)) <= 4096); }
   const second = await syncProject("project-sync", { byteBudget: 4096 }, { storage: f, read });
   assert.equal(second.works.find(w => w.thread_id === uuid(2)).attention_repeated, true);
-  const resolved = await syncProject("project-sync", {}, { storage: f, read: async id => page(id, `resolved-${id}`, [], { attention_snapshot: { complete: true, attention: [] } }) });
+  const resolved = await syncProject("project-sync", {}, { storage: f, read: async (id, options) => page(id, `resolved-${id}`, options.since === `resolved-${id}` ? [] : [{ id: "human-answer", type: "userMessage", text: "answer" }]) });
   assert.equal(resolved.works.find(w => w.thread_id === uuid(2)).attention, "none");
 });
 
@@ -134,7 +134,7 @@ test("questions accumulate across pages and repeat their evidence on rate/page b
   }
   const absent = await syncProject("project-sync", {}, { storage: f, read: async id => page(id, "absent", []) });
   assert.equal(absent.works[0].attention, "human", "absence is not resolution");
-  const resolved = await syncProject("project-sync", {}, { storage: f, read: async id => page(id, "resolved", [], { attention_resolutions: ["question"] }) });
+  const resolved = await syncProject("project-sync", {}, { storage: f, read: async (id, options) => page(id, "resolved", options.since === "resolved" ? [] : [{ id: "human-answer", type: "userMessage", text: "answer" }]) });
   assert.equal(resolved.works[0].attention, "none");
 });
 

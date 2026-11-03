@@ -82,7 +82,7 @@ export function trimEvent(event, maxChars, includeOutput) {
   return copy;
 }
 
-export function readSnapshot(thread, { since, limit = 50, maxChars = 2000, includeOutput = false } = {}) {
+export function readSnapshot(thread, { since, limit = 50, maxChars = 2000, includeOutput = false, fullEvents = false } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isInteger(maxChars) || maxChars < 100 || maxChars > 20000) throw Object.assign(new Error("Invalid read limit or max-chars."), { code: "OPTIONS_INVALID" });
   const s = threadSnapshot(thread), old = since ? parseCursor(since, thread.id) : null;
   if (old && old.v !== 1) throw invalidCursor();
@@ -99,7 +99,7 @@ export function readSnapshot(thread, { since, limit = 50, maxChars = 2000, inclu
   const stateHash = digest(s.state);
   const cursor = encodeCursor({ v: 1, count, open, prefix: prefixHash(s.hashes, count, open), state: stateHash,
     active_turn_id: s.state.active_turn_id, latest_turn_id: thread.turns?.at(-1)?.id ?? null, user_revision: s.user_revision }, thread.id);
-  return { ...s.state, events: selected.map(i => ({ ...trimEvent(s.events[i], maxChars, includeOutput), change: old && i < old.count ? "updated" : "added" })),
+  return { ...s.state, events: selected.map(i => ({ ...(fullEvents ? s.events[i] : trimEvent(s.events[i], maxChars, includeOutput)), change: old && i < old.count ? "updated" : "added" })),
     running_commands: s.events.filter(e => e.type === "commandExecution" && mutableStatus.has(e.status)).map(e => trimEvent(e, maxChars, includeOutput)),
     ...hostFields(), cursor, changed: !old || selected.length > 0 || old.state !== stateHash, has_more: updates.length + added.length > selected.length,
     omitted_older_events: old ? 0 : Math.max(0, s.events.length - limit), observed_at: new Date().toISOString() };

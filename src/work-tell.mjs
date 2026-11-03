@@ -1,8 +1,9 @@
+import { readOnClient, readSnapshot, observationAttention } from "./observe.mjs";
 import { createHash } from "node:crypto";
 import { getManagedThread, listManagedThreads, managedMembershipDigest } from "./project-index.mjs";
 import { getSupervisor } from "./supervision.mjs";
 import { createFinding } from "./findings.mjs";
-import { sendTrackedMessage, reconcileMessages } from "./journal.mjs";
+import { sendWorkTellMessage, reconcileMessages } from "./journal.mjs";
 import { readRecord, listRecords, withStoreLock } from "./store.mjs";
 import { validateSyncPage } from "./sync-page.mjs";
 import { readRepositoryPolicy } from "./work-start.mjs";
@@ -73,12 +74,15 @@ export async function tellWork(threadInput, body, options = {}, dependencies = {
     const key = `work-tell-${sha(JSON.stringify([member.thread_id, body.trim(), !!options.newTurn])).slice(0, 40)}`;
     const finding = await (dependencies.createFinding ?? createFinding)(member.thread_id, { key, title: `work tell: ${body.trim().slice(0, 120)}`,
       condition: `Deliver the reviewed instruction with sha256 ${sha(body)} exactly once and track its response.`, basedOn: fresh.cursor, ...storage });
-    const guardBeforeSend = async () => {
+    const guardBeforeSend = async (thread, client) => {
+      if (thread) assertNoHumanAttention({ attention: observationAttention(thread.status), events: [] });
+      await freshObservation(member.thread_id, member, { work: { ...basis.work, cursor: fresh.cursor } },
+        (id, options) => client ? readOnClient(client, id, options) : Promise.resolve(readSnapshot(thread, options)));
       const current = await syncBasis(member.thread_id, member, basis.head.sync_token, storage);
       if (current.head.sync_token !== basis.head.sync_token) throw fail("A concurrent project sync replaced the reviewed basis.", "WORK_TELL_SYNC_CONFLICT", { current_sync_token: current.head.sync_token });
     };
     try {
-      const receipt = await (dependencies.sendTracked ?? sendTrackedMessage)(member.thread_id, body, { supervisor: supervisor.session_id, connection: member.connection,
+      const receipt = await (dependencies.sendTracked ?? sendWorkTellMessage)(member.thread_id, body, { supervisor: supervisor.session_id, connection: member.connection,
         basedOn: fresh.cursor, finding: finding.id, source: "codexteer", kind: "review", newTurn: !!options.newTurn, guardBeforeSend }, { ...storage, ...(dependencies.send ? { send: dependencies.send } : {}) });
       return { ...receipt, thread_id: member.thread_id, sync_token: basis.head.sync_token, finding_id: finding.id, source: "codexteer", kind: "review", policy };
     } catch (error) {

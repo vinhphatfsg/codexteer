@@ -49,6 +49,9 @@ test("raw sends reject every managed task until work tell supplies freshness, wh
   for (const [thread, body, extra = {}] of [[ACTIVE, "active"], [PAUSED, "paused"], [PAUSED, "paused new turn", { newTurn: true }], [STOPPED, "stopped"]]) {
     await assert.rejects(sendTrackedMessage(thread, body, { connection: "shared", ...extra }, { home, send }), { code: "MANAGED_INTERVENTION_REQUIRED" });
   }
+  for (const thread of [ACTIVE, PAUSED, STOPPED]) {
+    await assert.rejects(sendTrackedMessage(thread, "supervisor bypass", { connection: "shared", supervisor: sessions[thread], basedOn: "cursor", finding: "finding", internal: true, workTell: true }, { home, send }), { code: "MANAGED_INTERVENTION_REQUIRED" });
+  }
   assert.equal(counter.count, 0, "managed raw sends never reach delivery");
   const unmanaged = await sendTrackedMessage(UNMANAGED, "legacy", { connection: "shared" }, { home, send });
   assert.equal(unmanaged.delivery_status, "accepted"); assert.equal(counter.count, 1);

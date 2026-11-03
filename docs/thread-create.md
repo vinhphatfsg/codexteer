@@ -47,7 +47,7 @@ CLI終了後の承認はDesktopが担当します。codexteerは承認を自動�
 - standaloneで`--title`を省略すると、初回指示の空白をまとめた先頭80文字を名前にします。タイトル生成用のAIは起動しません。対象サーバーでは未使用の空チャットをDesktopが購読するために、先に名前を保存して履歴を永続化する必要があります。
 - cwd・permissions・sandbox・approval policy・approvals reviewerの上書きはnative schemaにないため、指定すると作成前に拒否します。
 - `--via-thread`のAI中継経路は削除しました。自動fallbackもありません。
-- 本書のstandalone方式は登録済みローカルプロジェクト向けです。worktreeやクラウド実行はこの方式では扱いません。Codex Cloudには`--connection cloud thread create --project <ENV_ID>`で同じ作成操作を使えます。環境一覧・監督を含む[Cloud操作](cloud.md)を参照してください。
+- 本書のstandalone方式は登録済みローカルプロジェクト向けです。worktreeやクラウド実行はこの方式では扱いません。新規Cloud担当は`--connection desktop-cloud environments list`で環境を選び、`--connection desktop-cloud thread create --environment <ID_OR_EXACT_NAME>`で作成します。複数担当の管理には[work startとproject sync](orchestration.md)、環境の要件には[Desktop Cloud操作](desktop-cloud.md)を参照してください。
 - `--timeout-ms`は各RPCの待機期限で、既定120000、1000〜600000です。
 - `--dry-run`は接続・プロジェクト・native schemaを読み、チャット・指示・receiptを作りません。
 

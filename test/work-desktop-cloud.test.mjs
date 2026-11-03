@@ -62,7 +62,7 @@ test("Desktop Cloud work start pins configuration, policy bytes and provenance w
   const result = await startWork(f.input, f.deps), member = await getManagedThread(ID, f.storage), record = (await listRecords("work-starts", f.storage))[0];
   assert.equal(JSON.parse(await readFile(result.receipt_path, "utf8")).policy_bytes_base64, Buffer.from(f.policy).toString("base64"));
   assert.equal(result.stage, "observed"); assert.equal(result.environment_config_id, ENV); assert.equal(result.environment_verified, true); assert.equal(member.project_id, "coordination-only");
-  assert.equal(member.connection, "desktop-cloud"); assert.equal(member.backend_project_id, null); assert.ok(member.sync_cursor);
+  assert.equal(member.connection, "desktop-cloud"); assert.equal(member.backend_project_id, null); assert.equal(member.sync_cursor, undefined); assert.ok(record.initial_events.length);
   assert.equal(Buffer.from(record.policy_bytes_base64, "base64").toString(), f.policy); assert.equal(record.policy_sha256, sha(f.policy));
   assert.equal(record.prompt.split(f.policy).length - 1, 1); assert.equal(result.source.root, f.root); assert.equal(result.source.cloud_checkout_match, "unverified");
   assert.equal((await getSupervisor(ID, f.storage)).connection, "desktop-cloud");

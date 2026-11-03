@@ -2,7 +2,7 @@ import { validateSyncPage } from "./sync-page.mjs";
 export { validateSyncPage } from "./sync-page.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { listManagedThreads, updateManagedThreadCursor, managedMembershipDigest } from "./project-index.mjs";
-import { readRecord, writeRecord, withStoreLock } from "./store.mjs";
+import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
 
 const hash = value => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
@@ -122,7 +122,7 @@ export async function continueProjectSync(token, options = {}, storage = {}) {
 }
 
 // Attention is a reducer over the entire delta, not a property of its last page.
-// Empty ordinary page flags do not prove that an earlier question was answered.
+// Current backend flags and durable question/failure evidence resolve separately.
 function reduceAttention(state, prior, summaries) {
   // Reclassify only persisted evidence that proves the old command-level false
   // positive. Opaque legacy evidence, real turn failures and questions survive.
@@ -135,16 +135,26 @@ function reduceAttention(state, prior, summaries) {
     for (const flag of page.attention ?? []) entries.set(`flag:${flag}`, { attention: "human", reason: { attention_flags: [flag] }, events: [] });
     for (const event of page.events) {
       if (["answered", "resolved"].includes(event.status)) { if (state.complete) entries.delete(event.id); continue; }
+      if (state.complete && event.type === "userMessage" && event.change !== "updated") {
+        for (const [id, entry] of entries) if (entry.reason?.question_event) entries.delete(id);
+      }
+      if (state.complete && event.type === "turn" && ["completed", "cancelled", "interrupted"].includes(event.status)) entries.delete(event.id);
       const question = Array.isArray(event.questions) && event.questions.length;
       const failed = failedTurn(event);
       if (question || failed) entries.set(event.id, { attention: question ? "human" : "failure", reason: { question_event: !!question, failure_event: failed }, events: [summaryById.get(event.id)] });
     }
-    if (state.complete && page.attention_snapshot?.complete === true && Array.isArray(page.attention_snapshot.attention) && !page.attention_snapshot.attention.length) entries.clear();
-    if (state.complete) for (const id of page.attention_resolutions ?? []) entries.delete(id);
+  }
+  if (state.complete && Array.isArray(state.latest?.attention)) {
+    const flags = new Set(state.latest.attention);
+    for (const id of entries.keys()) if (id.startsWith("flag:") && !flags.has(id.slice(5))) entries.delete(id);
   }
   if (["failed", "systemError"].includes(state.latest?.status) || state.latest?.latest_turn_status === "failed") entries.set("backend:failure", { attention: "failure", reason: { backend_status: state.latest.status, latest_turn_status: state.latest.latest_turn_status }, events: [] });
   // Incomplete observations cannot erase any previous unresolved evidence.
   if (!state.complete && prior) for (const [id, entry] of priorEntries) if (!entries.has(id)) entries.set(id, entry);
+  if (state.complete && state.latest?.latest_turn_status === "completed" && !["failed", "systemError"].includes(state.latest.status)) {
+    entries.delete("backend:failure");
+    for (const [id, entry] of entries) if (entry.attention === "failure" && entry.events?.every(e => e.type === "turn" && typeof e.event_id === "string" && e.event_id !== state.latest.latest_turn_id)) entries.delete(id);
+  }
   if (!entries.size) return null;
   const values = [...entries.values()], attention = values.some(e => e.attention === "human") ? "human" : values.some(e => e.attention === "failure") ? "failure" : "unknown";
   return { attention, reason: { evidence: values.map(e => e.reason) }, events: [...new Map(values.flatMap(e => e.events ?? []).map(e => [e.token, e])).values()], entries: [...entries] };
@@ -161,9 +171,16 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   const members = await listManagedThreads(projectId, storage), membershipDigest = managedMembershipDigest(members);
   const previous = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage), eventRecords = [], states = new Map();
   for (const member of members) states.set(member.thread_id, { member, cursor: member.sync_cursor, events: [], observations: [], seen: new Set([member.sync_cursor]), pages: 0, complete: false, history_gap: false, retry_after_ms: null, error: null });
+  // A successful start observed these events but has not presented them yet.
+  // Keep them until membership publication commits the first sync cursor.
+  const starts = await listRecords("work-starts", storage);
+  for (const state of states.values()) if (!state.member.sync_cursor) {
+    const start = starts.find(record => record.thread_id === state.member.thread_id && Array.isArray(record.initial_events) && record.sync_cursor);
+    if (start) { state.events.push(...start.initial_events); state.observations.push({ events: start.initial_events }); state.cursor = start.sync_cursor; state.seen.add(start.sync_cursor); }
+  }
   const readPage = async state => {
     try {
-      const page = validateSyncPage(await read(state.member.thread_id, { connection: state.member.connection, since: state.cursor, limit: pageLimit }), state.member.thread_id, state.cursor, state.seen);
+      const page = validateSyncPage(await read(state.member.thread_id, { connection: state.member.connection, since: state.cursor, limit: pageLimit, fullEvents: true }), state.member.thread_id, state.cursor, state.seen);
       if (state.member.environment_config_id && page.environment_config_id !== state.member.environment_config_id) throw failure("The task environment differs from its managed route.", "PROJECT_ROUTE_MISMATCH");
       state.seen.add(page.cursor); state.observations.push(page);
       state.pages++; state.cursor = page.cursor; state.events.push(...(page.events ?? [])); state.latest = page; state.complete = !page.has_more; return page.has_more;

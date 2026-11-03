@@ -21,11 +21,10 @@ const REMOTE_NO_FALLBACK = "失敗しても別ホスト・別経路・UI・SSH�
 export const topics = {
   cloud: {
     title: "Codex Cloud（Web）のタスクを共通の監督・観測・送信・指摘管理で扱う",
-    when: "chatgpt.com/codex/tasksのタスク（task_ ID・公式リンク）を作成・監督・観測・介入するとき。durable_ IDやhostId=durableリンクはhelp desktop-cloud、Desktop経由の別ホストはhelp remote。",
+    when: "既存のchatgpt.com/codex/tasksのタスク（task_ ID・公式リンク）を監督・観測・介入するとき。新規担当はhelp desktop-cloudの環境を使う。durable_ IDやhostId=durableリンクはhelp desktop-cloud、Desktop経由の別ホストはhelp remote。",
     usage: [
       "--connection cloud projects list",
       "--connection cloud threads list [--limit N] [--cursor CURSOR] [--env ENV_ID]",
-      "--connection cloud thread create --project ENV_ID_OR_NAME [--branch BRANCH] [--dry-run] <MESSAGE...>|-",
       "--connection cloud thread receipt <ATTEMPT_ID>",
       "doctor --thread <CLOUD_TASK_ID|URL>",
       "supervise <CLOUD_TASK_ID|URL> [POLICY] [--agent claude|codex] [--use-path-cli] [-- <AGENT_ARGS...>]",
@@ -42,8 +41,6 @@ export const topics = {
     options: [
       { name: "<CLOUD_TASK_ID|URL>", text: "task_で始まるID、またはhttps://chatgpt.com/codex/tasks/<ID>。この形式なら--connection省略時もcloudを選ぶ。" },
       { name: "--connection cloud", text: "タスクIDを取らないprojects list・threads list・thread create・thread receiptでは必須。" },
-      { name: "--project ENV_ID_OR_NAME", text: "thread createで必須。アクセスできる環境のIDか完全一致の名前で、1件に決まらなければCLOUD_OPTIONS_INVALID。" },
-      { name: "--branch BRANCH", default: "環境のリポジトリが1つならその既定ブランチ", text: "作成するタスクのGitブランチ。既定ブランチが1つに決まらない環境では必須。" },
       { name: "--dry-run", text: "作成・送信をせず、計画または受付記録だけを返す。" },
       { name: "--limit N（threads list）", default: "20", text: "1〜500。続きは応答のcursorを--cursorへ渡す。--envで環境IDに絞れる。" },
       { name: "--new-turn", text: "停止中（completed/failed/cancelled）のタスクを新しいターンで再開する。ユーザーが再開を許可した場合だけ使う。" },
@@ -69,8 +66,7 @@ export const topics = {
       { code: "CLOUD_CAPABILITY_UNSUPPORTED", when: "Cloudで未実装の操作を実行した。Desktopへの代替は試していない。", action: "その操作は使わず、必要ならユーザーに伝える。" },
     ],
     examples: [
-      "codexteer --connection cloud projects list --json",
-      "codexteer --connection cloud thread create --project env_example --branch main 'テストを追加してください' --json",
+      "codexteer --connection desktop-cloud environments list --json",
       "codexteer supervise task_example --agent claude",
       "codexteer read task_example --include-output --json",
       "codexteer supervise pause task_example --json",

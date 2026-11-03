@@ -7,7 +7,7 @@ import { getSupervisor, registerSupervisor } from "./supervision.mjs";
 import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
 import { repositorySource } from "./repository-source.mjs";
 import { validateSyncPage } from "./sync-page.mjs";
-import { registerManagedThread, getManagedThread, updateManagedThreadCursor } from "./project-index.mjs";
+import { registerManagedThread } from "./project-index.mjs";
 
 const MAX_POLICY_BYTES = 64 * 1024;
 const fail = (message, code = "WORK_START_FAILED") => Object.assign(new Error(message), { code });
@@ -129,16 +129,16 @@ export async function startWork(input, dependencies = {}) {
     }
     try {
       if (!record.sync_cursor) {
-        const membership = await getManagedThread(record.thread_id, storage);
-        let observation, cursor; const seen = new Set(); let pages = 0;
+        let observation, cursor; const initialEvents = []; const seen = new Set(); let pages = 0;
         do {
-          observation = await dependencies.read(record.thread_id, { connection, ...(cursor ? { since: cursor } : {}) });
+          observation = await dependencies.read(record.thread_id, { connection, limit: 1000, fullEvents: true, ...(cursor ? { since: cursor } : {}) });
           if (connection === "desktop-cloud") {
             validateSyncPage(observation, record.thread_id, cursor, seen);
             if ((observation.omitted_older_events ?? 0) > 0) throw fail("Initial history has an unproven boundary; no cursor was saved.", "WORK_INITIAL_HISTORY_GAP");
             if (["unknown", "notLoaded"].includes(observation.status)) throw fail("Initial observation is unavailable; no cursor was saved.", "WORK_INITIAL_READ_UNAVAILABLE");
             if (observation.environment_config_id !== record.environment_config_id) throw fail("Initial observation did not verify the selected environment.", "WORK_INITIAL_ROUTE_MISMATCH");
           }
+          initialEvents.push(...(observation.events ?? []));
           if (!observation?.cursor) throw fail("Initial observation returned no cursor.", "WORK_INITIAL_READ_INCOMPLETE");
           if (seen.has(observation.cursor) || ++pages > 1000) throw fail("Initial observation did not advance its cursor.", "WORK_INITIAL_READ_STALLED");
           seen.add(observation.cursor);
@@ -146,8 +146,7 @@ export async function startWork(input, dependencies = {}) {
         } while (observation.has_more);
         await hook("initial_read", { ...record, observation });
         record.initial_environment_verified = connection === "desktop-cloud";
-        record.sync_cursor = cursor; record.initial_state = observation.status ?? "unknown"; record.stage = "observed";
-        await updateManagedThreadCursor(record.thread_id, membership.sync_cursor, record.sync_cursor, storage, membership.sync_revision ?? 0);
+        record.initial_events = initialEvents; record.sync_cursor = cursor; record.initial_state = observation.status ?? "unknown"; record.stage = "observed";
         await writeRecord("work-starts", key, record, storage);
       }
     } catch (error) {

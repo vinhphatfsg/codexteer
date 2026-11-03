@@ -52,7 +52,7 @@ test("concurrent identical starts create one child and persist supervision, memb
   assert.equal(fulfilled.length, 1); assert.equal(rejected.length, 1); assert.equal(rejected[0].reason.code, "RECORD_BUSY");
   assert.equal(fulfilled[0].value.stage, "observed"); assert.equal(f.counts.create, 1);
   assert.equal((await getSupervisor(THREAD, { home: f.home })).state, "active");
-  assert.equal((await getManagedThread(THREAD, { home: f.home })).sync_cursor, "cursor-one");
+  assert.equal((await getManagedThread(THREAD, { home: f.home })).sync_cursor, undefined);
 });
 
 test("membership is visible before supervisor binding and mutations fail closed in that window", async t => {

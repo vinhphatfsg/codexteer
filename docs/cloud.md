@@ -1,14 +1,11 @@
-新規担当は[Desktop Cloud](desktop-cloud.md)を推奨します。このページは既存のWeb Cloudタスクの互換操作です。
+新規担当は[Desktop Cloud](desktop-cloud.md)を使います。このページは既存のWeb Cloudタスクの互換操作です。
 
 # Web Cloud（既存利用向け）
 
-CloudのタスクIDまたは公式リンクを指定すると、通常の`read`・`watch`・`send`・`supervise`・`history`・`instructions`・`findings`を使えます。Desktopには接続・フォールバックしません。タスクをまだ選んでいない環境一覧・タスク一覧・新規作成では`--connection cloud`で接続先を指定します。
+CloudのタスクIDまたは公式リンクを指定すると、通常の`read`・`watch`・`send`・`supervise`・`history`・`instructions`・`findings`を使えます。Desktopには接続・フォールバックしません。既存タスクの一覧は`--connection cloud threads list`で取得します。新規担当はDesktop Cloudの`environments list`で環境を選び、`--connection desktop-cloud work start --environment <ID> --root <CHECKOUT> --project <PROJECT> --title <TITLE> <MESSAGE>`で作成します。
 
 ```bash
-codexteer --connection cloud projects list --json
 codexteer --connection cloud threads list --limit 20 --json
-codexteer --connection cloud thread create --project env_example --branch main \
-  'テストを追加してください' --json
 codexteer read task_example --include-output --json
 codexteer watch task_example --stream --notify digest --since <CURSOR> --json
 codexteer supervise task_example --agent claude
@@ -16,9 +13,7 @@ codexteer supervise task_example --agent codex -- exec
 codexteer supervise prompt task_example --use-path-cli --json
 ```
 
-IDはすべて架空の例です。作成時の環境指定は`--project`に統一し、環境IDまたは一意の正確な名前を指定します。`--branch`を省略したときは、一つのリポジトリの既定ブランチを環境が明示している場合だけ使い、`branch_source: environment-default`を返します。不明・複数リポジトリの場合は明示指定が必要です。ローカルの現在ブランチや未コミット差分を暗黙に送信しません。
-
-この作成経路の基点はCloud環境から取得できるpush済みブランチです。必要なpushはGOALや方針で委任されていれば作業ブランチだけに行い、委任がなければユーザーに確認します。既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止です。
+IDはすべて架空の例です。新規作成の環境選択・要件は[Desktop Cloud](desktop-cloud.md)を参照してください。
 
 Node.js 20以降、PATH上の公式Codex CLI 0.157.1以降、ChatGPTログインとCloud利用権限が必要です。Desktopの起動は不要です。対象は従来型Cloudタスク用環境であり、新世代Cloud環境設定や別サービスを含む一覧ではありません。環境一覧にはID・名前・リポジトリ名・既定ブランチだけを返し、環境変数・secrets・セットアップ内容は出しません。掲載は実行成功の保証ではありません。タスク一覧は最大500件を公式CLIのページに分けて取得し、続きのcursorを返します。
 

@@ -50,9 +50,9 @@ DesktopのCloud環境構成は、`codexteer --connection desktop-cloud environme
 
 タスクと明示した接続が合わない場合は拒否し、エラー文に修正用の`--connection`、JSONの`error.expected_connection`に修正候補、`error.connection`に今回の指定値を返します。`durable_`付きID・`hostId=durable`付きリンクには`--connection desktop-cloud`、Web Cloudの`task_`付きID・公式リンクには`--connection cloud`を使います。ローカルUUIDには既定の`--connection shared`を候補として示します。ローカルの観測には`--connection desktop`も利用できますが、送信には使えません。明示指定を自動で切り替えることはありません。
 
-### Codex Cloudを使う
+### 既存のWeb Cloudタスクを扱う
 
-CloudタスクのID・公式リンクで、同じ`supervise`・`read/watch`・`send`・`history/instructions/findings`を使えます。監督の`pause/resume/stop`や保存済みCLIも共通です。接続先をまだ選んでいない一覧と作成は`--connection cloud projects list`・`threads list`・`thread create --project <ENV_ID>`を使います。実行中のCloud送信は同じタスクの元ターンを中断して後続ターンを開始する方式です。[操作とサービス上の違い](docs/cloud.md)
+既存の`task_`付きID・公式リンクは`--connection cloud`の互換経路で観測・介入できます。新しい担当は上記のDesktop Cloud環境で作成してください。[既存タスクの操作](docs/cloud.md)
 
 ### ソースから導入する
 
