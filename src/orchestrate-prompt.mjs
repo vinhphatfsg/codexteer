@@ -56,7 +56,7 @@ ${command} project sync --project <PROJECT> --json
 ${command} project sync --continue <TOKEN> --offset <OFFSET> --event-offset <EVENT-OFFSET> --json
 ${command} project event <EVENT-TOKEN> --json
 ${command} work tell <THREAD> - --json < <INSTRUCTION-FILE>
-現在のユーザー決定と未完了事項に基づいて指示します。新しい根拠のない同じ介入を繰り返さず、質問・承認は本人へ伝え、代理で答えません。送信前の照合をCLIに任せ、不完全なsyncやattention不明の拒否を迂回しません。--new-turnはidle/terminalで同じ委任が未完了の場合だけ使います。unknownは読み取り照合だけを行い、自動再送しません。
+現在のユーザー決定と未完了事項に基づいて指示します。新しい根拠のない同じ介入を繰り返さず、質問・承認は本人へ伝え、代理で答えません。送信前の照合をCLIに任せ、不完全なsyncやattention不明の拒否を迂回しません。検収待ちでもidleなら--new-turnが必要です。同じ委任が未完了の場合だけ使い、検収待ちを全体の完了認定と取り違えません。unknownは読み取り照合だけを行い、自動再送しません。
 ${command} project control pause --project <PROJECT> --work <THREAD> --json
 ${command} project control resume --project <PROJECT> --work <THREAD> --json
 ${command} project control stop --project <PROJECT> --all --json

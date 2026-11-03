@@ -392,3 +392,18 @@ test("Monitor retries a partial paged read from the last flushed v2 cursor", asy
   assert.ok(resumed); assert.equal(parseCursor(resumed.resume_cursor, ID).v, 2);
   assert.equal(connections, 2);
 });
+
+test("paged Desktop metadata proves latest completed turn even when the display delta is empty", async t => {
+  const { mkdtemp, rm } = await import("node:fs/promises"), { tempPrefix } = await import("../test-support/temp.mjs");
+  const { registerManagedThread } = await import("../src/project-index.mjs"), { syncProject } = await import("../src/project-sync.mjs");
+  const home = await mkdtemp(tempPrefix("ct-paged-review-")); t.after(() => rm(home, { recursive: true, force: true }));
+  const thread = task([user("u"), msg("result")], "idle"), s = server(thread), baseline = await s.read();
+  await registerManagedThread(ID, { projectId: "paged-review", connection: "shared", syncCursor: baseline.cursor }, { home });
+  const read = (_id, options) => s.read(options);
+  for (let i = 0; i < 2; i++) {
+    const result = await syncProject("paged-review", {}, { storage: { home }, read });
+    assert.equal(result.complete, true); assert.equal(result.works[0].events.length, 0);
+    assert.equal(result.works[0].group, "検収待ち"); assert.equal(result.works[0].reason.latest_turn_id, "t0");
+    assert.equal(result.works[0].reason.latest_turn_status, "completed");
+  }
+});

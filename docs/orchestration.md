@@ -44,7 +44,7 @@ sharedの作成先はDesktopの実在project ID・完全一致名とrootsを照�
 
 作成結果の担当IDとreceiptを記録します。同じ発注はcreateを繰り返さず、部分成功・unknown・観測不能では同じ担当を読み取り照合します。membershipを先に登録してから監督を結び、stoppedを自動で置き換えません。初回観測が不完全ならcursorを保存しません。
 
-syncは全担当を一巡してからbacklogを読み、動作中・対応が必要・検収待ち・未確認へ分類します。未解決attentionは明示的な解消証拠が得られるまで根拠とtokenを再掲します。履歴の欠落、429、不完全な取得を変化なしと扱いません。再起動・要約後はsyncから再開します。
+syncは全担当を一巡してからbacklogを読み、動作中・対応が必要・検収待ち・未確認へ分類します。未解決attentionは明示的な解消証拠が得られるまで根拠とtokenを再掲します。履歴の欠落、429、不完全な取得を変化なしと扱いません。idleで直近turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ちです。開始前idleや証明不足は未確認として区別します。旧Cloudの質問・承認状態は未確認なので、completedだけでは検収待ちとしません。再起動・要約後はsyncから再開します。
 
 ```sh
 codexteer project sync --continue <TOKEN> --offset <NEXT_OFFSET> --event-offset <NEXT_EVENT_OFFSET> --json
@@ -53,7 +53,7 @@ codexteer project event <EVENT-TOKEN> --json
 
 出力は既定16000 UTF-8 bytes、指定範囲4096〜1048576です。同じ担当内のイベントも分割します。続きは返されたtokenと両offsetを使い、`details_omitted:true`ならeventのtokenまたは担当行のdetail_tokenから詳細を取得します。
 
-tellは最新のcomplete syncから送信直前まで再照合し、新しいイベント、質問・承認待ち、attention不明、履歴欠落、不完全な観測では拒否します。代理回答はせず、同じ意図やunknownを自動再送しません。`--new-turn`はidle/terminalで同じ委任の未完了作業がある場合だけです。
+tellは最新のcomplete syncから送信直前まで再照合し、新しいイベント、質問・承認待ち、attention不明、履歴欠落、不完全な観測では拒否します。代理回答はせず、同じ意図やunknownを自動再送しません。検収待ちでもidleなら`--new-turn`が必要です。同じ委任の未完了作業がある場合だけ続け、受付後に新turnがactiveになれば動作中へ戻ります。検収待ちは成果の受入や全体の完了認定ではありません。
 
 controlはproject全体の新しい監督IDを作らず、各担当の既存recordを制御します。`--all`と`--work`はどちらか一方を指定します。返り値のrequested・changed・already・failed、各code、membership_digestを確認してください。部分失敗でも全担当の結果を返し、CLIは終了値1（JSONはok:false）です。busyは未完了、binding不在は失敗、同じ状態への再実行はalreadyです。stop済みはresumeできません。対象集合は呼出し開始時のsnapshotで、新しく追加された担当は含まれません。
 

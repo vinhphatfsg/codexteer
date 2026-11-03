@@ -1,4 +1,4 @@
-import { digest, project, trimEvent } from "./observe.mjs";
+import { digest, project, trimEvent, turnObservation, observationAttention } from "./observe.mjs";
 import { encodeCursor, parseCursor, resolveTurns, invalidCursor } from "./cursor.mjs";
 
 const PAGE = 100;
@@ -27,8 +27,8 @@ export async function turnMetadata(client, threadId) {
 
 function stateOf(thread, turns) {
   const active = turns.filter(t => t.status === "inProgress");
-  return { thread_id: thread.id, status: thread.status?.type ?? "unknown", active_turn_id: active.length === 1 ? active[0].id : null,
-    attention: Array.isArray(thread.status?.activeFlags) ? thread.status.activeFlags : thread.status?.type === "active" ? null : [], cwd: thread.cwd ?? null, title: thread.name ?? null };
+  return { ...turnObservation(turns), thread_id: thread.id, status: thread.status?.type ?? "unknown", active_turn_id: active.length === 1 ? active[0].id : null,
+    attention: observationAttention(thread.status), cwd: thread.cwd ?? null, title: thread.name ?? null };
 }
 
 async function items(client, threadId, { cursor = null, turnId = null, direction = "asc", limit = PAGE } = {}) {

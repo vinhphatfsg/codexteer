@@ -37,6 +37,23 @@ export function project(item, turnId) {
   return event;
 }
 
+// Metadata is repeated on every page, including an empty delta. Completion is
+// proved by the current turn list, never inferred from a past displayed event.
+export function observationAttention(status) {
+  if (Array.isArray(status?.activeFlags)) return status.activeFlags;
+  // An explicitly unknown/invalid flag set must not become an empty snapshot.
+  if (Object.hasOwn(status ?? {}, "activeFlags") || status?.type === "active") return null;
+  return [];
+}
+
+export function turnObservation(turns) {
+  const latest = turns.at(-1), running = new Set(["inProgress", "in_progress", "running", "pending", "queued"]);
+  const known = new Set([...running, "completed", "failed", "interrupted", "cancelled"]);
+  return { latest_turn_id: typeof latest?.id === "string" && latest.id ? latest.id : null,
+    latest_turn_status: typeof latest?.status === "string" && latest.status ? latest.status : null,
+    active_turn_count: turns.every(turn => known.has(turn.status)) ? turns.filter(turn => running.has(turn.status)).length : null };
+}
+
 export function threadSnapshot(thread) {
   const events = [];
   for (const turn of thread.turns ?? []) {
@@ -45,9 +62,8 @@ export function threadSnapshot(thread) {
     for (const item of turn.items ?? []) { const event = project(item, turn.id); if (event) events.push(event); }
   }
   const active = (thread.turns ?? []).filter(t => t.status === "inProgress");
-  const flags = thread.status?.activeFlags;
-  const state = { thread_id: thread.id, status: thread.status?.type ?? "unknown", active_turn_id: active.length === 1 ? active[0].id : null,
-    attention: Array.isArray(flags) ? flags : thread.status?.type === "active" ? null : [], cwd: thread.cwd ?? null, title: thread.name ?? null };
+  const state = { ...turnObservation(thread.turns ?? []), thread_id: thread.id, status: thread.status?.type ?? "unknown", active_turn_id: active.length === 1 ? active[0].id : null,
+    attention: observationAttention(thread.status), cwd: thread.cwd ?? null, title: thread.name ?? null };
   if (thread.environments !== undefined) state.environment_config_id = Array.isArray(thread.environments) && thread.environments.length === 1 && typeof thread.environments[0]?.environmentConfigId === "string" ? thread.environments[0].environmentConfigId : null;
   return { state, events, hashes: events.map(digest), user_revision: digest(events.filter(e => e.type === "userMessage")) };
 }

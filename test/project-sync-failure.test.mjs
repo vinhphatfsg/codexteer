@@ -18,12 +18,12 @@ async function fixture(t, thread = completedCloudThread(), consumed = false) {
 
 test("a completed Desktop Cloud turn keeps nonzero command outcomes without treating them as worker failures", async t => {
   const f = await fixture(t), result = await syncProject("failure-fixture", {}, f);
-  assert.equal(result.complete, true); assert.equal(result.works[0].attention, "none");
+  assert.equal(result.complete, true); assert.equal(result.works[0].attention, "review");
   assert.notEqual(result.works[0].group, "対応が必要");
   assert.ok(result.works[0].events.some(e => e.event_id === "search"));
   assert.ok(result.works[0].events.some(e => e.event_id === "probe"));
   assert.deepEqual((await readRecord("project-sync-heads", key, f.storage)).unresolved_attention, {});
-  assert.equal((await syncProject("failure-fixture", {}, f)).works[0].attention, "none");
+  assert.equal((await syncProject("failure-fixture", {}, f)).works[0].attention, "review");
 });
 
 test("actual failed turns and explicit backend failures still require attention", async t => {
@@ -54,7 +54,7 @@ test("persisted proven command-only false positives are reclassified without res
     if (remaining) entries.push(["real", { attention: remaining === "unknown" ? "failure" : remaining, reason: { [remaining === "human" ? "question_event" : "failure_event"]: true }, events: [{ token: "22222222-2222-4222-8222-000000000002", type: remaining === "human" ? "agentMessage" : remaining === "failure" ? "turn" : "unknown", status: "failed" }] }]);
     await writeRecord("project-sync-heads", key, { sync_token: "previous", unresolved_attention: { [f.thread.id]: { attention: "failure", entries } } }, f.storage);
     const result = await syncProject("failure-fixture", {}, f);
-    assert.equal(result.works[0].attention, remaining ?? "none");
+    assert.equal(result.works[0].attention, remaining ?? "review");
     const head = await readRecord("project-sync-heads", key, f.storage);
     assert.equal(head.unresolved_attention[f.thread.id]?.entries.some(([id]) => id === "search") ?? false, false);
     if (remaining) assert.ok(result.works[0].events.some(e => e.token === entries[1][1].events[0].token));

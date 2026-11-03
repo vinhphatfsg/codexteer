@@ -12,8 +12,8 @@ const terminal = new Set(["completed", "failed", "cancelled"]), active = new Set
 
 // A command/tool outcome is scoped to that item, not to the delegated work.
 const failedTurn = event => event.type === "turn" && event.status === "failed";
-const failedWork = observation => ["failed", "systemError"].includes(observation?.status) || (observation?.events ?? []).some(failedTurn);
-const provenWorkFailure = entry => ["failed", "systemError"].includes(entry?.reason?.backend_status)
+const failedWork = observation => ["failed", "systemError"].includes(observation?.status) || observation?.latest_turn_status === "failed" || (observation?.events ?? []).some(failedTurn);
+const provenWorkFailure = entry => ["failed", "systemError"].includes(entry?.reason?.backend_status) || entry?.reason?.latest_turn_status === "failed"
   || (entry?.events ?? []).some(failedTurn);
 const commandOnlyFailure = entry => entry?.attention === "failure" && entry.reason?.failure_event === true
   && !entry.reason.question_event && !entry.reason.backend_status && Array.isArray(entry.events) && entry.events.length > 0
@@ -25,10 +25,16 @@ function classify(observation, complete, connection) {
   const failed = failedWork(observation);
   const human = questions || (Array.isArray(flags) && flags.length > 0);
   const execution = active.has(status) ? "active" : ["idle", "notLoaded"].includes(status) ? "idle" : terminal.has(status) ? "terminal" : "unknown";
-  const attention = human ? "human" : failed ? "failure" : execution === "terminal" ? "review" : !complete || execution === "unknown" || connection === "cloud" || flags === null || flags === undefined ? "unknown" : "none";
+  const idleCompleted = status === "idle" && observation.latest_turn_status === "completed"
+    && typeof observation.latest_turn_id === "string" && !!observation.latest_turn_id && observation.active_turn_count === 0;
+  const attentionKnown = Array.isArray(flags);
+  const attention = human ? "human" : failed ? "failure" : !complete || connection === "cloud" || !attentionKnown ? "unknown"
+    : idleCompleted || execution === "terminal" ? "review" : execution === "idle" || execution === "unknown" ? "unknown" : "none";
   const observationState = complete ? "current" : "incomplete";
   const group = observationState !== "current" ? "未確認" : ["human", "failure"].includes(attention) ? "対応が必要" : attention === "review" ? "検収待ち" : execution === "unknown" || attention === "unknown" ? "未確認" : "動作中";
-  return { execution, attention, observation: observationState, group, reason: { backend_status: status, attention_flags: flags ?? null, question_event: questions, failure_event: failed } };
+  return { execution, attention, observation: observationState, group, reason: { backend_status: status, attention_flags: flags ?? null, question_event: questions, failure_event: failed,
+    ...(attention === "review" && idleCompleted ? { review_basis: "idle_after_completed_turn", latest_turn_id: observation.latest_turn_id,
+      latest_turn_status: observation.latest_turn_status, active_turn_count: observation.active_turn_count } : {}) } };
 }
 
 function summarizeEvent(event, threadId, store) {
@@ -136,7 +142,7 @@ function reduceAttention(state, prior, summaries) {
     if (state.complete && page.attention_snapshot?.complete === true && Array.isArray(page.attention_snapshot.attention) && !page.attention_snapshot.attention.length) entries.clear();
     if (state.complete) for (const id of page.attention_resolutions ?? []) entries.delete(id);
   }
-  if (["failed", "systemError"].includes(state.latest?.status)) entries.set("backend:failure", { attention: "failure", reason: { backend_status: state.latest.status }, events: [] });
+  if (["failed", "systemError"].includes(state.latest?.status) || state.latest?.latest_turn_status === "failed") entries.set("backend:failure", { attention: "failure", reason: { backend_status: state.latest.status, latest_turn_status: state.latest.latest_turn_status }, events: [] });
   // Incomplete observations cannot erase any previous unresolved evidence.
   if (!state.complete && prior) for (const [id, entry] of priorEntries) if (!entries.has(id)) entries.set(id, entry);
   if (!entries.size) return null;
