@@ -1,3 +1,4 @@
+import { pruneProjectHistory } from "./project-history.mjs";
 import { controlProject } from "./project-control.mjs";
 import { readFileSync } from "node:fs";
 import { desktopDoctor, inspectDesktopUi, openDesktopThread } from "./desktop.mjs";
@@ -241,6 +242,12 @@ async function mainOnTarget(argv) {
         else console.log(JSON.stringify(data, null, 2));
         if (!data.complete) process.exitCode = 1; return;
       }
+      if (action === "prune") {
+        if (supervisor) throw Object.assign(new Error("A bound supervisor cannot prune project history."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        const project = takeOption(args, "--project", undefined);
+        if (args.length) throw usage("Expected: project prune --project ID.");
+        const data = await pruneProjectHistory(project); success("project.prune", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
+      }
       if (action === "sync") {
         if (supervisor) throw Object.assign(new Error("A bound supervisor cannot sync an entire project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         const project = takeOption(args, "--project", undefined), byteBudget = Number(takeOption(args, "--byte-budget", "16000"));
@@ -253,7 +260,7 @@ async function mainOnTarget(argv) {
         if (args.length !== 1) throw usage("Expected: project event TOKEN.");
         const data = await projectEvent(args[0]); success("project.event", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
       }
-      throw usage("Expected: project sync|event.");
+      throw usage("Expected: project sync|event|prune.");
     }
     if (command === "work") {
       const action = args.shift();

@@ -128,9 +128,9 @@ test("an argument error under a connection names that connection's usage, not th
   const desktopCloud = cli(["--connection", "desktop-cloud", "thread", "create", "--json"], env).error;
   assert.equal(desktopCloud.code, "DESKTOP_CLOUD_OPTIONS_INVALID");
   assert.deepEqual(desktopCloud.usage, usageLines("thread", "--connection desktop-cloud thread create "));
-  const cloud = cli(["--connection", "cloud", "thread", "create", "--json"], env).error;
+  const cloud = cli(["--connection", "cloud", "thread", "receipt", "--json"], env).error;
   assert.equal(cloud.code, "CLOUD_OPTIONS_INVALID");
-  assert.deepEqual(cloud.usage, usageLines("thread", "--connection cloud thread create "));
+  assert.deepEqual(cloud.usage, usageLines("thread", "--connection cloud thread receipt "));
   const local = cli(["thread", "create", "--bogus", "--json"], env).error;
   assert.equal(local.code, "OPTIONS_INVALID");
   assert.deepEqual(local.usage, usageLines("thread", "thread create "));
@@ -203,4 +203,13 @@ test("a paused supervisor's refused send carries the send topic's action", async
   assert.equal(error.action, topics.send.errors.find(entry => entry.code === "SUPERVISOR_PAUSED").action);
   assert.equal(error.action, SUPERVISOR_PAUSED.action);
   assert.equal(error.usage, undefined);
+});
+
+test("thread help and bundled skill route new Cloud creation through Desktop Cloud", async () => {
+  assert.ok(topics.thread.usage.some(line => line.startsWith("--connection desktop-cloud thread create ")));
+  assert.equal(topics.thread.usage.some(line => line.startsWith("--connection cloud thread create ")), false);
+  assert.doesNotMatch(topics.thread.when, /Web Cloudの作成/);
+  const skill = readFileSync(new URL("../.codex/skills/codexteer/SKILL.md", import.meta.url), "utf8");
+  assert.doesNotMatch(skill, /--connection cloud thread create/);
+  assert.match(skill, /--connection desktop-cloud work start/);
 });

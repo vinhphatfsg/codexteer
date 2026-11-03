@@ -143,7 +143,7 @@ export const topics = {
       { name: "--connection shared|desktop|cloud|desktop-cloud", default: "shared", text: "全コマンド共通の接続指定。-- より前ならどこに置いてもよい。省略時だけ、task_/公式URLはcloud、durable_/hostId=durableはdesktop-cloudを自動で選ぶ。" },
       { name: "--connection shared", text: "desktop startで起動したwrapper経由。観測・送信・作成のすべてに使う既定の接続。" },
       { name: "--connection desktop", text: "通常起動Desktopの既存制御ソケットを読むだけの観測専用接続。" },
-      { name: "--connection cloud", text: "Web Cloud（task_ ID・chatgpt.com/codex/tasksのURL）。宛先のない一覧・作成ではこの明示が必要。" },
+      { name: "--connection cloud", text: "既存Web Cloudタスク（task_ ID・chatgpt.com/codex/tasksのURL）向け。宛先のない一覧ではこの明示が必要。新規作成はdesktop-cloudを使う。" },
       { name: "--connection desktop-cloud", text: "Desktop Cloud（durable_ ID・hostId=durableリンク）。" },
     ],
     returns: "--connection desktopのdoctorはconnection.mode=desktop・observation_only=trueを返し、runtime_compatibility.operationsのsend・send_new_turnはunsupported。read/status/watchのJSONは使った接続をconnection_modeで返す。不一致の拒否ではerror.expected_connection（修正候補）とerror.connection（指定値）を返す。",
@@ -367,13 +367,12 @@ export const topics = {
 
   thread: {
     title: "タスクを作成・作成結果を照合し、IDの解決と残留ターンの修復を行う",
-    when: "プロジェクトに初回指示付きの新しいタスクを作るとき、作成済みreceiptを照合し直すとき、URLをIDへ変換するとき、古いターンが実行中のまま残ったとき。Web Cloudの作成はhelp cloud、Desktop Cloudはhelp desktop-cloud。",
+    when: "プロジェクトに初回指示付きの新しいタスクを作るとき、作成済みreceiptを照合し直すとき、URLをIDへ変換するとき、古いターンが実行中のまま残ったとき。新規Cloud担当はhelp desktop-cloud。Web Cloudの既存タスクはhelp cloud。",
     usage: [
       "thread create --project ID|NAME [--context-thread THREAD-ID] [--timeout-ms N] [--title TEXT] [--model MODEL] [--thinking EFFORT] [--dry-run] <MESSAGE...>|-",
       "thread verify <ATTEMPT-ID> [--timeout-ms N]",
       "thread resolve <THREAD>",
       "thread repair <THREAD> [--dry-run | --apply]",
-      "--connection cloud thread create --project ENV_ID_OR_NAME [--branch BRANCH] [--dry-run] <MESSAGE...>|-",
       "--connection cloud thread receipt <ATTEMPT_ID>",
       "--connection cloud|desktop-cloud thread resolve <THREAD>",
       "--connection desktop-cloud thread create --environment ID|NAME [--title TEXT] [--dry-run] <MESSAGE...>|-",
@@ -381,7 +380,7 @@ export const topics = {
       "--connection desktop-cloud thread receipt <ATTEMPT_ID> [--resolve-unknown --note TEXT]",
     ],
     options: [
-      { name: "--project ID|NAME", text: "作成先。projects listのproject_id、desktop_project_idsのID、または完全一致の名前。cloudでは環境IDか名前。" },
+      { name: "--project ID|NAME", text: "作成先。projects listのproject_id、desktop_project_idsのID、または完全一致の名前。Desktop Cloudの環境は--environmentで指定する。" },
       { name: "<MESSAGE...>|-", text: "初回指示。複数の語は空白でつなぐ。- は標準入力。--で始まる本文は -- の後に置く。" },
       { name: "--context-thread THREAD-ID", text: "ローカルで指定したときだけ、そのチャットを呼出し元にDesktopのnative create_threadで作る。省略するとstandalone作成。" },
       { name: "--title TEXT", text: "タスク名（空は不可）。standaloneで省略すると、初回指示の空白をまとめた先頭80文字。" },
@@ -390,7 +389,6 @@ export const topics = {
       { name: "--timeout-ms N", default: "120000", text: "create・verifyの各RPCの待機上限（ms）。1000〜600000。" },
       { name: "--dry-run", text: "createは接続・プロジェクト・native schemaを読んで確かめるだけで、タスク・指示・記録を作らない。repairは既定でこのモード。" },
       { name: "--apply", text: "repairで候補へ終了記録を追記する。全Codexを終了してから外部ターミナルで実行する。" },
-      { name: "--branch BRANCH", text: "cloud作成のブランチ。省略時は環境のリポジトリが1つならその既定ブランチ。" },
       { name: "--environment ID|NAME", text: "desktop-cloud作成のCloud環境（help desktop-cloud）。" },
     ],
     returns: "createはthread_id・deep_link、project_id・desktop_project_id・project_name、cwdと全フォルダ、title、creation_status・delivery_status・verification_status、attempt_id・receipt_path。verifyは更新したreceiptとverification_history。resolveはthread_idとdeep_link。repairはmode・status・candidates・source_sha256、--apply成功時はbackup_path・receipt_path・repaired_sha256。",
@@ -422,7 +420,7 @@ export const topics = {
       "codexteer thread repair <THREAD> --apply --json",
     ],
     notes: [
-      "以下はローカルDesktopとpairedの説明。Web Cloudの作成はhelp cloud、Desktop Cloudの環境指定・作成・所属割当はhelp desktop-cloud。",
+      "以下はローカルDesktopとpairedの説明。新規Cloud担当の環境指定・作成・所属割当はhelp desktop-cloud。既存Web Cloudの互換操作はhelp cloud。",
       "standalone作成（--context-threadなし）はプロジェクトと初回指示だけで作れる。既存チャット・CODEX_THREAD_ID・中継AIは使わない。ローカル専用。",
       "standaloneはApp Serverで全フォルダ付きのタスクを作り、Desktop購読を確立して初回指示を送り、その新タスク自身のthread/turn IDでDesktopの所属登録をする。",
       "--context-thread指定時は、保存済みターンのある実在ローカルチャットを呼出し元にnative create_threadを使う。そのチャットへの送信や追加のAIターンはない。",
@@ -486,7 +484,7 @@ export const topics = {
   project: {
     title: "managed projectの全担当を差分同期・制御する",
     when: "オーケストレーターの再起動後や定期確認時に、全担当の進行・失敗・質問・承認待ちを一度に把握するとき。",
-    usage: ["project control pause|stop|resume --project ID --all", "project control pause|stop|resume --project ID --work THREAD", "project sync --project ID [--byte-budget N]", "project sync --continue TOKEN [--offset N] [--event-offset N] [--byte-budget N]", "project event TOKEN"],
+    usage: ["project control pause|stop|resume --project ID --all", "project control pause|stop|resume --project ID --work THREAD", "project sync --project ID [--byte-budget N]", "project sync --continue TOKEN [--offset N] [--event-offset N] [--byte-budget N]", "project event TOKEN", "project prune --project ID"],
     options: [
       { name: "--project", text: "work startで登録したproject ID。" },
       { name: "--all / --work THREAD", text: "project controlの対象。project全体か個別担当のどちらか一方を必ず指定する。" },
@@ -499,6 +497,7 @@ export const topics = {
       "controlは既存の担当別bindingを使い、部分失敗時も全結果を返す（終了値1・ok:false）。busyとbinding不在はfailed、同じ状態への再実行はalready。stop済みをresumeしない。受付済みプロセス自体は終了しない。",
       "常駐監視は開始しない。全担当を一巡してからbacklogをdrainし、completeな担当だけcursorを進める。",
       "未解決の質問・承認・失敗は解消を完全な観測で確認するまで再掲する。429は再試行せず、取得済み結果とretry_after_msを返す。",
+      "project prune --project IDで過去のsync履歴を整理する。最新sync・未提示初回結果・参照中の根拠は保持する。保存総量はCODEX_HOMEのhost namespaceごとに256 MiB、全文観測は1担当1回16 MiBまで。容量不足では省略保存せず拒否する。",
       "idleかつ最新turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ち。開始前idleや情報不足は未確認。検収待ちは全体の完了認定ではない。",
       "未確認・history_gap・complete:falseを変化なしとして扱わない。既存read/watchは引き続き利用できる。",
     ],

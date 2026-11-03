@@ -4,6 +4,10 @@
 
 ## 0.22.0 — 未公開
 
+- sharedとDesktop Cloudの初回観測は履歴の先頭を証明できない場合にhistory gapとして止まり、startもsyncもcursorを確定しません。過去の根拠不足attentionは完全な成功観測後に履歴上の注意へ分け、検収待ちの分類を妨げません。
+- `project prune --project ID`で過去のsync履歴と提示済み初回全文の重複を整理できます。最新sync・未提示初回結果・参照中の根拠は保持します。保存対象の総量はhost namespaceごとに256 MiB、1担当の全文観測は1回16 MiBまでで、不足時は全文を省略せず拒否します。保持期限は設けず、整理で削除した古いtokenは取得不能になります。
+- `help thread`と同梱skillの新規Cloud担当の案内をDesktop Cloudへ統一しました。
+
 - managed threadへの低水準`send`は監督IDの有無によらず拒否し、介入は`work tell`に限定します。配送直前に公開イベントの追加・更新と現在の質問・承認状態を再照合します。
 - `project sync`は完全な最新観測で消えた待機フラグを解消し、質問と失敗の証拠を別々に保持します。公開イベントは要約前の全文を保存し、コマンド出力も`project event`で取得できます。`work start`の初回観測も次のsyncで提示します。
 - `project control stop`は今後の監督による介入を止めます。受付済みの担当の実行・編集・外部操作を終了する操作ではありません。

@@ -54,9 +54,27 @@ test("persisted proven command-only false positives are reclassified without res
     if (remaining) entries.push(["real", { attention: remaining === "unknown" ? "failure" : remaining, reason: { [remaining === "human" ? "question_event" : "failure_event"]: true }, events: [{ token: "22222222-2222-4222-8222-000000000002", type: remaining === "human" ? "agentMessage" : remaining === "failure" ? "turn" : "unknown", status: "failed" }] }]);
     await writeRecord("project-sync-heads", key, { sync_token: "previous", unresolved_attention: { [f.thread.id]: { attention: "failure", entries } } }, f.storage);
     const result = await syncProject("failure-fixture", {}, f);
-    assert.equal(result.works[0].attention, remaining ?? "review");
+    assert.equal(result.works[0].attention, (remaining === "unknown" ? "review" : remaining ?? "review"));
     const head = await readRecord("project-sync-heads", key, f.storage);
     assert.equal(head.unresolved_attention[f.thread.id]?.entries.some(([id]) => id === "search") ?? false, false);
-    if (remaining) assert.ok(result.works[0].events.some(e => e.token === entries[1][1].events[0].token));
+    if (remaining === "unknown") assert.equal(result.works[0].history_notes.length, 1);
+    else if (remaining) assert.ok(result.works[0].events.some(e => e.token === entries[1][1].events[0].token));
+  }
+});
+
+test("unverifiable legacy attention becomes historical caution after real complete success without clearing proven questions", async t => {
+  for (const human of [false, true]) {
+    const f = await fixture(t, completedCloudThread(), true);
+    const entries = [["opaque", { attention: "unknown", reason: { unverified_prior_failure: { failure_event: true } }, events: [] }]];
+    if (human) entries.push(["question", { attention: "human", reason: { question_event: true }, events: [{ token: "11111111-1111-4111-8111-000000000003", type: "agentMessage" }] }]);
+    await writeRecord("project-sync-heads", key, { sync_token: "legacy", unresolved_attention: { [f.thread.id]: { entries, attention: human ? "human" : "unknown" } } }, f.storage);
+    for (let i = 0; i < 2; i++) {
+      const work = (await syncProject("failure-fixture", {}, f)).works[0];
+      assert.equal(work.attention, human ? "human" : "review"); assert.equal(work.history_notes.length, 1);
+      assert.equal(work.group, human ? "対応が必要" : "検収待ち");
+    }
+    const head = await readRecord("project-sync-heads", key, f.storage);
+    assert.equal(head.unresolved_attention[f.thread.id]?.entries.some(([id]) => id === "opaque") ?? false, false);
+    assert.equal(head.historical_attention[f.thread.id].length, 1);
   }
 });

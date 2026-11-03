@@ -5,6 +5,7 @@ import { readdir, readFile } from "node:fs/promises";
 // Worker mutation adapters are separate from bootstrap, authentication and
 // read-only diagnostics. Adding a sink requires an explicit boundary review.
 const sinks = {
+  sendWorkTellMessage: ["journal.mjs", "work-tell.mjs"], // internal managed delivery entry only
   sendDesktopMessage: ["desktop.mjs", "desktop-ui-send.mjs"], // desktop-ui gate, managed UI refused
   sendCloudTask: ["cloud-observe.mjs", "cloud-send.mjs"], // turn gate through journal
   sendDesktopCloudInput: ["desktop-cloud.mjs", "app-server.mjs"], // turn gate through journal
@@ -44,6 +45,8 @@ const mutationOwners = {
 };
 function violations(file, source) {
   const errors = [];
+  const opaque = source.replace(/(?:const|let)\s*\{[^{}.]*\}\s*=\s*await\s*import\(["'][^"']*journal\.mjs["']\)/g, "");
+  if (!["journal.mjs", "work-tell.mjs"].includes(file) && /(?:import\s*\*\s*as\s+\w+\s*from|export\s*\*\s*from|import\s*\()\s*["'][^"']*journal\.mjs["']/.test(opaque)) errors.push("opaque journal import");
   for (const [sink, owners] of Object.entries(sinks)) if (new RegExp(`\\b${sink}\\b`).test(source) && !owners.includes(file)) errors.push(sink);
   if (/\bmutation\s*:\s*true\b/.test(source) && !mutationOwners[file]) errors.push("mutation RPC");
   // Import checks catch named aliases and namespace/dynamic imports as well as
@@ -84,6 +87,10 @@ test("architecture guard rejects new direct sinks, aliases, namespace and dynami
     'import * as p from "child_process";',
     'import {sendDesktopMessage as send} from "./desktop.mjs";',
     'client.request("turn/steer", params, {mutation: true})',
+    'import {sendWorkTellMessage as send} from "./journal.mjs";',
+    'import * as journal from "./journal.mjs";',
+    'const journal = await import("./journal.mjs");',
+    'export * from "./journal.mjs";',
     'runRemoteCommand(args)', 'sendCloudTask(task)', 'sendDesktopCloudInput(task)',
   ]) assert.ok(violations("new-route.mjs", source).length, source);
 });

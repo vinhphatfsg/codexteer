@@ -42,9 +42,9 @@ codexteer project control stop --project sample --all --json
 
 sharedの作成先はDesktopの実在project ID・完全一致名とrootsを照合します。sharedとDesktop Cloudを同じproject集合に入れる場合は同じ調整用IDを使い、各担当の接続はmembershipへ保存します。発注本文をシェルコードとして評価しません。
 
-作成結果の担当IDとreceiptを記録します。同じ発注はcreateを繰り返さず、部分成功・unknown・観測不能では同じ担当を読み取り照合します。membershipを先に登録してから監督を結び、stoppedを自動で置き換えません。初回観測が不完全ならcursorを保存しません。完全な初回観測の公開イベント全文は未提示として保存し、次のsyncで返します。
+作成結果の担当IDとreceiptを記録します。同じ発注はcreateを繰り返さず、部分成功・unknown・観測不能では同じ担当を読み取り照合します。membershipを先に登録してから監督を結び、stoppedを自動で置き換えません。初回観測で省略件数が0と確認できない場合は、sharedとDesktop Cloudの双方でhistory gapとして止まり、cursorを保存しません。完全な初回観測の公開イベント全文は未提示として保存し、次のsyncで返します。
 
-syncは全担当を一巡してからbacklogを読み、動作中・対応が必要・検収待ち・未確認へ分類します。未解決attentionは解消証拠が得られるまで根拠とtokenを再掲します。バックエンドの待機フラグは完全な最新観測で消えたら解消します。質問は後続の人間入力または同じイベントの回答済み状態、失敗は該当turnの状態更新または後続turnの成功を根拠に解消します。空の待機フラグだけでは質問や失敗を消しません。履歴の欠落、429、不完全な取得を変化なしと扱いません。idleで直近turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ちです。開始前idleや証明不足は未確認として区別します。旧Cloudの質問・承認状態は未確認なので、completedだけでは検収待ちとしません。再起動・要約後はsyncから再開します。
+syncは全担当を一巡してからbacklogを読み、動作中・対応が必要・検収待ち・未確認へ分類します。未解決attentionは解消証拠が得られるまで根拠とtokenを再掲します。バックエンドの待機フラグは完全な最新観測で消えたら解消します。質問は後続の人間入力または同じイベントの回答済み状態、失敗は該当turnの状態更新または後続turnの成功を根拠に解消します。空の待機フラグだけでは質問や失敗を消しません。根拠不足の古いattentionは、完全な成功観測後にhistory_notesへ分け、現在の分類を上書きしません。履歴の欠落、429、不完全な取得を変化なしと扱いません。idleで直近turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ちです。開始前idleや証明不足は未確認として区別します。旧Cloudの質問・承認状態は未確認なので、completedだけでは検収待ちとしません。再起動・要約後はsyncから再開します。
 
 ```sh
 codexteer project sync --continue <TOKEN> --offset <NEXT_OFFSET> --event-offset <NEXT_EVENT_OFFSET> --json
@@ -68,3 +68,17 @@ pause/stopは新しい外部効果を拒否する制御で、受付済みの担�
 ## 検収
 
 受付、担当の完了報告、検収、統合済みを区別します。目的、確定要件、最終差分、検証の全件結果、成果物の実在を確認し、統合後も検証します。外観や操作が目的なら実物も確認します。テスト成功や他モデルの賛同だけで完了とせず、残件と未確認を報告し、完了時は対象をproject control stopで制御します。
+
+## 保存量と整理
+
+`CODEX_HOME`のhost namespaceごとに、`project-sync-events`・`project-sync-results`・`work-starts`のJSONファイル総量を256 MiBまでに制限します。work-startのreceipt・方針本文も含みます。最新headなど他の管理メタデータ、ジャーナルやバックエンド履歴はこの上限の対象外です。表示byte予算とは別の制限です。1担当1回の全文観測は16 MiBまでで、超過は`PROJECT_HISTORY_BATCH_LIMIT`としてcursorを進めません。
+
+保存はpublicationの一時データと複製分を保守的に予約するため、実ファイル総量が256 MiB未満でも`PROJECT_HISTORY_LIMIT`になる場合があります。エラーのstorage_bytes・required_bytes・limit_bytesを確認してください。上限を満たさない全文を黙って切ったり、自動削除したりしません。初回観測や作成段階の保存が失敗しても、同じ担当を自動で作り直しません。
+
+```sh
+codexteer project prune --project sample --json
+```
+
+整理は明示したprojectの古いsync結果・担当詳細・イベントを削除し、最新syncとその参照先、未解決attentionの根拠、未提示の初回結果を保持します。途中で中断したpublicationの世代も保持します。提示済み初回結果は最新syncとの対応を確認してwork-startの重複全文だけを削除し、作成receiptと再送防止情報は残します。他projectの履歴は削除しません。
+
+自動失効や常駐GCはなく、整理を実行するまで保存します。削除したtokenはeventなら`PROJECT_EVENT_NOT_FOUND`、continuationなら`PROJECT_SYNC_CONTINUATION_NOT_FOUND`になります。古いtokenが必要なら整理前に取得してください。保護対象だけで上限に達した場合は整理で解放できず、新しい保存は拒否されます。整理結果のdeleted・reclaimed_bytes・storage_bytesとprotected_sync_tokenで確認できます。保存・整理の競合は`RECORD_BUSY`として拒否します。

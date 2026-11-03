@@ -1,3 +1,4 @@
+import { pruneProjectHistory } from "./project-history.mjs";
 import { controlProject } from "./project-control.mjs";
 import { desktopCloudProjectDoctor, assignDesktopCloudProject, desktopCloudProjectReceipt, resolveDesktopCloudProjectAttempt } from "./desktop-cloud-project.mjs";
 import { listProjects as listDesktopProjects } from "./projects.mjs";
@@ -99,13 +100,17 @@ export async function mainCloud(argv) {
       console.log(JSON.stringify(json ? { ok: data.complete, command: "project.control", data } : data, null, json ? undefined : 2));
       if (!data.complete) process.exitCode = 1; return;
     }
+    if (action === "prune") {
+      if (supervisor) throw failure("A bound supervisor cannot prune project history.", "SUPERVISOR_CONTROL_FORBIDDEN");
+      const project = option(args, "--project"); exact(args, 0); output("project.prune", await pruneProjectHistory(project)); return;
+    }
     if (action === "sync") {
       if (supervisor) throw failure("A bound supervisor cannot sync an entire project.", "SUPERVISOR_CONTROL_FORBIDDEN");
       const project = option(args, "--project"), byteBudget = Number(option(args, "--byte-budget", "16000")), continuation = option(args, "--continue"), offset = Number(option(args, "--offset", "0")), eventOffset = Number(option(args, "--event-offset", "0")); exact(args, 0);
       output("project.sync", continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget }, { read: (threadId, options) => observeThread(threadId, options, dependencies) })); return;
     }
     if (action === "event") { exact(args, 1); output("project.event", await projectEvent(args[0])); return; }
-    throw failure("Expected project sync|event.");
+    throw failure("Expected project sync|event|prune.");
   }
   if (command === "work") {
     const action = args.shift();

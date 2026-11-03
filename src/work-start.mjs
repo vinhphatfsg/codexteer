@@ -1,8 +1,9 @@
+import { writeHistoryRecord, assertHistoryBatch } from "./project-history.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, open } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
-import { readRecord, writeRecord, withStoreLock, storePath } from "./store.mjs";
+import { readRecord, withStoreLock, storePath } from "./store.mjs";
 import { getSupervisor, registerSupervisor } from "./supervision.mjs";
 import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
 import { repositorySource } from "./repository-source.mjs";
@@ -91,7 +92,7 @@ export async function startWork(input, dependencies = {}) {
         connection, branch: branch ?? null, root: path.resolve(root), order_sha256: sha(order), prompt_sha256: sha(prompt), policy_present: policy.present,
         policy_source: policy.present ? "CODEXTEER.md" : null, policy_sha256: policy.sha256, policy_text: policy.text, policy_bytes_base64: policy.bytes.toString("base64"),
         environment_config_id: selected?.id ?? null, environment_name: selected?.name ?? null, source: (dependencies.repositorySource ?? repositorySource)(path.resolve(root)), prompt, created_at: new Date().toISOString() };
-      await writeRecord("work-starts", key, record, storage); await hook("attempt_saved", record);
+      await writeHistoryRecord("work-starts", key, record, storage); await hook("attempt_saved", record);
     } else if (record.prompt_sha256 !== sha(prompt) || record.connection !== connection || record.branch !== (branch ?? null) || record.root !== path.resolve(root) || (record.environment_config_id ?? null) !== (selected?.id ?? null)) {
       throw fail("This work order is already reserved with different start options.", "WORK_START_CONFLICT");
     }
@@ -99,25 +100,25 @@ export async function startWork(input, dependencies = {}) {
       if (record.stage === "create_dispatching" || record.stage === "create_unknown") {
         const found = reconciledChild(await dependencies.reconcile?.(record), record);
         if (!found) throw Object.assign(fail("Creation may have been dispatched. Read-only reconciliation did not find one child; creation was not repeated.", "WORK_CREATE_UNKNOWN"), summary(record));
-        Object.assign(record, found, { stage: "child_known" }); await writeRecord("work-starts", key, record, storage);
+        Object.assign(record, found, { stage: "child_known" }); await writeHistoryRecord("work-starts", key, record, storage);
       } else {
         await hook("before_create_rpc", record);
-        record.stage = "create_dispatching"; await writeRecord("work-starts", key, record, storage);
+        record.stage = "create_dispatching"; await writeHistoryRecord("work-starts", key, record, storage);
         let created;
         try { created = await dependencies.create({ project, title, prompt, branch, attemptId: record.attempt_id, environmentConfigId: record.environment_config_id, connection }); }
-        catch (error) { record.stage = "create_unknown"; record.create_error = error.code ?? "CREATE_FAILED"; record.known_thread_id = error.thread_id ?? null; await writeRecord("work-starts", key, record, storage); throw Object.assign(error, summary(record)); }
+        catch (error) { record.stage = "create_unknown"; record.create_error = error.code ?? "CREATE_FAILED"; record.known_thread_id = error.thread_id ?? null; await writeHistoryRecord("work-starts", key, record, storage); throw Object.assign(error, summary(record)); }
         await hook("create_returned", { ...record, created });
-        if (!created?.thread_id) { record.stage = "create_unknown"; await writeRecord("work-starts", key, record, storage); throw Object.assign(fail("Creation returned no child ID; creation was not repeated.", "WORK_CREATE_UNKNOWN"), summary(record)); }
+        if (!created?.thread_id) { record.stage = "create_unknown"; await writeHistoryRecord("work-starts", key, record, storage); throw Object.assign(fail("Creation returned no child ID; creation was not repeated.", "WORK_CREATE_UNKNOWN"), summary(record)); }
         if (connection === "desktop-cloud") reconciledChild(created, record);
         Object.assign(record, { thread_id: created.thread_id, backend_project_id: connection === "desktop-cloud" ? null : created.backend_project_id ?? created.project_id ?? project, creation_receipt: created, stage: "child_known" });
-        await writeRecord("work-starts", key, record, storage); await hook("child_saved", record);
+        await writeHistoryRecord("work-starts", key, record, storage); await hook("child_saved", record);
       }
     }
     if (!record.indexed) {
       await registerManagedThread(record.thread_id, { projectId: project, connection, backendProjectId: record.backend_project_id,
         environmentConfigId: record.environment_config_id ?? undefined, creationAttemptId: record.attempt_id, policySha256: record.policy_sha256 }, storage);
       await hook("membership_registered", record);
-      record.indexed = true; record.stage = "indexed"; await writeRecord("work-starts", key, record, storage); await hook("index_updated", record);
+      record.indexed = true; record.stage = "indexed"; await writeHistoryRecord("work-starts", key, record, storage); await hook("index_updated", record);
     }
     if (!record.supervisor_registered) {
       const existing = await getSupervisor(record.thread_id, storage);
@@ -125,16 +126,17 @@ export async function startWork(input, dependencies = {}) {
       await hook("before_supervisor_registration", record);
       record.supervisor_session_id ??= randomUUID();
       await registerSupervisor(record.thread_id, record.supervisor_session_id, { ...storage, owner: "codexteer-orchestrator", connection, rejectStopped: true });
-      record.supervisor_registered = true; record.stage = "supervisor_registered"; await writeRecord("work-starts", key, record, storage); await hook("supervisor_registered", record);
+      record.supervisor_registered = true; record.stage = "supervisor_registered"; await writeHistoryRecord("work-starts", key, record, storage); await hook("supervisor_registered", record);
     }
     try {
       if (!record.sync_cursor) {
         let observation, cursor; const initialEvents = []; const seen = new Set(); let pages = 0;
         do {
           observation = await dependencies.read(record.thread_id, { connection, limit: 1000, fullEvents: true, ...(cursor ? { since: cursor } : {}) });
+          if (observation.omitted_older_events > 0 || (!cursor && observation.omitted_older_events !== 0)) throw fail("Initial history has an unproven boundary; no cursor was saved.", "WORK_INITIAL_HISTORY_GAP");
+          assertHistoryBatch(initialEvents, observation.events ?? []);
           if (connection === "desktop-cloud") {
             validateSyncPage(observation, record.thread_id, cursor, seen);
-            if ((observation.omitted_older_events ?? 0) > 0) throw fail("Initial history has an unproven boundary; no cursor was saved.", "WORK_INITIAL_HISTORY_GAP");
             if (["unknown", "notLoaded"].includes(observation.status)) throw fail("Initial observation is unavailable; no cursor was saved.", "WORK_INITIAL_READ_UNAVAILABLE");
             if (observation.environment_config_id !== record.environment_config_id) throw fail("Initial observation did not verify the selected environment.", "WORK_INITIAL_ROUTE_MISMATCH");
           }
@@ -146,8 +148,8 @@ export async function startWork(input, dependencies = {}) {
         } while (observation.has_more);
         await hook("initial_read", { ...record, observation });
         record.initial_environment_verified = connection === "desktop-cloud";
-        record.initial_events = initialEvents; record.sync_cursor = cursor; record.initial_state = observation.status ?? "unknown"; record.stage = "observed";
-        await writeRecord("work-starts", key, record, storage);
+        record.initial_boundary_proven = true; record.initial_events = initialEvents; record.sync_cursor = cursor; record.initial_state = observation.status ?? "unknown"; record.stage = "observed";
+        await writeHistoryRecord("work-starts", key, record, storage);
       }
     } catch (error) {
       throw Object.assign(error, summary(record), { observed: false,

@@ -88,3 +88,20 @@ async function withRecordLock(bucket, key, fn, { home }) {
     } catch { if (outcome && typeof outcome === "object") outcome.state_cleanup_required = true; }
   }
 }
+
+// Metadata-only enumeration for quota accounting; never hydrate historical payloads.
+export async function recordStats(bucket, options = {}) {
+  let dir;
+  try { dir = await directory(bucket, options.home ?? codexHome()); } catch (e) { if (e.code === "ENOENT") return []; throw e; }
+  const result = [];
+  for (const file of (await readdir(dir)).filter(x => x.endsWith(".json"))) {
+    const id = file.slice(0, -5); const target = storePath(bucket, id, options.home);
+    await owned(target); result.push({ id, bytes: (await lstat(target)).size });
+  }
+  return result;
+}
+
+export async function removeRecord(bucket, id, options = {}) {
+  await directory(bucket, options.home ?? codexHome());
+  const file = storePath(bucket, id, options.home); await owned(file); await rm(file);
+}

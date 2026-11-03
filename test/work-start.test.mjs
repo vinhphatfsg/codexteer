@@ -16,7 +16,7 @@ async function fixture(t, policy = "方針 ${notExpanded} $(also_not_expanded)\r
   const counts = { create: 0, read: 0 }, deps = { storage: { home },
     create: async input => { counts.create++; return { thread_id: THREAD, project_id: input.project, attempt_id: input.attemptId }; },
     reconcile: async record => ({ thread_id: THREAD, backend_project_id: "project-one", attempt_id: record.attempt_id, prompt_sha256: record.prompt_sha256 }),
-    read: async () => { counts.read++; return { cursor: "cursor-one", status: "active", has_more: false }; } };
+    read: async () => { counts.read++; return { cursor: "cursor-one", status: "active", has_more: false, omitted_older_events: 0 }; } };
   return { root, home, counts, deps };
 }
 
@@ -92,7 +92,7 @@ test("reconciliation rejects ambiguous, mismatched, and malformed candidates", a
 });
 
 test("initial observation refuses a non-advancing cursor", async t => {
-  const f = await fixture(t); f.deps.read = async () => ({ cursor: "same", status: "active", has_more: true });
+  const f = await fixture(t); f.deps.read = async () => ({ cursor: "same", status: "active", has_more: true, omitted_older_events: 0 });
   await assert.rejects(startWork({ project: "project-one", title: "stalled", order: "実装する", root: f.root }, f.deps), { code: "WORK_INITIAL_READ_STALLED" });
 });
 

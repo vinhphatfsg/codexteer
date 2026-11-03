@@ -1,3 +1,4 @@
+import { listRecords, writeRecord } from "../src/store.mjs";
 import { createFinding } from "../src/findings.mjs";
 import { sendTrackedMessage } from "../src/journal.mjs";
 import { createHash } from "node:crypto";
@@ -36,6 +37,31 @@ async function fixture(t, mode, managed = true) {
 }
 const modes = ["aggregate", "paged", "desktop-cloud", "desktop-cloud-paged"];
 for (const mode of modes) {
+  test(`${mode}: omitted initial history never becomes an observed or complete basis`, async t => {
+    const f = await fixture(t, mode, false); let creates = 0;
+    f.thread.status = { type: "idle" }; f.thread.turns[0].status = "completed";
+    f.thread.turns[0].items.push(...Array.from({ length: 1100 }, (_, i) => msg(`old-${i}`)));
+    const input = { project: "adapter", title: "large initial", order: "inspect", root: f.home, connection: f.cloud ? "desktop-cloud" : "shared", ...(f.cloud ? { environment: "config" } : {}) };
+    const deps = { storage: f, read: f.read, resolveEnvironment: async () => ({ id: "config" }), create: async input => { creates++; return { thread_id: f.id,
+      environment_config_id: "config", attempt_id: input.attemptId, prompt_sha256: createHash("sha256").update(input.prompt).digest("hex") }; } };
+    for (let i = 0; i < 2; i++) {
+      await assert.rejects(startWork(input, deps), error => error.code === "WORK_INITIAL_HISTORY_GAP" && error.observed === false && error.history_gap);
+      const sync = await syncProject("adapter", {}, { storage: f, read: f.read });
+      assert.equal(sync.complete, false); assert.equal(sync.works[0].history_gap, true); assert.equal(sync.works[0].cursor, null);
+      assert.equal((await getManagedThread(f.id, f)).sync_cursor, undefined);
+    }
+    assert.equal(creates, 1); assert.equal((await listRecords("work-starts", f))[0].sync_cursor, undefined);
+  });
+
+  test(`${mode}: missing initial-boundary proof fails closed even with has_more false`, async t => {
+    for (const omitted of [undefined, null]) {
+      const f = await fixture(t, mode, false);
+      const input = { project: "adapter", title: "unproven", order: "inspect", root: f.home };
+      await assert.rejects(startWork(input, { storage: f, create: async () => ({ thread_id: f.id }), read: async (id, options) => ({ ...await f.read(id, options), omitted_older_events: omitted }) }), { code: "WORK_INITIAL_HISTORY_GAP" });
+      assert.equal((await getManagedThread(f.id, f)).sync_cursor, undefined);
+    }
+  });
+
   test(`${mode}: supervised low-level send cannot bypass the absent complete sync`, async t => {
     const f = await fixture(t, mode), cursor = (await f.read(f.id, {})).cursor;
     const finding = await createFinding(f.id, { key: "bypass", title: "Bypass", condition: "Review", basedOn: cursor, home: f.home });

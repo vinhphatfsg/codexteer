@@ -1,3 +1,5 @@
+import { parseCursor } from "./cursor.mjs";
+import { withHistoryReservation, assertHistoryBatch } from "./project-history.mjs";
 import { validateSyncPage } from "./sync-page.mjs";
 export { validateSyncPage } from "./sync-page.mjs";
 import { createHash, randomUUID } from "node:crypto";
@@ -7,7 +9,7 @@ import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs
 const hash = value => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
 const failure = (message, code = "PROJECT_SYNC_INVALID") => Object.assign(new Error(message), { code });
-const gapCodes = new Set(["STALE_CURSOR", "INVALID_CURSOR", "CURSOR_UPGRADE_REQUIRED", "OBSERVATION_CHANGED"]);
+const gapCodes = new Set(["STALE_CURSOR", "INVALID_CURSOR", "CURSOR_UPGRADE_REQUIRED", "OBSERVATION_CHANGED", "WORK_INITIAL_HISTORY_GAP"]);
 const terminal = new Set(["completed", "failed", "cancelled"]), active = new Set(["active", "inProgress", "in_progress", "pending", "queued", "running"]);
 
 // A command/tool outcome is scoped to that item, not to the delegated work.
@@ -48,7 +50,7 @@ function summarizeEvent(event, threadId, store) {
 export async function projectEvent(token, storage = {}) {
   if (typeof token !== "string" || !/^[0-9a-f-]{36}$/i.test(token)) throw failure("A project event token is required.");
   const record = await readRecord("project-sync-events", token, storage);
-  if (!record) throw failure("Project sync event was not found.", "PROJECT_EVENT_NOT_FOUND");
+  if (!record) throw failure("Project sync event was not found or was removed by project prune.", "PROJECT_EVENT_NOT_FOUND");
   return record;
 }
 
@@ -117,7 +119,7 @@ export async function continueProjectSync(token, options = {}, storage = {}) {
   const byteBudget = validateBudget(options.byteBudget ?? 16000);
   if (typeof token !== "string" || !/^[0-9a-f-]{36}$/i.test(token)) throw failure("Invalid sync token.");
   const saved = await readRecord("project-sync-results", token, storage);
-  if (!saved) throw failure("Project sync continuation was not found.", "PROJECT_SYNC_CONTINUATION_NOT_FOUND");
+  if (!saved) throw failure("Project sync continuation was not found or was removed by project prune.", "PROJECT_SYNC_CONTINUATION_NOT_FOUND");
   return pageResult(saved, token, byteBudget, options.offset ?? 0, options.eventOffset ?? 0);
 }
 
@@ -155,9 +157,24 @@ function reduceAttention(state, prior, summaries) {
     entries.delete("backend:failure");
     for (const [id, entry] of entries) if (entry.attention === "failure" && entry.events?.every(e => e.type === "turn" && typeof e.event_id === "string" && e.event_id !== state.latest.latest_turn_id)) entries.delete(id);
   }
+  // Unverifiable legacy information is historical caution, not current work state.
+  if (state.complete && state.latest?.latest_turn_status === "completed" && state.latest.active_turn_count === 0
+    && ["idle", "completed"].includes(state.latest.status) && Array.isArray(state.latest.attention) && state.latest.attention.length === 0) {
+    state.historyNotes = [...entries.values()].filter(entry => entry.attention === "unknown");
+    for (const [id, entry] of entries) if (entry.attention === "unknown") entries.delete(id);
+  }
   if (!entries.size) return null;
   const values = [...entries.values()], attention = values.some(e => e.attention === "human") ? "human" : values.some(e => e.attention === "failure") ? "failure" : "unknown";
   return { attention, reason: { evidence: values.map(e => e.reason) }, events: [...new Map(values.flatMap(e => e.events ?? []).map(e => [e.token, e])).values()], entries: [...entries] };
+}
+
+function initialBoundaryProven(start, threadId) {
+  if (start.initial_boundary_proven === true) return true;
+  try {
+    const claim = parseCursor(start.sync_cursor, threadId);
+    const captured = new Set(start.initial_events.map(e => JSON.stringify([e.turn_id, e.id]))).size;
+    return claim.v === 1 && claim.count === captured;
+  } catch { return false; } // Opaque legacy boundaries remain unproven.
 }
 
 export async function syncProject(projectId, options = {}, dependencies = {}) {
@@ -173,14 +190,19 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   for (const member of members) states.set(member.thread_id, { member, cursor: member.sync_cursor, events: [], observations: [], seen: new Set([member.sync_cursor]), pages: 0, complete: false, history_gap: false, retry_after_ms: null, error: null });
   // A successful start observed these events but has not presented them yet.
   // Keep them until membership publication commits the first sync cursor.
-  const starts = await listRecords("work-starts", storage);
+  const starts = members.some(member => !member.sync_cursor) ? await listRecords("work-starts", storage) : [];
   for (const state of states.values()) if (!state.member.sync_cursor) {
     const start = starts.find(record => record.thread_id === state.member.thread_id && Array.isArray(record.initial_events) && record.sync_cursor);
-    if (start) { state.events.push(...start.initial_events); state.observations.push({ events: start.initial_events }); state.cursor = start.sync_cursor; state.seen.add(start.sync_cursor); }
+    if (start) {
+      if (!initialBoundaryProven(start, state.member.thread_id)) { state.error = "WORK_INITIAL_HISTORY_GAP"; state.history_gap = true; continue; }
+      state.events.push(...start.initial_events); state.observations.push({ events: start.initial_events }); state.cursor = start.sync_cursor; state.seen.add(start.sync_cursor);
+    }
   }
   const readPage = async state => {
     try {
       const page = validateSyncPage(await read(state.member.thread_id, { connection: state.member.connection, since: state.cursor, limit: pageLimit, fullEvents: true }), state.member.thread_id, state.cursor, state.seen);
+      if (page.omitted_older_events > 0 || (!state.cursor && page.omitted_older_events !== 0)) throw failure("Initial history boundary is unproven.", "WORK_INITIAL_HISTORY_GAP");
+      assertHistoryBatch(state.events, page.events);
       if (state.member.environment_config_id && page.environment_config_id !== state.member.environment_config_id) throw failure("The task environment differs from its managed route.", "PROJECT_ROUTE_MISMATCH");
       state.seen.add(page.cursor); state.observations.push(page);
       state.pages++; state.cursor = page.cursor; state.events.push(...(page.events ?? [])); state.latest = page; state.complete = !page.has_more; return page.has_more;
@@ -191,7 +213,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     }
   };
   // Fair first round: every member gets one page before any backlog is drained.
-  for (const state of states.values()) await readPage(state);
+  for (const state of states.values()) if (!state.error) await readPage(state);
   let pending = [...states.values()].filter(state => !state.complete && !state.error);
   while (pending.length) {
     const next = [];
@@ -207,7 +229,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     if (await readPage(state)) { state.complete = false; state.error = "SYNC_HEAD_ADVANCED"; }
   }
 
-  const works = [], unresolved = {};
+  const works = [], unresolved = {}, historical = { ...previous?.historical_attention };
   for (const state of states.values()) {
     const priorAttention = previous?.unresolved_attention?.[state.member.thread_id] ?? null;
     let axes;
@@ -217,6 +239,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     const eventSummaries = state.events.map(event => summarizeEvent(event, state.member.thread_id, eventRecords));
     state.eventSummaries = eventSummaries;
     const currentAttention = reduceAttention(state, priorAttention, eventSummaries);
+    if (state.historyNotes?.length) historical[state.member.thread_id] = [...new Map([...historical[state.member.thread_id] ?? [], ...state.historyNotes].map(entry => [JSON.stringify(entry), entry])).values()];
     if (currentAttention) {
       unresolved[state.member.thread_id] = currentAttention;
       axes.attention = currentAttention.attention; axes.reason = currentAttention.reason; axes.group = currentAttention.attention === "unknown" ? "未確認" : "対応が必要";
@@ -225,23 +248,24 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     works.push({ thread_id: state.member.thread_id, title: state.latest?.title ?? null, ...axes, history_gap: state.history_gap,
       retry_after_ms: state.retry_after_ms, complete: state.complete, cursor: state.complete ? state.cursor : null, events: [...repeatedEvents, ...eventSummaries], error: state.error,
       turn_identity: state.latest?.latest_turn_id ?? state.latest?.current_turn_id ?? state.latest?.turn_id ?? state.latest?.active_turn_id ?? null,
+      history_notes: historical[state.member.thread_id] ?? [],
       resolution_unconfirmed: !!currentAttention, attention_repeated: !!priorAttention && !!currentAttention });
   }
   works.sort((a, b) => (a.group === "対応が必要" ? -1 : 0) - (b.group === "対応が必要" ? -1 : 0) || a.thread_id.localeCompare(b.thread_id));
   const syncToken = randomUUID(), createdAt = new Date().toISOString();
   const head = { schema: 1, project_id: projectId, sync_token: syncToken, membership_digest: membershipDigest,
     complete: works.every(w => w.complete), complete_work_ids: works.filter(w => w.complete).map(w => w.thread_id),
-    unresolved_attention: unresolved, created_at: createdAt };
+    unresolved_attention: unresolved, historical_attention: historical, created_at: createdAt };
   for (const work of works) work.detail_token = randomUUID();
   // The existing project head lock protects only publication, never network I/O.
   // A stale reader must not replace a newer attention head, even after a CAS miss.
   try {
-    await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => {
+    await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => withHistoryReservation({ eventRecords, works, head, previous }, async (historyWrite) => {
       const current = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage);
       if (hash(current ?? null) !== hash(previous ?? null)) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");
       // Persist attention evidence before advancing any cursor. A crash during
       // publication leaves an incomplete head that the next sync can recover.
-      for (const record of eventRecords) await writeRecord("project-sync-events", record.token, { schema: 1, sync_token: syncToken, ...record }, storage);
+      for (const record of eventRecords) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
       await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), { ...head, complete: false, complete_work_ids: [], publication_pending: true }, storage);
       // CAS uses the snapshot revision even if an empty read returns the same cursor.
       for (const state of states.values()) if (state.complete) {
@@ -268,17 +292,19 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       for (const work of works) {
         eventRecords.push({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...work } } });
       }
-      await writeRecord("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, complete: head.complete, works, created_at: createdAt }, storage);
-      for (const record of eventRecords.slice(detailStart)) await writeRecord("project-sync-events", record.token, { schema: 1, sync_token: syncToken, ...record }, storage);
+      await historyWrite("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, complete: head.complete, works, created_at: createdAt }, storage);
+      for (const record of eventRecords.slice(detailStart)) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
       await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), head, storage);
-    }, storage);
+    }, storage), storage);
   } catch (error) {
     if (!["SYNC_CURSOR_CONFLICT", "PROJECT_SYNC_CONFLICT", "RECORD_BUSY"].includes(error.code)) throw error;
     head.complete = false;
     for (const work of works) { work.complete = false; work.cursor = null; work.error ??= error.code === "SYNC_CURSOR_CONFLICT" ? "SYNC_CURSOR_CONFLICT" : "PROJECT_SYNC_CONFLICT"; work.observation = "incomplete"; }
     for (const work of works) eventRecords.push({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...work } } });
-    await writeRecord("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, complete: false, works, created_at: createdAt }, storage);
-    for (const record of eventRecords) await writeRecord("project-sync-events", record.token, { schema: 1, sync_token: syncToken, ...record }, storage);
+    await withHistoryReservation({ eventRecords, works, head, previous }, async (historyWrite) => {
+      await historyWrite("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, complete: false, works, created_at: createdAt }, storage);
+      for (const record of eventRecords) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
+    }, storage);
   }
   return pageResult({ project_id: projectId, membership_digest: membershipDigest, complete: head.complete, works, created_at: createdAt }, syncToken, byteBudget);
 }
