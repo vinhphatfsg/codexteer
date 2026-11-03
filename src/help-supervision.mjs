@@ -56,7 +56,7 @@ const ORCHESTRATION_ERRORS = [
   { ...OPTIONS_INVALID, when: "未知のオプション、GOALが1つでない、orchestrate（promptなし）に--jsonを付けた。" },
   { code: "SUPERVISOR_CONTROL_FORBIDDEN", when: "--supervisor付きで実行した。監督IDは既存の1タスクに束縛されている。", action: "監督IDを外し、ユーザーの端末から実行する。" },
   { code: "DESKTOP_READ_ONLY", when: "--connection desktopを指定した。", action: "--connectionを省略する（shared）。" },
-  { code: "CLOUD_CAPABILITY_UNSUPPORTED", when: "--connection cloudかdesktop-cloudを指定した。Cloud経路にorchestrateはない。", action: "--connectionを省略する。Cloudの作業はhelp cloud / help desktop-cloud。" },
+  { code: "CLOUD_CAPABILITY_UNSUPPORTED", when: "--connection cloudかdesktop-cloudを指定した。Cloud経路にorchestrateはない。", action: "orchestrateは--connectionを省略して実行する。ローカル本文はWeb Cloud担当の手順も含む。Cloudの操作はhelp cloud / help desktop-cloud。" },
   { code: "REMOTE_READ_ONLY", when: "既定のnative経路で--hostを指定した。", action: "リモートでは--remote-transport pairedを明示する（help remote）。" },
 ];
 
@@ -104,6 +104,9 @@ const ORCH_SHARED_NOTES = [
   "入力（--supervisor・--connection・--project・GOAL・--agent）が不正なら、CLIの保存より前に止まる。",
   "保存済みCLI方式（既定）の保存・検証・Nodeの固定はsupervise promptと同じ。",
   "リモートは--host HOST-ID --remote-transport pairedのときだけ使える（help remote）。",
+  "ローカル本文にはWeb Cloud担当の条件付き手順を常に含む。監督IDなしcloud_commandで環境照合・作成・子prompt生成・監督停止を行う。保存方式は同じCLI・Node・CODEX_HOMEを固定し、Desktop用コマンドに接続指定を追加しない。pairedではcloud_commandはnullで、Cloud手順は含めない。",
+  "Web Cloudはローカル資源を占有せず並行作業を増やせるため、取得可能なソース・ブランチで完結し、ローカル未コミット差分・実機・GUIが不要な担当で優先する。条件を満たさない、環境がない・照合できない場合は作成前にDesktopを選ぶ。Unity Editor等の共有資源はresourceリースで順番に統合後の確認・画面確認に使う。",
+  "Cloudの基点は環境から取得できるpush済みブランチ。必要なpushはGOALや方針で委任されていれば作業ブランチだけに行い、委任がなければユーザーに確認する。既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止。",
 ];
 
 export const topics = {
@@ -226,7 +229,7 @@ export const topics = {
       { name: "--agent claude|codex", default: "なし（null）", text: "子の監督IDのownerと送信元のCLI識別。エージェントは起動しない。省略時は受け取ったオーケストレーターが子の生成前に<AGENT>を選ぶ。" },
       { name: "--use-path-cli", text: `${PATH_CLI_TEXT}生成時は何も書き込まない。` },
     ],
-    returns: "通常は本文だけ（末尾改行付き）。--json: command=orchestrate.prompt、data.project_selector（開始時に照合する指定文字列で、所属確認ではない）、goal、agent（省略時null）、prompt、command（プロジェクト用の実行コマンド）、connection、cli_mode、deployment、node。--use-path-cliではdeploymentとnodeはnull。pairedリモートではhost_id・remote_transportも返す。",
+    returns: "通常は本文だけ（末尾改行付き）。--json: command=orchestrate.prompt、data.project_selector（開始時に照合する指定文字列で、所属確認ではない）、goal、agent（省略時null）、prompt、command（プロジェクト用の実行コマンド）、cloud_command（Web Cloud専用、pairedではnull）、connection、cli_mode、deployment、node。--use-path-cliではdeploymentとnodeはnull。pairedリモートではhost_id・remote_transportも返す。",
     errors: [...ORCHESTRATION_ERRORS, ...SAVED_CLI_ERRORS],
     examples: [
       "codexteer orchestrate prompt --project 'My Project' '利用者が動作を確認し、変更を指示できる状態にする'",

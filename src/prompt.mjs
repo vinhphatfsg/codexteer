@@ -20,6 +20,8 @@ export function validateSupervisionPolicy(policy) {
 // Shared by the generated prompt and help monitor. Keep monitoring preferences
 // in the selected policy; these sections describe mandatory mechanics only.
 export function supervisionSteps(thread = "<THREAD>", command = "codexteer", owner = "claude", observationOnly = false, { usePathCli = false, cloud = false, desktopCloud = false } = {}) {
+  const cloudProfile = cloud || desktopCloud;
+  const profile = cloudProfile ? "公式CLIの同じChatGPTプロファイル" : "対象Desktopと同じプロファイル";
   const steps = [
     `2. 必ず守ること
 - 監視の観点・介入の判断基準・報告方法は指定された監督方針に従います。監視だけを指示されている場合は送信しません。目的・制約が不明な場合や要件自体の変更が必要な場合は確認してください。確認の前に、リポジトリ・履歴・実物を調べて分かる事実は自分で確かめ、目的・制約や監督方針で決まっていることは聞き直しません。
@@ -35,7 +37,7 @@ export function supervisionSteps(thread = "<THREAD>", command = "codexteer", own
     `3. 実行コマンド
 この監督では、開始時に生成した次の起動ファイルを実行コマンドとして使います。
 ${command}
-起動ファイルは、内容ハッシュで検証して保存したCLI一式、開始時のNode（絶対パスと版の検査）、生成元のCODEX_HOME、この監督セッションID、接続指定を固定しています。以下の全コマンドとヘルプ中のcodexteerをこの実行コマンドに置き換え、--supervisor・--connection等を付け直さないでください。PATH上の同名コマンド、別のNode、npxへ切り替えません。起動ファイルと保存済みCLI一式は監督中に編集・移動・削除しないでください。この本文は同じPCで使い、別のプロファイルを監督する場合はそこで生成し直します。Nodeが見つからない場合やNODE_VERSION_MISMATCHの場合は介入を止めて理由を報告し、利用するNodeからプロンプトを生成し直してください。`,
+起動ファイルは、内容ハッシュで検証して保存したCLI一式、開始時のNode（絶対パスと版の検査）、生成元のCODEX_HOME、この監督セッションID、接続指定を固定しています。以下の全コマンドとヘルプ中のcodexteerをこの実行コマンドに置き換え、--supervisor・--connection等を付け直さないでください。PATH上の同名コマンド、別のNode、npxへ切り替えません。起動ファイルと保存済みCLI一式は監督中に編集・移動・削除しないでください。この本文は同じPCで使い、${cloudProfile ? `${profile}を維持してください。` : ""}別のプロファイルを監督する場合はそこで生成し直します。Nodeが見つからない場合やNODE_VERSION_MISMATCHの場合は介入を止めて理由を報告し、利用するNodeからプロンプトを生成し直してください。`,
     `4. 開始手順
 ${command} --version
 ${command} doctor --thread ${thread} --json
@@ -89,7 +91,7 @@ ${command} findings evaluate ${thread} <FINDING-ID> --rating useful --reason "<�
     steps[1] = `3. 実行コマンド
 この監督では、PATH上にインストールされたcodexteerを使ってください。全コマンドで--supervisorと--connectionを保持します。
 ${command}
-以下のコマンドをそのまま使い、ヘルプ中のcodexteerにも同じ--supervisorと--connectionを付けてください。CLIとNodeの絶対パス・バージョンは固定せず、CLI一式のコピーも作りません。PATH上のCLIを更新すると次の実行から反映されます。接続先と履歴は実行環境のCODEX_HOME（未設定なら通常のホーム）で決まります。同じPCの対象Desktopと同じプロファイルを使い、監督中はPATHとCODEX_HOMEを維持してください。codexteerが見つからない場合や必要な操作に未対応の場合は、監視未開始または継続不能として理由を報告してください。別のCLIやnpxへの自動切り替えは行いません。`;
+以下のコマンドをそのまま使い、ヘルプ中のcodexteerにも同じ--supervisorと--connectionを付けてください。CLIとNodeの絶対パス・バージョンは固定せず、CLI一式のコピーも作りません。PATH上のCLIを更新すると次の実行から反映されます。接続先と履歴は実行環境のCODEX_HOME（未設定なら通常のホーム）で決まります。同じPCの${profile}を使い、監督中はPATHとCODEX_HOMEを維持してください。codexteerが見つからない場合や必要な操作に未対応の場合は、監視未開始または継続不能として理由を報告してください。別のCLIやnpxへの自動切り替えは行いません。`;
     steps[2] = steps[2].replace("4. 開始手順\n", "4. 開始手順\ncommand -v codexteer\n");
   }
   if (observationOnly) {
@@ -99,13 +101,13 @@ ${command}
   }
   if (cloud) {
     steps[0] += "\n- 対象はCodex Cloudです。Desktopや別アカウントへ切り替えず、同じCODEX_HOMEの公式CLI認証を使います。クラウド作業コピーはローカルにマウントされていません。checkpoint等のローカルコマンドの成功を、クラウド側のファイル検証と取り違えないでください。";
-    steps[4] += "\nCloudの通常sendは、実行中の指定ターンを中断して同じタスクの後続ターンを開始する方式です。ローカルと同じターンIDのまま進むとは仮定せず、delivery_action、親ターン、history checkと新しいreadで結果を照合してください。サーバー側で読取りと送信を原子的に固定する契約はなく、送信直前に再確認します。停止中の継続には、方針で再開が許可された場合だけ--new-turnを付けます。";
-    steps[1] = steps[1].replaceAll("対象Desktopと同じプロファイル", "公式CLIの同じChatGPTプロファイル");
+    steps[3] += `\nCloudの照会間隔は既定5000msを使い、watchと手動readを密に重ねません。429ではretry_after_msとCLIの復帰待ち・停止結果を尊重し、待機を短縮してwatchを再起動しません。本文を失った場合は、help monitorと併せて次も読み直します。\n${command} help cloud`;
+    steps[4] += "\nCloudの通常sendは、実行中の指定ターンを中断して同じタスクの後続ターンを開始する方式です。ローカルと同じターンIDのまま進むとは仮定せず、delivery_action、親ターン、history checkと新しいreadで結果を照合してください。サーバー側で読取りと送信を原子的に固定する契約はなく、送信直前に再確認します。idleの継続には、方針で再開が許可された場合だけ--new-turnを付けます。";
+    steps[5] += `\nCloud成果物の検収には次で記録済みpatchを確認します。試行を選ぶ場合だけ--attempt 1〜4を指定します。\n${command} diff ${thread} --json\ndiff_available:falseやdiff:nullは変更ゼロの証明ではありません。read --include-outputの変更・コマンド・終了コードと照合し、切り詰めた出力を完全な差分と扱いません。Cloud内の基点と検証結果を確認し、取得した完全なpatch/commitは委任された範囲で基点を照合して統合し、統合後に検証します。diff取得は適用ではなく、ローカルcheckpoint/resourceは明示したローカル入力・成果物・コマンドだけを検証します。Cloud成果物を確認できなければ未検証とし、ローカルtest成功で補いません。`;
   }
   if (desktopCloud) {
     steps[0] += "\n- 対象はDesktop Cloudです。同じ公式CLI認証・durable_ ID・--connection desktop-cloudを保持し、ローカルDesktopやWeb Cloudへ切り替えません。Cloudのファイルはローカルにマウントされていません。受付不明の再送や所属登録の安全確認の迂回はしません。";
     steps[4] += "\n継続送信は選択済み環境と遅延起動指定を保持します。送信前に最新のターンとユーザー入力を再確認しますが、読取りと送信の原子的な固定は未検証です。サーバーがclientIdを保持しない場合、未知のターンを本文だけで照合して受付済みに変えません。専用diff取得・プロジェクト所属・承認往復は未対応または未検証です。";
-    steps[1] = steps[1].replaceAll("対象Desktopと同じプロファイル", "公式CLIの同じChatGPTプロファイル");
   }
   return steps;
 }

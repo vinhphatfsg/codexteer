@@ -13,6 +13,30 @@ const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 const REPO = path.dirname(path.dirname(BIN));
 
+test("Cloud profiles are explicit in saved and PATH instructions without changing shared guidance", () => {
+  for (const usePathCli of [false, true]) for (const connection of ["shared", "cloud", "desktop-cloud"]) {
+    const thread = connection === "cloud" ? "task_fixture_prompt" : connection === "desktop-cloud" ? `durable_${ID}` : ID;
+    const { prompt } = supervisorPrompt(thread, "prepared-command", undefined, { owner: "codex", connection }, { usePathCli });
+    const execution = prompt.split("\n\n").find(section => section.startsWith("3. 実行コマンド"));
+    if (connection === "shared") assert.doesNotMatch(execution, /ChatGPTプロファイル/);
+    else {
+      assert.match(execution, /公式CLIの同じChatGPTプロファイル/);
+      assert.doesNotMatch(execution, /対象Desktop/);
+    }
+  }
+});
+
+test("only Web Cloud instructions carry rate limits, recovery help and patch acceptance", () => {
+  for (const usePathCli of [false, true]) for (const policy of [undefined, "観測だけ行ってください。", ORCHESTRATED_SUPERVISION_POLICY]) {
+    const render = connection => supervisorPrompt(connection === "cloud" ? "task_fixture_prompt" : ID, "prepared-command", policy, { owner: "codex", connection }, { usePathCli }).prompt;
+    const cloud = render("cloud");
+    for (const text of ["既定5000ms", "retry_after_ms", "prepared-command help cloud", "prepared-command diff task_fixture_prompt --json", "diff_available:false", "未検証", "ローカル入力", "中断して同じタスクの後続ターン", "idleの継続"]) assert.ok(cloud.includes(text), text);
+    assert.doesNotMatch(render("shared"), /retry_after_ms|help cloud|diff_available:false/);
+    const desktop = supervisorPrompt(`durable_${ID}`, "prepared-command", policy, { owner: "codex", connection: "desktop-cloud" }, { usePathCli }).prompt;
+    assert.doesNotMatch(desktop, /retry_after_ms|help cloud|prepared-command diff /);
+  }
+});
+
 test("the prompt keeps digest watch commands and the safety rules the supervisor must follow", () => {
   const prompt = supervisorPrompt(ID, "saved-command").prompt;
   const startup = prompt.split("\n\n").find(section => section.startsWith("4. 開始手順"));
