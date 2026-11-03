@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { readRecord, writeRecord, withStoreLock } from "./store.mjs";
-import { registerSupervisor } from "./supervision.mjs";
+import { getSupervisor, registerSupervisor } from "./supervision.mjs";
 import { registerManagedThread, updateManagedThreadCursor } from "./project-index.mjs";
 
 const MAX_POLICY_BYTES = 64 * 1024;
@@ -11,16 +12,28 @@ const sha = value => createHash("sha256").update(value).digest("hex");
 const normalized = value => value.trim().replace(/\s+/gu, " ").normalize("NFC");
 const attemptKey = ({ project, title, order, policySha256 }) => sha(JSON.stringify([project, normalized(title), sha(order), policySha256]));
 
-export async function readRepositoryPolicy(root = process.cwd()) {
+export async function readRepositoryPolicy(root = process.cwd(), hooks = {}) {
   const file = path.join(path.resolve(root), "CODEXTEER.md");
-  let stat;
-  try { stat = await lstat(file); } catch (error) {
+  let handle;
+  try { handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0)); } catch (error) {
     if (error.code === "ENOENT") return { present: false, file, bytes: Buffer.alloc(0), text: "", sha256: sha(Buffer.alloc(0)) };
+    if (["ELOOP", "EMLINK"].includes(error.code)) throw fail("CODEXTEER.md must be a regular file, not a symlink or special file.", "POLICY_FILE_UNSAFE");
     throw error;
   }
-  if (stat.isSymbolicLink() || !stat.isFile()) throw fail("CODEXTEER.md must be a regular file, not a symlink or special file.", "POLICY_FILE_UNSAFE");
-  if (stat.size > MAX_POLICY_BYTES) throw fail(`CODEXTEER.md exceeds ${MAX_POLICY_BYTES} bytes.`, "POLICY_FILE_TOO_LARGE");
-  const bytes = await readFile(file);
+  let bytes;
+  try {
+    const before = await handle.stat();
+    if (!before.isFile()) throw fail("CODEXTEER.md must be a regular file, not a symlink or special file.", "POLICY_FILE_UNSAFE");
+    if (before.size > MAX_POLICY_BYTES) throw fail(`CODEXTEER.md exceeds ${MAX_POLICY_BYTES} bytes.`, "POLICY_FILE_TOO_LARGE");
+    await hooks.afterOpen?.(file);
+    const buffer = Buffer.alloc(MAX_POLICY_BYTES + 1); let offset = 0;
+    while (offset < buffer.length) { const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset); if (!bytesRead) break; offset += bytesRead; }
+    bytes = buffer.subarray(0, offset);
+    const after = await handle.stat(), pathname = await lstat(file);
+    if (!pathname.isFile() || before.dev !== pathname.dev || before.ino !== pathname.ino
+      || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw fail("CODEXTEER.md changed while it was being read.", "POLICY_FILE_CHANGED");
+  } finally { await handle.close(); }
   if (bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))) throw fail("CODEXTEER.md must be UTF-8 without a byte-order mark.", "POLICY_FILE_ENCODING");
   if (bytes.length > MAX_POLICY_BYTES) throw fail(`CODEXTEER.md exceeds ${MAX_POLICY_BYTES} bytes.`, "POLICY_FILE_TOO_LARGE");
   let text;
@@ -39,6 +52,19 @@ function summary(record) {
   return { attempt_id: record.attempt_id, stage: record.stage, project_id: record.project_id, connection: record.connection,
     thread_id: record.thread_id ?? null, supervisor_registered: !!record.supervisor_registered,
     indexed: !!record.indexed, observed: !!record.sync_cursor, policy: { present: record.policy_present, sha256: record.policy_sha256, source: record.policy_source } };
+}
+
+function reconciledChild(found, record) {
+  const candidates = Array.isArray(found) ? found : found ? [found] : [];
+  if (candidates.length === 0) return null;
+  if (candidates.length !== 1) throw fail("Creation reconciliation was not unique; creation was not repeated.", "WORK_RECONCILE_CONFLICT");
+  const candidate = candidates[0];
+  const projectMatches = candidate && (candidate.backend_project_id === record.project_id || candidate.project_selector === record.project_id);
+  if (!candidate || typeof candidate.thread_id !== "string" || candidate.attempt_id !== record.attempt_id
+    || !projectMatches || candidate.prompt_sha256 !== record.prompt_sha256) {
+    throw fail("Creation reconciliation did not match its attempt, project, and prompt digest.", "WORK_RECONCILE_MISMATCH");
+  }
+  return candidate;
 }
 
 // Hooks are fault-injection boundaries used by tests. Production never supplies them.
@@ -61,8 +87,8 @@ export async function startWork(input, dependencies = {}) {
     }
     if (!record.thread_id) {
       if (record.stage === "create_dispatching" || record.stage === "create_unknown") {
-        const found = await dependencies.reconcile?.(record);
-        if (!found?.thread_id) throw Object.assign(fail("Creation may have been dispatched. Read-only reconciliation did not find one child; creation was not repeated.", "WORK_CREATE_UNKNOWN"), summary(record));
+        const found = reconciledChild(await dependencies.reconcile?.(record), record);
+        if (!found) throw Object.assign(fail("Creation may have been dispatched. Read-only reconciliation did not find one child; creation was not repeated.", "WORK_CREATE_UNKNOWN"), summary(record));
         Object.assign(record, found, { stage: "child_known" }); await writeRecord("work-starts", key, record, storage);
       } else {
         await hook("before_create_rpc", record);
@@ -83,15 +109,19 @@ export async function startWork(input, dependencies = {}) {
       record.indexed = true; record.stage = "indexed"; await writeRecord("work-starts", key, record, storage); await hook("index_updated", record);
     }
     if (!record.supervisor_registered) {
+      const existing = await getSupervisor(record.thread_id, storage);
+      if (existing?.state === "stopped") throw fail("A stopped managed task cannot be reactivated by work start. A human must explicitly establish new supervision.", "MANAGED_SUPERVISOR_STOPPED");
       record.supervisor_session_id ??= randomUUID();
       await registerSupervisor(record.thread_id, record.supervisor_session_id, { ...storage, owner: "codexteer-orchestrator", connection });
       record.supervisor_registered = true; record.stage = "supervisor_registered"; await writeRecord("work-starts", key, record, storage); await hook("supervisor_registered", record);
     }
     if (!record.sync_cursor) {
-      let observation, cursor;
+      let observation, cursor; const seen = new Set(); let pages = 0;
       do {
         observation = await dependencies.read(record.thread_id, { connection, ...(cursor ? { since: cursor } : {}) });
         if (!observation?.cursor) throw fail("Initial observation returned no cursor.", "WORK_INITIAL_READ_INCOMPLETE");
+        if (seen.has(observation.cursor) || ++pages > 1000) throw fail("Initial observation did not advance its cursor.", "WORK_INITIAL_READ_STALLED");
+        seen.add(observation.cursor);
         cursor = observation.cursor;
       } while (observation.has_more);
       await hook("initial_read", { ...record, observation });

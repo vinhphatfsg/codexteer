@@ -96,6 +96,6 @@ codexteer work start --project 'サンプル' --title 'テスト担当' '失敗�
 codexteer --connection cloud work start --project env_example --branch main --title '調査担当' - --json < order.txt
 ```
 
-方針ファイルは `--root`（既定は現在のディレクトリ）直下の通常ファイルに限り、64 KiB以下、BOMなしのUTF-8で保存してください。改行や `${...}` などを展開せず原文のまま一度だけ入れます。ファイルがなければ正常に開始し、その旨を初回指示へ入れます。Web Cloudではサーバー側のcheckoutから方針を推測せず、`--root`で対応するローカルcheckoutを指定します。Desktop Cloudはproject assignmentを検証できないため未対応です。
+方針ファイルは `--root`（既定は現在のディレクトリ）直下の通常ファイルに限り、64 KiB以下、BOMなしのUTF-8で保存してください。symlinkを辿らず同じfile descriptorから上限付きで読み、読み取り中にpath・inode・size・mtime・ctimeが変われば開始しません。改行や `${...}` などを展開せず原文のまま一度だけ入れます。ファイルがなければ正常に開始し、その旨を初回指示へ入れます。Web Cloudではサーバー側のcheckoutから方針を推測せず、`--root`で対応するローカルcheckoutを指定します。Desktop Cloudはproject assignmentを検証できないため未対応です。
 
 開始段階はローカルに保存されます。同じ発注を同時または再度開始してもcreateを繰り返しません。作成結果が不明な場合は読み取り照合だけを行い、自動で作り直しません。`thread create`と`supervise`は互換用の個別操作として引き続き利用できます。

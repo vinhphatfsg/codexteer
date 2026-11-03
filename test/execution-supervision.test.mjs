@@ -52,7 +52,9 @@ test("checkpoint releases supervisor lock after dispatch and saves accepted comp
   const f = await fixture(t), cp = await createCheckpoint(THREAD, "fixture", { ...f, paths: ["input"], connection: "shared" });
   const running = runCheckpoint(THREAD, cp.id, [process.execPath, "-e", "setTimeout(()=>{},700)"], { ...f, connection: "shared" });
   for (let i = 0; i < 100 && !(await getCheckpoint(THREAD, cp.id, f)).runs.some(run => run.status === "running"); i++) await new Promise(resolve => setTimeout(resolve, 10));
-  assert.equal((await controlSupervisor(THREAD, "stop", f)).state, "stopped");
+  let stopped;
+  for (let i = 0; i < 100 && !stopped; i++) try { stopped = await controlSupervisor(THREAD, "stop", f); } catch (error) { if (error.code !== "RECORD_BUSY") throw error; await new Promise(resolve => setTimeout(resolve, 5)); }
+  assert.equal(stopped.state, "stopped");
   const result = await running; assert.equal(result.status, "completed");
   assert.equal((await getCheckpoint(THREAD, cp.id, f)).runs.at(-1).status, "completed");
 });

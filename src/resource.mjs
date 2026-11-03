@@ -4,7 +4,7 @@ import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs
 import { normalizeTaskId } from "./task-id.mjs";
 import { runCommand } from "./runner.mjs";
 import { targetHost } from "./target.mjs";
-import { withSupervisedMutation, withSupervisedCleanup } from "./supervision.mjs";
+import { dispatchExternalEffect, withSupervisedMutation, withSupervisedCleanup } from "./supervision.mjs";
 
 function resourceKey(name) {
   if (!name?.trim() || name.length > 200 || /[\r\n\x00-\x1f]/.test(name)) throw Object.assign(new Error("Resource name must be a non-empty single line (up to 200 characters)."), { code: "OPTIONS_INVALID" });
@@ -28,7 +28,7 @@ export async function acquireResource(name, { owner, ttlMs = 600000, reason = ""
     const entry = { schema: 1, name, token: randomUUID(), owner, thread_id: threadId ?? null, reason, condition, claimed_at: new Date(now()).toISOString(), expires_at: new Date(now() + ttlMs).toISOString(), released_at: null };
     await writeRecord("resources", key, entry, storage); return entry;
   }, storage);
-  return threadId ? withSupervisedMutation(threadId, supervisor, acquire, { connection, ...storage }) : acquire();
+  return threadId ? dispatchExternalEffect(threadId, supervisor, "resource-acquire", acquire, { connection, ...storage }) : acquire();
 }
 
 const notOwned = () => Object.assign(new Error("Lease is no longer owned by this token. Acquire it again after checking status."), { code: "RESOURCE_NOT_OWNED" });

@@ -108,7 +108,7 @@ export async function mainCloud(argv) {
     if (!branch) throw failure("Specify --branch: this environment does not identify one repository default branch.");
     const data = await startWork({ project: selected.id, title, order, root, branch, connection: "cloud" }, {
       create: async ({ project: environment, prompt, branch, attemptId }) => { const created = await createCloudTask(environment, branch, prompt, { attemptId }); return { ...created, thread_id: created.task_id, backend_project_id: environment }; },
-      reconcile: async record => { try { const receipt = await cloudCreationReceipt(record.attempt_id); return receipt.task_id ? { thread_id: receipt.task_id, backend_project_id: receipt.environment_selector } : null; } catch (error) { if (error.code === "CLOUD_RECEIPT_NOT_FOUND") return null; throw error; } },
+      reconcile: async record => { try { const receipt = await cloudCreationReceipt(record.attempt_id); return receipt.task_id ? { thread_id: receipt.task_id, backend_project_id: receipt.environment_selector, project_selector: receipt.environment_selector, attempt_id: receipt.attempt_id, prompt_sha256: receipt.prompt_sha256 } : null; } catch (error) { if (error.code === "CLOUD_RECEIPT_NOT_FOUND") return null; throw error; } },
       read: (threadId, options) => observeThread(threadId, { ...options, limit: 1000 }, dependencies),
     });
     output("work.start", data); return;

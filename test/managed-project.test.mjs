@@ -4,10 +4,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tempPrefix } from "../test-support/temp.mjs";
 import { registerManagedThread, getManagedThread, listManagedThreads } from "../src/project-index.mjs";
-import { registerSupervisor, controlSupervisor, getSupervisor, withSupervisedSend } from "../src/supervision.mjs";
+import { registerSupervisor, controlSupervisor, getSupervisor, withSupervisedSend, dispatchExternalEffect } from "../src/supervision.mjs";
 import { sendTrackedMessage } from "../src/journal.mjs";
 import { acquireResource, resourceStatus } from "../src/resource.mjs";
 import { createCheckpoint } from "../src/checkpoint.mjs";
+import { sendDesktopUiMessage } from "../src/desktop-ui-send.mjs";
 
 const ACTIVE = "11111111-1111-4111-8111-111111111111";
 const PAUSED = "22222222-2222-4222-8222-222222222222";
@@ -75,4 +76,20 @@ test("pause/stop serialize with managed delivery and acknowledged stop blocks la
   assert.equal((await controlSupervisor(ACTIVE, "stop", { home })).state, "stopped");
   await assert.rejects(withSupervisedSend(ACTIVE, sessions[ACTIVE], send, { home, connection: "shared" }), { code: "SUPERVISOR_STOPPED" });
   assert.equal(dispatches, 1, "no delivery starts after acknowledged stop");
+});
+
+test("Desktop UI delivery rejects managed active paused stopped and new-turn routes before dispatch", async t => {
+  const { home } = await fixture(t); let dispatches = 0; const send = async () => { dispatches++; return { sent: true }; };
+  for (const [thread, options] of [[ACTIVE, {}], [PAUSED, { newTurn: true }], [STOPPED, {}]]) {
+    await assert.rejects(sendDesktopUiMessage(thread, "message", { connection: "shared", ...options }, { home }, { send }), { code: "MANAGED_UI_UNSUPPORTED" });
+  }
+  assert.equal(dispatches, 0);
+  await sendDesktopUiMessage(UNMANAGED, "legacy shorthand", { connection: "shared", newTurn: true }, { home }, { send });
+  assert.equal(dispatches, 1);
+});
+
+test("managed paired command/exec is unsupported without an acceptance receipt", async t => {
+  const { home } = await fixture(t); let dispatches = 0;
+  await assert.rejects(dispatchExternalEffect(ACTIVE, undefined, "paired-command", async () => { dispatches++; }, { home, connection: "shared" }), { code: "MANAGED_PAIRED_COMMAND_UNSUPPORTED" });
+  assert.equal(dispatches, 0);
 });

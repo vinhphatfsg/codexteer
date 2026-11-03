@@ -9,7 +9,7 @@ import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs
 import { runCommand } from "./runner.mjs";
 import { targetHost } from "./target.mjs";
 import { remoteCaptureInputs, remoteCheckpointScope, remoteWatchInputs } from "./remote-io.mjs";
-import { withSupervisedMutation } from "./supervision.mjs";
+import { dispatchExternalEffect } from "./supervision.mjs";
 
 const within = (file, root) => file === root || file.startsWith(root + path.sep);
 function excluded(file, excludes) { return file.split(path.sep).includes(".git") || excludes.some(x => within(file, x)); }
@@ -49,13 +49,13 @@ export async function getCheckpoint(threadInput, id, storage = {}) {
 
 export async function createCheckpoint(threadInput, name, { paths, excludes = [], cwd = process.cwd(), supervisor, connection, ...storage }) {
   const threadId = normalizeTaskId(threadInput);
-  return withSupervisedMutation(threadId, supervisor, async () => {
-    if (!name?.trim() || !paths?.length) throw Object.assign(new Error("capture requires a name and at least one --path."), { code: "OPTIONS_INVALID" });
-    const scope = targetHost() === "local" ? { cwd: path.resolve(cwd), roots: [...new Set(paths.map(p => path.resolve(cwd, p)))], excludes: excludes.map(p => path.resolve(cwd, p)) }
-      : await remoteCheckpointScope(threadId, paths, excludes);
-    const { roots, excludes: omit } = scope;
-    const snapshot = await captureInputs(roots, omit);
-    if (!snapshot.files.some(f => f.type === "file")) throw Object.assign(new Error("No input files were selected."), { code: "OPTIONS_INVALID" });
+  if (!name?.trim() || !paths?.length) throw Object.assign(new Error("capture requires a name and at least one --path."), { code: "OPTIONS_INVALID" });
+  const scope = targetHost() === "local" ? { cwd: path.resolve(cwd), roots: [...new Set(paths.map(p => path.resolve(cwd, p)))], excludes: excludes.map(p => path.resolve(cwd, p)) }
+    : await remoteCheckpointScope(threadId, paths, excludes);
+  const { roots, excludes: omit } = scope;
+  const snapshot = await captureInputs(roots, omit);
+  if (!snapshot.files.some(f => f.type === "file")) throw Object.assign(new Error("No input files were selected."), { code: "OPTIONS_INVALID" });
+  return dispatchExternalEffect(threadId, supervisor, "checkpoint-publish", async () => {
     const entry = { schema: 1, id: randomUUID(), thread_id: threadId, name, cwd: scope.cwd, created_at: new Date().toISOString(), snapshot, runs: [], artifacts: [] };
     await writeRecord("checkpoints", entry.id, entry, storage);
     return checkpointSummary(entry);
@@ -151,12 +151,14 @@ export async function runCheckpoint(threadInput, id, argv, { timeoutMs = 0, exec
 export async function attachArtifacts(threadInput, id, refs, { supervisor, connection, ...storage } = {}) {
   if (!refs.length) throw Object.assign(new Error("At least one --artifact file is required."), { code: "OPTIONS_INVALID" });
   const threadId = normalizeTaskId(threadInput);
-  return withSupervisedMutation(threadId, supervisor, () => withStoreLock(`checkpoint-${id}`, async () => {
-    const verified = await verifyCheckpoint(threadInput, id, storage);
-    if (!verified.valid) throw Object.assign(new Error("A successful run against unchanged inputs is required before attaching artifacts."), { code: "STALE_CHECKPOINT" });
-    const artifacts = await collectEvidence(refs);
-    if (artifacts.some(a => a.type !== "file")) throw Object.assign(new Error("Artifacts must be local files."), { code: "OPTIONS_INVALID" });
+  const verified = await verifyCheckpoint(threadInput, id, storage);
+  if (!verified.valid) throw Object.assign(new Error("A successful run against unchanged inputs is required before attaching artifacts."), { code: "STALE_CHECKPOINT" });
+  const artifacts = await collectEvidence(refs);
+  if (artifacts.some(a => a.type !== "file")) throw Object.assign(new Error("Artifacts must be local files."), { code: "OPTIONS_INVALID" });
+  const expected = await getCheckpoint(threadInput, id, storage), expectedRun = expected.runs.at(-1)?.id, expectedDigest = expected.snapshot.digest;
+  return dispatchExternalEffect(threadId, supervisor, "checkpoint-publish", () => withStoreLock(`checkpoint-${id}`, async () => {
     const entry = await getCheckpoint(threadInput, id, storage);
+    if (entry.snapshot.digest !== expectedDigest || entry.runs.at(-1)?.id !== expectedRun) throw Object.assign(new Error("Checkpoint changed while artifacts were prepared."), { code: "STALE_CHECKPOINT" });
     entry.artifacts.push(...artifacts.map(a => ({ ...a, run_id: entry.runs.at(-1).id, attached_at: new Date().toISOString() })));
     await writeRecord("checkpoints", id, entry, storage);
     return checkpointSummary(entry);

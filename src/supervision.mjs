@@ -184,6 +184,20 @@ export async function withSupervisedMutation(threadInput, sessionInput, mutate, 
   }, storage);
 }
 
+// The only gate for worker-visible external effects. Backend adapters must call
+// this primitive at their actual dispatch boundary, rather than adding their
+// own supervisor checks. Kinds without a trustworthy acceptance receipt fail
+// closed for managed work.
+export async function dispatchExternalEffect(threadInput, sessionInput, kind, dispatch, { connection, ...storage } = {}) {
+  if (!new Set(["turn", "desktop-ui", "local-spawn", "paired-command", "thread-shell", "resource-acquire", "checkpoint-publish"]).has(kind)) {
+    throw failure("Unknown external-effect kind.", "EXTERNAL_EFFECT_INVALID");
+  }
+  const threadId = normalizeTaskId(threadInput), managed = await getManagedThread(threadId, storage);
+  if (managed && kind === "desktop-ui") throw failure("Desktop UI delivery has no acceptance receipt and is unavailable for managed tasks.", "MANAGED_UI_UNSUPPORTED");
+  if (managed && kind === "paired-command") throw failure("Paired command/exec has no separate acceptance receipt and is unavailable for managed tasks.", "MANAGED_PAIRED_COMMAND_UNSUPPORTED");
+  return withSupervisedMutation(threadId, sessionInput, dispatch, { connection, ...storage });
+}
+
 // Cleanup for an already accepted operation is serialized with control but does
 // not require active state. It may only finish/reconcile existing effects.
 export async function withSupervisedCleanup(threadInput, mutate, { connection, ...storage } = {}) {
@@ -200,7 +214,7 @@ export async function withSupervisedCleanup(threadInput, mutate, { connection, .
 }
 
 export async function withSupervisedSend(threadInput, sessionInput, send, { connection, ...storage } = {}) {
-  return withSupervisedMutation(threadInput, sessionInput, async record => {
+  return dispatchExternalEffect(threadInput, sessionInput, "turn", async record => {
     if (!record) return send();
     const threadId = record.thread_id;
     try {

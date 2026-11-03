@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { targetHost } from "./target.mjs";
 import { runRemoteCommand, runRemoteShellCommand } from "./remote-io.mjs";
-import { withSupervisedMutation } from "./supervision.mjs";
+import { dispatchExternalEffect } from "./supervision.mjs";
 
 function startLocal(argv, { cwd, timeoutMs, onStart, signal: abortSignal }) {
   let accept, rejectAccept;
@@ -40,6 +40,6 @@ export async function runCommand(argv, { cwd, timeoutMs = 0, onStart = async () 
   if (targetHost() !== "local") return (execBackend === "thread-shell" ? runRemoteShellCommand : runRemoteCommand)(argv, { cwd, timeoutMs, onStart, signal: abortSignal, threadId, shell: remoteShell, supervisor, connection });
   if (execBackend !== "app-server") throw Object.assign(new Error("thread-shell is an explicit remote execution backend."), { code: "OPTIONS_INVALID" });
   const dispatch = async () => { const ticket = startLocal(argv, { cwd, timeoutMs, onStart, signal: abortSignal }); await ticket.accepted; return ticket; };
-  const ticket = threadId ? await withSupervisedMutation(threadId, supervisor, dispatch, { connection, ...storage }) : await dispatch();
+  const ticket = threadId ? await dispatchExternalEffect(threadId, supervisor, "local-spawn", dispatch, { connection, ...storage }) : await dispatch();
   return ticket.completion;
 }

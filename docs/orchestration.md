@@ -140,7 +140,7 @@ JSON出力は次の形です。`project_selector`は照合前の指定文字列�
 
 managed threadの操作は次の4種類として扱います。
 
-1. **新しい外部効果**: send/new-turn、local spawn、remote `command/exec`、`thread/shellCommand`、resource acquire、checkpoint command dispatch。active supervisorの検査と同じsupervisor lockを通し、pause/stopが成立した後は開始しません。
+1. **新しい外部効果**: send/new-turn、local spawn、remote `command/exec`、`thread/shellCommand`、resource acquire、checkpoint command dispatch。共通のexternal-effect gateでactive supervisorを検査し、同じsupervisor lockを通すため、pause/stopが成立した後は開始しません。受付receiptを得られないDesktop UI sendとpaired `command/exec`はmanaged threadでは未対応です。
 2. **受付済み操作の後始末・照合**: 実行結果の保存、受付済みresource runのlease renew/release、history/creation receiptの読み取り照合。新しい外部効果を起こさないためpause/stop後も完了できます。unknownを自動再送しません。
 3. **監督判断の記録変更**: findingのresolve/dismiss/reopen/evaluate、history mark、unknownの手動解決。現在の低水準コマンド契約を維持しており、この版ではmanaged pause/stopへの統一適用は未実装です。高水準介入面を追加する際に、stopped supervisorからの自動変更を拒否する必要があります。
 4. **読み取り**: read/status、記録一覧、receipt照合。pause中も利用できます。stopped supervisorの観測制限は各既存コマンドの契約を維持します。

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { desktopDoctor, inspectDesktopUi, openDesktopThread, sendDesktopMessage } from "./desktop.mjs";
+import { desktopDoctor, inspectDesktopUi, openDesktopThread } from "./desktop.mjs";
+import { sendDesktopUiMessage } from "./desktop-ui-send.mjs";
 import { normalizeThreadId, threadDeepLink, parseThreadTarget } from "./thread-id.mjs";
 import { targetHost, targetContext, withTarget, validateHostId, hostFields, remoteReadOnly, remoteTransport, validateRemoteTransport, isControlTransport } from "./target.mjs";
 import { listLocalThreads } from "./thread-store.mjs";
@@ -249,7 +250,7 @@ async function mainOnTarget(argv) {
       const order = readMessage(args);
       const data = await startWork({ project, title, order, root, connection }, {
         create: async ({ project: selector, title: name, prompt, attemptId }) => { const created = await createProjectThread(selector, prompt, { title: name, attemptId }); return { ...created, thread_id: created.thread_id, backend_project_id: created.project_id }; },
-        reconcile: async record => { const receipt = await readRecord("creations", record.attempt_id); return receipt?.thread_id ? { thread_id: receipt.thread_id, backend_project_id: receipt.project_id } : null; },
+        reconcile: async record => { const receipt = await readRecord("creations", record.attempt_id); return receipt?.thread_id ? { thread_id: receipt.thread_id, backend_project_id: receipt.project_id, project_selector: receipt.project_name ?? receipt.project_id, attempt_id: receipt.attempt_id, prompt_sha256: receipt.prompt_sha256 } : null; },
         read: (threadId, options) => observeThread(threadId, { ...options, limit: 1000 }, connectionDependencies),
       });
       success("work.start", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
@@ -690,7 +691,7 @@ async function mainOnTarget(argv) {
     const threadId = normalizeThreadId(threadInput);
     const data = backend === "app-server"
       ? await sendTrackedMessage(threadId, message, { dryRun, newTurn, ...directive, supervisor, connection })
-      : sendDesktopMessage(threadId, message, { dryRun, waitMs, newTurn, keepFocus });
+      : await sendDesktopUiMessage(threadId, message, { dryRun, waitMs, newTurn, keepFocus, supervisor, connection });
     data.sound = noSound ? { played: false, reason: "disabled" } : playSendSound(data);
     success("send", data, json);
     if (!json) {
