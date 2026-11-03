@@ -103,3 +103,15 @@ test("shell dispatch revalidates session and connection, and cancellation after 
   await assert.rejects(runRemoteShellCommand(["fixture-program"], { ...f.options, signal: controller.signal, onStart: async () => { controller.abort(); } }, f.dependencies), { code: "CANCELLED" });
   assert.equal(f.dispatched, 0);
 }));
+
+test("acknowledged pause/stop before paired command dispatch prevents command/exec", t => scope(async () => {
+  const { runRemoteCommand } = await import("../src/remote-io.mjs");
+  for (const action of ["pause", "stop"]) {
+    const f = await fixture(t); let dispatches = 0;
+    f.client.request = async method => { if (method === "command/exec") { dispatches++; return { exitCode: 0, stdout: "", stderr: "" }; } throw new Error(`unexpected ${method}`); };
+    await assert.rejects(runRemoteCommand(["fixture-program"], { threadId: ID, supervisor: SESSION, connection: "shared",
+      onStart: () => controlSupervisor(ID, action, { home: f.home }) }, f.dependencies),
+    { code: action === "pause" ? "SUPERVISOR_PAUSED" : "SUPERVISOR_STOPPED" });
+    assert.equal(dispatches, 0);
+  }
+}));

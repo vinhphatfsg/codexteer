@@ -184,6 +184,21 @@ export async function withSupervisedMutation(threadInput, sessionInput, mutate, 
   }, storage);
 }
 
+// Cleanup for an already accepted operation is serialized with control but does
+// not require active state. It may only finish/reconcile existing effects.
+export async function withSupervisedCleanup(threadInput, mutate, { connection, ...storage } = {}) {
+  const threadId = normalizeTaskId(threadInput), managed = await getManagedThread(threadId, storage);
+  if (!managed) return mutate();
+  const before = await getSupervisor(threadId, storage);
+  if (!before) throw failure("This managed task has no supervisor binding. Repair its project membership before cleanup.", "MANAGED_SUPERVISOR_REQUIRED");
+  return withStoreLock(`supervisor-${threadId}`, async () => {
+    const current = await getSupervisor(threadId, storage);
+    if (!current || current.session_id !== before.session_id) throw failure("The supervisor binding changed before cleanup.", "SUPERVISOR_MISMATCH");
+    if (connection !== undefined && current.connection !== connection) throw failure("The supervisor is registered for another connection.", "SUPERVISOR_MISMATCH");
+    return mutate(current);
+  }, storage);
+}
+
 export async function withSupervisedSend(threadInput, sessionInput, send, { connection, ...storage } = {}) {
   return withSupervisedMutation(threadInput, sessionInput, async record => {
     if (!record) return send();

@@ -14,6 +14,7 @@ import { prepareDirective } from "./directive.mjs";
 import { releasedDelivery } from "./findings.mjs";
 import { withCursorReference } from "./cursor.mjs";
 import { assertSupervisor, withSupervisedSend } from "./supervision.mjs";
+import { getManagedThread } from "./project-index.mjs";
 
 export async function getMessage(threadInput, id, options = {}) {
   const threadId = normalizeTaskId(threadInput);
@@ -65,6 +66,7 @@ async function validateReplacement(threadId, options, storage) {
 
 export async function sendTrackedMessage(threadInput, body, options = {}, { send = sendAppServerMessage, ...storage } = {}) {
   const threadId = normalizeTaskId(threadInput);
+  if (!options.supervisor && await getManagedThread(threadId, storage)) throw Object.assign(new Error("Managed tasks require work tell so freshness and intervention tracking cannot be bypassed."), { code: "MANAGED_INTERVENTION_REQUIRED" });
   if (options.supervisor && !options.basedOn) throw Object.assign(new Error("Supervised sends require --based-on from a completed read."), { code: "SUPERVISOR_OBSERVATION_REQUIRED" });
   if (options.supervisor && !options.finding && !options.retracts) throw Object.assign(new Error("Supervised sends require --finding so pending interventions can be tracked and deduplicated."), { code: "SUPERVISOR_FINDING_REQUIRED" });
   if (options.dryRun) {

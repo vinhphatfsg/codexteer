@@ -85,9 +85,9 @@ export async function remoteWatchInputs(snapshot, { route: makeRoute = remoteCon
   } catch (error) { client.close(); throw error; }
 }
 
-export async function runRemoteCommand(argv, { cwd, timeoutMs = 0, signal, onStart = async () => {} } = {}, dependencies = {}) {
+export async function runRemoteCommand(argv, { cwd, timeoutMs = 0, signal, onStart = async () => {}, threadId, supervisor, connection } = {}, dependencies = {}) {
   requirePairedManagement(); const processId = randomUUID(), started = new Date().toISOString(), timeout = timeoutMs || 86400000;
-  return withRemoteClient(async client => {
+  return withRemoteClient(async (client, runtime) => {
     if (signal?.aborted) throw fail("Remote command cancelled before dispatch.", "CANCELLED");
     // processId is connection scoped and only this invocation can terminate it.
     let cancelError = null;
@@ -95,7 +95,8 @@ export async function runRemoteCommand(argv, { cwd, timeoutMs = 0, signal, onSta
     signal?.addEventListener("abort", cancel, { once: true });
     try {
       await onStart(null, { remote_process_id: processId, execution_backend: "app-server" });
-      const result = await client.request("command/exec", { command: argv, ...(cwd ? { cwd } : {}), timeoutMs: timeout, outputBytesCap: 32768, processId }, { mutation: true });
+      const dispatch = () => client.request("command/exec", { command: argv, ...(cwd ? { cwd } : {}), timeoutMs: timeout, outputBytesCap: 32768, processId }, { mutation: true });
+      const result = threadId ? await withSupervisedMutation(threadId, supervisor, dispatch, { connection, home: runtime.paths.home }) : await dispatch();
       if (!Number.isInteger(result?.exitCode) || typeof result.stdout !== "string" || typeof result.stderr !== "string") throw Object.assign(fail("Remote command acknowledgement was invalid.", "REMOTE_COMMAND_UNKNOWN"), { uncertain: true });
       return { pid: null, remote_process_id: processId, ...hostFields(), exit_code: result.exitCode, signal: null, timed_out: false, started_at: started,
         completed_at: new Date().toISOString(), output_tail: (result.stdout + result.stderr).slice(-32768), output_truncated: result.stdout.length + result.stderr.length >= 32768,
@@ -118,7 +119,7 @@ export function remoteShellScript(argv, { cwd, shell, marker }) {
 
 // This is an explicitly selected, task-scoped host shell (the official API is
 // unsandboxed). Never use it as fallback for a refused command/exec request.
-export async function runRemoteShellCommand(argv, { cwd, threadId, shell, timeoutMs = 0, signal, onStart = async () => {}, supervisor, connection, supervisionHeld = false } = {}, dependencies = {}) {
+export async function runRemoteShellCommand(argv, { cwd, threadId, shell, timeoutMs = 0, signal, onStart = async () => {}, supervisor, connection } = {}, dependencies = {}) {
   requirePairedManagement();
   if (!threadId) throw fail("thread-shell requires --thread (checkpoint uses its own task).", "REMOTE_SHELL_REQUIRED");
   threadId = normalizeThreadId(threadId);
@@ -138,7 +139,7 @@ export async function runRemoteShellCommand(argv, { cwd, threadId, shell, timeou
         if (signal?.aborted) throw fail("Remote shell cancelled before dispatch.", "CANCELLED");
         return client.request("thread/shellCommand", { threadId, command, timeoutMs: timeout }, { mutation: true });
       };
-      const acknowledgement = await (supervisionHeld ? dispatch() : withSupervisedMutation(threadId, supervisor, dispatch, { connection, home: runtime.paths.home })); accepted = true;
+      const acknowledgement = await withSupervisedMutation(threadId, supervisor, dispatch, { connection, home: runtime.paths.home }); accepted = true;
       if (!acknowledgement || typeof acknowledgement !== "object" || Array.isArray(acknowledgement)) throw fail("Remote shell acknowledgement was invalid. Inspect the same command before retrying.", "REMOTE_COMMAND_UNKNOWN");
       const deadline = Date.now() + timeout + 10000;
       do {

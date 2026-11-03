@@ -118,32 +118,34 @@ function watchInputs(snapshot) {
 
 export async function runCheckpoint(threadInput, id, argv, { timeoutMs = 0, execBackend, remoteShell, supervisor, connection, ...storage } = {}) {
   if (!argv.length || !argv[0] || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw Object.assign(new Error("A command and timeout-ms between 0 and 86400000 are required."), { code: "OPTIONS_INVALID" });
-  const threadId = normalizeTaskId(threadInput);
-  return withSupervisedMutation(threadId, supervisor, () => withStoreLock(`checkpoint-${id}`, async () => {
-    const entry = await getCheckpoint(threadId, id, storage), watcher = targetHost() === "local" ? watchInputs(entry.snapshot) : await remoteWatchInputs(entry.snapshot);
+  const threadId = normalizeTaskId(threadInput), entry = await getCheckpoint(threadId, id, storage);
+  const watcher = targetHost() === "local" ? watchInputs(entry.snapshot) : await remoteWatchInputs(entry.snapshot);
+  const run = { id: randomUUID(), argv, status: "preparing", started_at: new Date().toISOString() };
+  try {
+    const before = await captureInputs(entry.snapshot.roots, entry.snapshot.excludes, { allowMissing: true });
+    if (before.digest !== entry.snapshot.digest) throw Object.assign(new Error("Inputs changed since capture. Capture a new checkpoint before running."), { code: "STALE_CHECKPOINT" });
+    let result;
     try {
-      const before = await captureInputs(entry.snapshot.roots, entry.snapshot.excludes, { allowMissing: true });
-      if (before.digest !== entry.snapshot.digest) throw Object.assign(new Error("Inputs changed since capture. Capture a new checkpoint before running."), { code: "STALE_CHECKPOINT" });
-      const run = { id: randomUUID(), argv, status: "running", started_at: new Date().toISOString() };
-      entry.runs.push(run); await writeRecord("checkpoints", id, entry, storage);
-      let result;
-      try { result = await runCommand(argv, { cwd: entry.cwd, timeoutMs, execBackend, remoteShell, supervisor, connection, supervisionHeld: true, threadId, onStart: async (pid, info) => { Object.assign(run, { pid }, info); await writeRecord("checkpoints", id, entry, storage); } }); }
-      catch (error) {
-        Object.assign(run, { status: error.uncertain ? "unknown" : "failed", error_code: error.code, error: error.message, inputs_unchanged: false,
-          remote_process_id: error.remote_process_id, touched_paths: [...watcher.touched], observation_error: watcher.error, completed_at: new Date().toISOString() });
-        await writeRecord("checkpoints", id, entry, storage); throw error;
-      }
-      let after, snapshotError;
-      try { after = await captureInputs(entry.snapshot.roots, entry.snapshot.excludes, { allowMissing: true }); } catch (e) { snapshotError = e.message; }
-      await watcher.settle?.();
-      const changedInputs = after ? differences(entry.snapshot, after) : null;
-      const touchedPaths = [...new Set([...watcher.touched, ...(changedInputs ? [...changedInputs.added, ...changedInputs.removed, ...changedInputs.changed] : [])])].slice(0, 100);
-      Object.assign(run, result, { status: "completed", inputs_unchanged: after?.digest === entry.snapshot.digest && !watcher.touched.size && !watcher.error,
-        touched_paths: touchedPaths, observed_touched_paths: [...watcher.touched], observation_error: watcher.error ?? snapshotError ?? null, differences: changedInputs });
-      await writeRecord("checkpoints", id, entry, storage);
-      return { checkpoint_id: id, ...run, valid: run.exit_code === 0 && !run.error && !run.timed_out && run.inputs_unchanged };
-    } finally { await watcher.close(); }
-  }, storage), { connection, ...storage });
+      result = await runCommand(argv, { cwd: entry.cwd, timeoutMs, execBackend, remoteShell, supervisor, connection, threadId, ...storage,
+        onStart: async (pid, info) => withStoreLock(`checkpoint-${id}`, async () => {
+          const current = await getCheckpoint(threadId, id, storage);
+          Object.assign(run, { status: "running", pid }, info); current.runs.push(run); await writeRecord("checkpoints", id, current, storage);
+        }, storage) });
+    } catch (error) {
+      Object.assign(run, { status: error.uncertain ? "unknown" : "failed", error_code: error.code, error: error.message, inputs_unchanged: false,
+        remote_process_id: error.remote_process_id, touched_paths: [...watcher.touched], observation_error: watcher.error, completed_at: new Date().toISOString() });
+      await withStoreLock(`checkpoint-${id}`, async () => { const current = await getCheckpoint(threadId, id, storage); if (!current.runs.some(x => x.id === run.id)) current.runs.push(run); else Object.assign(current.runs.find(x => x.id === run.id), run); await writeRecord("checkpoints", id, current, storage); }, storage); throw error;
+    }
+    let after, snapshotError;
+    try { after = await captureInputs(entry.snapshot.roots, entry.snapshot.excludes, { allowMissing: true }); } catch (e) { snapshotError = e.message; }
+    await watcher.settle?.();
+    const changedInputs = after ? differences(entry.snapshot, after) : null;
+    const touchedPaths = [...new Set([...watcher.touched, ...(changedInputs ? [...changedInputs.added, ...changedInputs.removed, ...changedInputs.changed] : [])])].slice(0, 100);
+    Object.assign(run, result, { status: "completed", inputs_unchanged: after?.digest === entry.snapshot.digest && !watcher.touched.size && !watcher.error,
+      touched_paths: touchedPaths, observed_touched_paths: [...watcher.touched], observation_error: watcher.error ?? snapshotError ?? null, differences: changedInputs });
+    await withStoreLock(`checkpoint-${id}`, async () => { const current = await getCheckpoint(threadId, id, storage), saved = current.runs.find(x => x.id === run.id); if (saved) Object.assign(saved, run); else current.runs.push(run); await writeRecord("checkpoints", id, current, storage); }, storage);
+    return { checkpoint_id: id, ...run, valid: run.exit_code === 0 && !run.error && !run.timed_out && run.inputs_unchanged };
+  } finally { await watcher.close(); }
 }
 
 export async function attachArtifacts(threadInput, id, refs, { supervisor, connection, ...storage } = {}) {

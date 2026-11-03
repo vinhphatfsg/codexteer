@@ -6,6 +6,7 @@ import { tempPrefix } from "../test-support/temp.mjs";
 import { startWork, readRepositoryPolicy, composeWorkOrder } from "../src/work-start.mjs";
 import { getManagedThread } from "../src/project-index.mjs";
 import { getSupervisor } from "../src/supervision.mjs";
+import { acquireResource, resourceStatus } from "../src/resource.mjs";
 
 const THREAD = "11111111-1111-4111-8111-555555555555";
 async function fixture(t, policy = "方針 ${notExpanded} $(also_not_expanded)\r\n末尾\n") {
@@ -48,6 +49,18 @@ test("concurrent identical starts create one child and persist supervision, memb
   assert.equal((await getManagedThread(THREAD, { home: f.home })).sync_cursor, "cursor-one");
 });
 
+test("membership is visible before supervisor binding and mutations fail closed in that window", async t => {
+  const f = await fixture(t); let checked = false;
+  f.deps.hook = async name => {
+    if (name !== "membership_registered") return;
+    checked = true;
+    await assert.rejects(acquireResource("window", { owner: "fixture", threadId: THREAD, connection: "shared", home: f.home }), { code: "MANAGED_SUPERVISOR_REQUIRED" });
+    assert.equal((await resourceStatus("window", { home: f.home })).state, "available");
+  };
+  const result = await startWork({ project: "project-one", title: "登録順", order: "実装する", root: f.root }, f.deps);
+  assert.equal(checked, true); assert.equal(result.stage, "observed");
+});
+
 test("a lost create response is reconciled read-only and never dispatched twice", async t => {
   const f = await fixture(t), original = f.deps.create; let first = true, reconciles = 0;
   f.deps.create = async input => { const created = await original(input); if (first) { first = false; throw Object.assign(new Error("receipt lost"), { code: "CONNECTION_FAILED" }); } return created; };
@@ -58,7 +71,7 @@ test("a lost create response is reconciled read-only and never dispatched twice"
   assert.equal(f.counts.create, 1); assert.equal(reconciles, 1);
 });
 
-for (const boundary of ["attempt_saved", "before_create_rpc", "create_returned", "child_saved", "supervisor_registered", "index_updated", "initial_read"]) {
+for (const boundary of ["attempt_saved", "before_create_rpc", "create_returned", "child_saved", "membership_registered", "index_updated", "supervisor_registered", "initial_read"]) {
   test(`fault recovery at ${boundary} never creates more than one child`, async t => {
     const f = await fixture(t), input = { project: "project-one", title: `担当 ${boundary}`, order: "実装する", root: f.root };
     let crashed = false; f.deps.hook = async name => { if (!crashed && name === boundary) { crashed = true; throw Object.assign(new Error("crash"), { code: "INJECTED_CRASH" }); } };

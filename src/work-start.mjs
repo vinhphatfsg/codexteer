@@ -76,15 +76,16 @@ export async function startWork(input, dependencies = {}) {
         await writeRecord("work-starts", key, record, storage); await hook("child_saved", record);
       }
     }
+    if (!record.indexed) {
+      await registerManagedThread(record.thread_id, { projectId: project, connection, backendProjectId: record.backend_project_id,
+        creationAttemptId: record.attempt_id, policySha256: record.policy_sha256 }, storage);
+      await hook("membership_registered", record);
+      record.indexed = true; record.stage = "indexed"; await writeRecord("work-starts", key, record, storage); await hook("index_updated", record);
+    }
     if (!record.supervisor_registered) {
       record.supervisor_session_id ??= randomUUID();
       await registerSupervisor(record.thread_id, record.supervisor_session_id, { ...storage, owner: "codexteer-orchestrator", connection });
       record.supervisor_registered = true; record.stage = "supervisor_registered"; await writeRecord("work-starts", key, record, storage); await hook("supervisor_registered", record);
-    }
-    if (!record.indexed) {
-      await registerManagedThread(record.thread_id, { projectId: project, connection, backendProjectId: record.backend_project_id,
-        creationAttemptId: record.attempt_id, policySha256: record.policy_sha256 }, storage);
-      record.indexed = true; record.stage = "indexed"; await writeRecord("work-starts", key, record, storage); await hook("index_updated", record);
     }
     if (!record.sync_cursor) {
       let observation, cursor;
