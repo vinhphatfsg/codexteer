@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { tempPrefix } from "../test-support/temp.mjs";
+import { fail } from "../src/cli.mjs";
 import { startWork } from "../src/work-start.mjs";
 import { createDesktopCloudTask, reconcileDesktopCloudCreation, desktopCloudReceipt, sendDesktopCloudInput } from "../src/desktop-cloud.mjs";
 import { DesktopCloudClient } from "../src/desktop-cloud-api.mjs";
@@ -103,7 +104,16 @@ test("initial incomplete, unavailable, history-gap and route failures leave curs
       const page = await normal(id, options);
       return { ...page, ...(kind === "incomplete" ? { has_more: true } : kind === "gap" ? { omitted_older_events: 1 } : { environment_config_id: "another" }) };
     };
-    await assert.rejects(startWork(f.input, f.deps)); assert.equal((await getManagedThread(ID, f.storage)).sync_cursor, undefined);
+    let caught;
+    await assert.rejects(startWork(f.input, f.deps), error => { caught = error; return error.thread_id === ID && typeof error.attempt_id === "string" && typeof error.receipt_path === "string"
+      && error.observed === false && error.observation === (kind === "unavailable" ? "unavailable" : "incomplete") && (kind !== "gap" || error.history_gap === true); });
+    const lines = [], priorExit = process.exitCode;
+    const log = t.mock.method(console, "log", line => lines.push(line));
+    try { fail(caught, true); } finally { log.mock.restore(); process.exitCode = priorExit; }
+    const publicError = JSON.parse(lines[0]).error;
+    assert.equal(publicError.thread_id, ID); assert.equal(publicError.observation, caught.observation); assert.equal(publicError.observed, false);
+    assert.equal(publicError.receipt_path, caught.receipt_path);
+    assert.equal((await getManagedThread(ID, f.storage)).sync_cursor, undefined);
     f.deps.read = normal; await startWork(f.input, f.deps); assert.equal(creates(f), 1); assert.equal(deliveries(f), 1);
   }
 });

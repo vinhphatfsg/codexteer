@@ -60,7 +60,7 @@ export function fail(error, json, argv = []) {
     existing_attempt_id: error.existing_attempt_id, existing_receipt_path: error.existing_receipt_path,
     supervision_update_required: error.supervision_update_required,
     history_changed: error.history_changed, backup_path: error.backup_path, receipt_path: error.receipt_path,
-    repair_stat: error.repair_stat,
+    repair_stat: error.repair_stat, stage: error.stage, observed: error.observed, observation: error.observation, history_gap: error.history_gap, environment_config_id: error.environment_config_id,
     creation_status: error.creation_status, attempt_id: error.attempt_id, receipt_update_required: error.receipt_update_required,
     reservation_cleanup_required: error.reservation_cleanup_required,
     native_call_id: error.native_call_id,
@@ -76,9 +76,11 @@ export function fail(error, json, argv = []) {
     if (error.execution_environment === "cloud" || (typeof error.code === "string" && error.code.startsWith("DESKTOP_CLOUD_"))) {
       // Recovery metadata must survive an uncertain submission or a stale
       // on-disk receipt. Never print the child error, prompt, or diagnostics.
-      for (const key of ["creation_status", "submission_status", "delivery_status", "attempt_id", "receipt_path", "existing_message_id", "existing_attempt_id", "existing_receipt_path", "task_id", "thread_id", "url"]) {
+      for (const key of ["creation_status", "submission_status", "delivery_status", "stage", "observation", "environment_config_id", "attempt_id", "receipt_path", "existing_message_id", "existing_attempt_id", "existing_receipt_path", "task_id", "thread_id", "url"]) {
         if (typeof error[key] === "string") console.error(`${key}: ${JSON.stringify(error[key])}`);
       }
+      if (typeof error.observed === "boolean") console.error(`observed: ${error.observed}`);
+      if (typeof error.history_gap === "boolean") console.error(`history_gap: ${error.history_gap}`);
       if (error.receipt_update_required) console.error("receipt_update_required: true");
       if (error.reservation_cleanup_required) console.error("reservation_cleanup_required: true");
       if (Number.isSafeInteger(error.retry_after_ms)) console.error(`retry_after_ms: ${error.retry_after_ms}`);
