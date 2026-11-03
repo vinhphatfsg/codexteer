@@ -1,9 +1,10 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { acquireResource, releaseResource, renewResource, resourceStatus, runWithResource } from "../src/resource.mjs";
 
-async function fixture(t) { const home = await mkdtemp("/private/tmp/cs-resource-"); t.after(() => rm(home, { recursive: true, force: true })); return { home }; }
+async function fixture(t) { const home = await mkdtemp(tempPrefix("cs-resource-")); t.after(() => rm(home, { recursive: true, force: true })); return { home }; }
 
 test("leases exclude another owner and record conditions without interpreting them as permissions", async t => {
   const f = await fixture(t); let now = 100000;

@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile, chmod, mkdir, readFile } from "node:fs/promises";
@@ -15,7 +16,7 @@ import { prepareSupervisorPrompt } from "../src/supervise.mjs";
 import { streamThread } from "../src/monitor.mjs";
 
 test("supervisor controls reject a changed transport without corrupting the paired session", async t => {
-  const home = await mkdtemp("/private/tmp/ct-transport-control-"); t.after(() => rm(home, { recursive: true, force: true }));
+  const home = await mkdtemp(tempPrefix("ct-transport-control-")); t.after(() => rm(home, { recursive: true, force: true }));
   await withTarget(HOST, undefined, () => registerSupervisor(ID, CALLER, { home }), { transport: "paired" });
   for (const transport of ["native", "control"]) await withTarget(HOST, undefined, async () => {
     for (const action of ["pause", "resume", "stop"]) await assert.rejects(controlSupervisor(ID, action, { home }), { code: "SUPERVISOR_MISMATCH" });
@@ -36,7 +37,7 @@ const catalog = { tools: [{ namespace: "codex_app", name: "read_thread", inputSc
 } } }] };
 const page = (turns = task().turns, nextCursor = null, host = HOST) => ({ thread: { id: ID, hostId: host, kind: "codex", title: "remote task", cwd: "C:\\work", status: { type: "idle" } },
   page: { order: "newest_first", hasMore: nextCursor !== null, nextCursor }, turns });
-async function temp(t) { const home = await mkdtemp("/private/tmp/ct-remote-"); t.after(() => rm(home, { recursive: true, force: true })); return home; }
+async function temp(t) { const home = await mkdtemp(tempPrefix("ct-remote-")); t.after(() => rm(home, { recursive: true, force: true })); return home; }
 function cli(args, env = {}) { const r = spawnSync(process.execPath, ["bin/codexteer.mjs", "--json", ...args], { encoding: "utf8", env: { ...process.env, ...env } }); return { status: r.status, ...JSON.parse(r.stdout) }; }
 
 test("host links preserve encoded routing and cannot silently normalize to local", async () => {

@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -34,7 +35,7 @@ function proof(value) { const bytes = Buffer.from(JSON.stringify({ domain: "code
 const token = () => `fixture.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 600, "https://api.openai.com/auth": { chatgpt_account_id: identity.accountId, chatgpt_account_user_id: identity.accountUserId } })).toString("base64url")}.fixture`;
 const scope = fn => withTarget(HOST, undefined, fn, { transport: "control" });
 const task = () => ({ id: ID, status: { type: "active", activeFlags: [] }, turns: [{ id: "turn-one", status: "inProgress", items: [{ id: "u", type: "userMessage", content: [{ type: "text", text: "fixture goal" }] }] }] });
-async function temp(t) { const home = await mkdtemp("/private/tmp/ct-control-"); t.after(() => rm(home, { recursive: true, force: true })); return home; }
+async function temp(t) { const home = await mkdtemp(tempPrefix("ct-control-")); t.after(() => rm(home, { recursive: true, force: true })); return home; }
 
 class Wire extends EventEmitter {
   constructor(handle, authChallenge = challenge()) { super(); this.handle = handle; this.sent = []; this.closed = false; this.serverSeq = 0; setImmediate(() => this.inject(authChallenge)); }

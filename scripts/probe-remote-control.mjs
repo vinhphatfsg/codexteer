@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 // Real bundled Rust App Server behind the Remote Control envelope adapter.
 // Temporary profile + loopback fake model only; no account token or device key.
 import assert from "node:assert/strict";
@@ -16,7 +17,7 @@ import { readOnClient } from "../src/observe.mjs";
 import { prepareDirective } from "../src/directive.mjs";
 import { withTarget } from "../src/target.mjs";
 
-const root = await mkdtemp("/private/tmp/ct-control-protocol-"), requests = new Map();
+const root = await mkdtemp(tempPrefix("ct-control-protocol-")), requests = new Map();
 let child, client, turnId, threadId, nextId = 1, sequence = 0, diagnostic = "";
 const provider = createServer(async (request, response) => {
   for await (const _chunk of request) { /* Drain only the fake fixture request. */ }

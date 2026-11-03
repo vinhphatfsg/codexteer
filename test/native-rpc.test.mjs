@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
@@ -12,7 +13,7 @@ const CONTEXT = { threadId: "aaaaaaaa-aaaa-4aaa-8aaa-000000000001", turnId: "sto
 const args = { prompt: "日本語 `$(never-execute)`", target: { type: "project", projectId: "project", environment: { type: "local" } } };
 function frame(value) { const bytes = Buffer.from(JSON.stringify(value)), out = Buffer.alloc(bytes.length + 4); os.endianness() === "LE" ? out.writeUInt32LE(bytes.length) : out.writeUInt32BE(bytes.length); bytes.copy(out, 4); return out; }
 async function fixture(t, handler) {
-  const root = await mkdtemp("/private/tmp/ct-native-"); const socketPath = `${root}/rpc`;
+  const root = await mkdtemp(tempPrefix("ct-native-")); const socketPath = `${root}/rpc`;
   const sockets = new Set(), server = net.createServer(socket => { sockets.add(socket); socket.on("error", () => {}); socket.on("close", () => sockets.delete(socket)); let bytes = Buffer.alloc(0); socket.on("data", part => { bytes = Buffer.concat([bytes, part]); if (bytes.length < 4) return; const n = os.endianness() === "LE" ? bytes.readUInt32LE() : bytes.readUInt32BE(); if (bytes.length >= 4 + n) handler(socket, JSON.parse(bytes.subarray(4, n + 4))); }); });
   await new Promise(resolve => server.listen(socketPath, resolve)); await chmod(socketPath, 0o600);
   t.after(async () => { for (const s of sockets) s.destroy(); await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });

@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, lstat, symlink } from "node:fs/promises";
@@ -25,7 +26,7 @@ function proof(ch, enrolled) {
   return { challenge_token: ch.challenge_token, key_id: key.keyId, algorithm: key.algorithm, signature_der_base64: sign("sha256", bytes, privateKey).toString("base64"), signed_payload_base64: bytes.toString("base64") };
 }
 async function fixture(t, options = {}) {
-  const home = await mkdtemp("/private/tmp/codexteer-device-test-"); t.after(() => rm(home, { recursive: true, force: true }));
+  const home = await mkdtemp(tempPrefix("codexteer-device-test-")); t.after(() => rm(home, { recursive: true, force: true }));
   const calls = [], operations = [], ch = challenge();
   const context = { home, identity, current: async () => ({ identity, token: "bearer-secret" }), async request(route, params) {
     calls.push({ route, params });

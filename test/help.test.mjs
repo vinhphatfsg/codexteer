@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -129,7 +130,7 @@ test("a topic's own action for a code wins over the shared one", () => {
 const usageLines = (topic, prefix) => topics[topic].usage.filter(line => line.startsWith(prefix));
 
 test("an argument error under a connection names that connection's usage, not the local one", async t => {
-  const home = await mkdtemp("/private/tmp/cs-help-");
+  const home = await mkdtemp(tempPrefix("cs-help-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const env = { CODEX_HOME: home };
   const desktopCloud = cli(["--connection", "desktop-cloud", "thread", "create", "--json"], env).error;
@@ -150,7 +151,7 @@ test("an argument error under a connection names that connection's usage, not th
 });
 
 test("an argument error routed by its task ID names that connection's usage, as text and JSON", async t => {
-  const home = await mkdtemp("/private/tmp/cs-help-");
+  const home = await mkdtemp(tempPrefix("cs-help-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const env = { CODEX_HOME: home };
   const resolve = usageLines("thread", "--connection cloud|desktop-cloud thread resolve ");
@@ -173,7 +174,7 @@ test("an argument error routed by its task ID names that connection's usage, as 
 });
 
 test("a code the invoked topic does not document carries no action borrowed from another topic", async t => {
-  const home = await mkdtemp("/private/tmp/cs-help-");
+  const home = await mkdtemp(tempPrefix("cs-help-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const documents = (topic, code) => (topics[topic].errors ?? []).some(entry => entry.code === code);
   assert.ok(documents("history", "DESKTOP_CLOUD_OPTIONS_INVALID") && !documents("threads", "DESKTOP_CLOUD_OPTIONS_INVALID"));
@@ -198,7 +199,7 @@ test("every remedy action comes from the invoked topic or the shared registry", 
 });
 
 test("a paused supervisor's refused send carries the send topic's action", async t => {
-  const home = await mkdtemp("/private/tmp/cs-help-");
+  const home = await mkdtemp(tempPrefix("cs-help-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const SESSION = "22222222-2222-4222-8222-000000000055";
   await registerSupervisor(THREAD, SESSION, { home });

@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, readdir, readFile, symlink } from "node:fs/promises";
@@ -7,7 +8,7 @@ import { withStoreLock, writeRecord, storePath } from "../src/store.mjs";
 
 const storeUrl = new URL("../src/store.mjs", import.meta.url).href;
 async function fixture(t) {
-  const home = await mkdtemp("/private/tmp/cs-store-lock-");
+  const home = await mkdtemp(tempPrefix("cs-store-lock-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   return { home };
 }

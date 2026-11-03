@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -35,7 +36,7 @@ test("live project discovery preserves Windows roots and rejects cursor/identity
 }));
 
 async function creationFixture(t, { wrongHost = false, unknown = false, assignedProject = null } = {}) {
-  const home = await mkdtemp("/private/tmp/ct-remote-create-"); t.after(() => rm(home, { recursive: true, force: true }));
+  const home = await mkdtemp(tempPrefix("ct-remote-create-")); t.after(() => rm(home, { recursive: true, force: true }));
   const prompt = "fixture initial instruction", title = "fixture test", project = { id: "canonical", name: "Live name", roots: [{ path: "C:\\test" }] };
   const saved = { project_id: "desktop", name: "Desktop label", host_id: HOST, roots: ["C:\\test"] };
   let thread = { id: ID, projectId: assignedProject, cwd: "C:\\test", name: title, turns: [{ id: "first", status: "completed", items: [{ id: "initial", type: "functionCallOutput", namespace: "codex_app", name: "create_thread", output: `<codex_delegation>\n  <source_thread_id>${SOURCE}</source_thread_id>\n  <input>${prompt}</input>\n</codex_delegation>` }] }], environments: [{ environmentId: "local", runtimeWorkspaceRoots: ["C:\\test"] }] };

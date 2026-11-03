@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from "node:fs/promises";
@@ -117,7 +118,7 @@ test("diff distinguishes a finished task without a server patch from no working-
 });
 
 async function fakeCli(t) {
-  const root = await mkdtemp("/private/tmp/codexteer-cloud-test-"); t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await mkdtemp(tempPrefix("codexteer-cloud-test-")); t.after(() => rm(root, { recursive: true, force: true }));
   const bin = path.join(root, "bin"), home = path.join(root, "home"), log = path.join(root, "calls.jsonl");
   await mkdir(bin); await mkdir(home, { mode: 0o700 });
   const script = `#!${process.execPath}

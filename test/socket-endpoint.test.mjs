@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -8,7 +9,7 @@ import path from "node:path";
 import { inspectAppServerSocket } from "../src/socket-endpoint.mjs";
 
 async function fixture(t) {
-  const home = await fs.mkdtemp("/private/tmp/ct-socket-");
+  const home = await fs.mkdtemp(tempPrefix("ct-socket-"));
   const alias = path.join(home, "rpc.sock");
   const directory = path.join(await fs.realpath("/tmp"), `codex-daemon-${process.getuid()}`);
   await fs.mkdir(directory, { mode: 0o700 }).catch(error => { if (error.code !== "EEXIST") throw error; });

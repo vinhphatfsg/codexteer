@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -17,7 +18,7 @@ const targets = [
   { thread: `durable_${ID}`, connection: "desktop-cloud", bucket: "cloud-supervisors" },
 ];
 async function fixture(t) {
-  const home = await mkdtemp("/private/tmp/ct-supervisor-stop-");
+  const home = await mkdtemp(tempPrefix("ct-supervisor-stop-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   return { home };
 }

@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, chmod, readFile, writeFile, realpath, symlink } from "node:fs/promises";
@@ -5,23 +6,25 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { once } from "node:events";
+const desktopRuntimeTest = process.platform === "darwin" ? test : test.skip;
+
 import { claimRuntime, discoverRuntime, readRuntime, runtimePaths, verifyControlEndpoint } from "../src/runtime.mjs";
 
 async function setup(t) {
-  const home = await mkdtemp("/private/tmp/cs-home-test-");
+  const home = await mkdtemp(tempPrefix("cs-home-test-"));
   const paths = await runtimePaths(home);
   t.after(async () => { await rm(paths.directory, { recursive: true, force: true }); await rm(home, { recursive: true, force: true }); });
   return { home, paths };
 }
 
-test("runtime sockets fit macOS paths and separate CODEX_HOME instances", async t => {
+desktopRuntimeTest("runtime sockets fit macOS paths and separate CODEX_HOME instances", async t => {
   const { home, paths } = await setup(t);
   assert.ok(Buffer.byteLength(paths.socket) < 104);
   assert.ok(Buffer.byteLength(paths.control) < 104);
   assert.notEqual(paths.socket, (await runtimePaths(home + "/other")).socket);
 });
 
-test("runtime ownership and live duplicate protection", async t => {
+desktopRuntimeTest("runtime ownership and live duplicate protection", async t => {
   const { home, paths } = await setup(t);
   const lease = await claimRuntime(home);
   await lease.update({ server_pid: process.pid, desktop_connected: true });
@@ -32,7 +35,7 @@ test("runtime ownership and live duplicate protection", async t => {
   await assert.rejects(readRuntime(paths), { code: "ENOENT" });
 });
 
-test("unsafe permissions fail closed", async t => {
+desktopRuntimeTest("unsafe permissions fail closed", async t => {
   const { home, paths } = await setup(t);
   await claimRuntime(home);
   await chmod(paths.state, 0o644);
@@ -40,7 +43,7 @@ test("unsafe permissions fail closed", async t => {
   await assert.rejects(discoverRuntime(home), { code: "RUNTIME_UNSAFE" });
 });
 
-test("discovery verifies the RPC endpoint independently of the new-turn endpoint", async t => {
+desktopRuntimeTest("discovery verifies the RPC endpoint independently of the new-turn endpoint", async t => {
   const { home, paths } = await setup(t);
   const lease = await claimRuntime(home, { codex_steer_version: "0.0.0" });
   const server = createServer(socket => socket.destroy());
@@ -57,7 +60,7 @@ test("discovery verifies the RPC endpoint independently of the new-turn endpoint
   } finally { if (server.listening) await new Promise(resolve => server.close(resolve)); }
 });
 
-test("discovery distinguishes missing, not-ready and malformed runtime state", async t => {
+desktopRuntimeTest("discovery distinguishes missing, not-ready and malformed runtime state", async t => {
   const { home, paths } = await setup(t);
   await assert.rejects(discoverRuntime(home), { code: "RUNTIME_UNAVAILABLE" });
   await claimRuntime(home);
@@ -68,7 +71,7 @@ test("discovery distinguishes missing, not-ready and malformed runtime state", a
   }
 });
 
-test("runtime discovery accepts only the official RPC alias and returns its verified target", async t => {
+desktopRuntimeTest("runtime discovery accepts only the official RPC alias and returns its verified target", async t => {
   const { home, paths } = await setup(t);
   const lease = await claimRuntime(home);
   const directory = `${await realpath("/tmp")}/codex-daemon-${process.getuid()}`;
@@ -91,7 +94,7 @@ test("runtime discovery accepts only the official RPC alias and returns its veri
   } finally { if (server.listening) await new Promise(resolve => server.close(resolve)); }
 });
 
-test("concurrent recovery cannot replace a newly acquired lease", async t => {
+desktopRuntimeTest("concurrent recovery cannot replace a newly acquired lease", async t => {
   const { home, paths } = await setup(t);
   await claimRuntime(home);
   const dead = spawnSync(process.execPath, ["-e", ""], { encoding: "utf8" }).pid;

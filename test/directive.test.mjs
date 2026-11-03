@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -10,7 +11,7 @@ const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 const state = () => ({ id: ID, status: { type: "active", activeFlags: [] }, turns: [{ id: "turn", status: "inProgress", items: [{ type: "userMessage", id: "u", content: [{ type: "text", text: "do this" }] }] }] });
 
 test("unannotated sends preserve exact text; annotated sends distinguish hypotheses and references", async t => {
-  const home = await mkdtemp("/private/tmp/cs-directive-"); t.after(() => rm(home, { recursive: true, force: true }));
+  const home = await mkdtemp(tempPrefix("cs-directive-")); t.after(() => rm(home, { recursive: true, force: true }));
   await writeFile(`${home}/result.txt`, "passed");
   assert.equal((await prepareDirective(ID, "raw\ntext", {}, "id")).wireText, "raw\ntext");
   const p = await prepareDirective(ID, "check", { source: "claude", kind: "hypothesis", evidence: [`${home}/result.txt`, "https://example.com/review"] }, "id");
@@ -36,7 +37,7 @@ test("based-on permits progress but rejects new user input or another active tur
 });
 
 test("journal records the wire envelope used for receipt verification and dry-run remains unrecorded", async t => {
-  const home = await mkdtemp("/private/tmp/cs-directive-"); t.after(() => rm(home, { recursive: true, force: true }));
+  const home = await mkdtemp(tempPrefix("cs-directive-")); t.after(() => rm(home, { recursive: true, force: true }));
   const receipt = await sendTrackedMessage(ID, "check it", { source: "reviewer", kind: "review" }, { home, send: async (threadId, text, options) => {
     await options.beforeSend(state()); assert.match(text, /送信者: reviewer/);
     return { delivery_status: "accepted", sent: true, client_message_id: options.clientMessageId, turn_id: "turn" };

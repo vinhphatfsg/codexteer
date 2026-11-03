@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 // Exercise the bundled CLI's real Unix WebSocket protocol in a private profile.
 // No Desktop process, real task, credentials, paid model, or daemon service.
 import assert from "node:assert/strict";
@@ -12,7 +13,7 @@ import { observationConnection } from "../src/connection.mjs";
 import { observeThread } from "../src/observe.mjs";
 import { appServerDoctor } from "../src/launcher.mjs";
 
-const root = await mkdtemp("/private/tmp/ct-transport-");
+const root = await mkdtemp(tempPrefix("ct-transport-"));
 const directory = `${root}/app-server-control`, socket = `${directory}/app-server-control.sock`;
 const env = { PATH: "/usr/bin:/bin", HOME: root, CODEX_HOME: root, RUST_LOG: "warn" };
 let child, owner, diagnostics = "", providerRequests = 0;

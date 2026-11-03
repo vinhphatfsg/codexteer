@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -11,7 +12,7 @@ import { DesktopSubscriptions, serveSubscriptions, ensureDesktopSubscription } f
 import { sendAppServerMessage } from "../src/app-server.mjs";
 
 async function fixture(t, connection) {
-  const root = await mkdtemp("/private/tmp/cs-ws-test-");
+  const root = await mkdtemp(tempPrefix("cs-ws-test-"));
   const http = createServer();
   const ws = new WebSocketServer({ server: http });
   ws.on("connection", connection);

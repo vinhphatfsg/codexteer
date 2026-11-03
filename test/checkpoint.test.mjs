@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
@@ -7,7 +8,7 @@ import { runCommand } from "../src/runner.mjs";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 async function fixture(t) {
-  const home = await mkdtemp("/private/tmp/cs-checkpoint-"); t.after(() => rm(home, { recursive: true, force: true }));
+  const home = await mkdtemp(tempPrefix("cs-checkpoint-")); t.after(() => rm(home, { recursive: true, force: true }));
   await mkdir(`${home}/project`); await mkdir(`${home}/project/src`); await writeFile(`${home}/project/src/input.txt`, "original");
   const options = { home, cwd: `${home}/project`, paths: ["src"] };
   const cp = await createCheckpoint(ID, "tests", options); return { ...options, id: cp.id };

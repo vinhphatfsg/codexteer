@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -20,7 +21,7 @@ test("bundled Codex safely steers past an orphaned historical inProgress turn", 
   skip: process.env.CODEXTEER_TEST_STEER_REPLAY !== "1", timeout: 60000,
 }, async t => {
   const { DatabaseSync } = await import("node:sqlite");
-  const home = await mkdtemp("/private/tmp/ct-steer-replay-");
+  const home = await mkdtemp(tempPrefix("ct-steer-replay-"));
   const id = "aaaaaaaa-aaaa-4aaa-8aaa-000000000010", old = "aaaaaaaa-aaaa-4aaa-8aaa-000000000011", next = "aaaaaaaa-aaaa-4aaa-8aaa-000000000012";
   const rejectedText = "LOCAL_STALE_REJECTED_STEER_REPLAY", acceptedText = "LOCAL_ACTIVE_ACCEPTED_STEER_REPLAY";
   let child, exited, lines, mock, heldResponse, stderr = "";

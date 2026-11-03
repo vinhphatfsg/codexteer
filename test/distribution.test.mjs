@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, chmod, symlink, link, lstat } from "node:fs/promises";
@@ -8,7 +9,7 @@ import { describeDistribution, placeLauncher, prepareDeployment } from "../src/d
 
 const exec = promisify(execFile);
 async function fixture(t) {
-  const root = await mkdtemp("/private/tmp/cs-distribution-");
+  const root = await mkdtemp(tempPrefix("cs-distribution-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const home = path.join(root, "home"), sourceRoot = path.join(root, "source");
   await mkdir(home, { mode: 0o700 }); await mkdir(sourceRoot, { mode: 0o700 });

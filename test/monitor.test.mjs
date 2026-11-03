@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Writable } from "node:stream";
@@ -418,7 +419,7 @@ test("output failure makes one best-effort pending flush without reconnecting or
 });
 
 test("supervisor observation timestamps advance while digest notifications are held", async t => {
-  const home = await mkdtemp("/private/tmp/ct-digest-"), previousHome = process.env.CODEX_HOME;
+  const home = await mkdtemp(tempPrefix("ct-digest-")), previousHome = process.env.CODEX_HOME;
   process.env.CODEX_HOME = home;
   t.after(async () => { if (previousHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previousHome; await rm(home, { recursive: true, force: true }); });
   const session = "22222222-2222-4222-8222-222222222222";

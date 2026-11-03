@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 // Validate our own tarball only. No public package execution, real Desktop,
 // account credentials, paid agents, or real task messages are involved.
 import assert from "node:assert/strict";
@@ -17,13 +18,16 @@ import { describeDistribution } from "../src/distribution.mjs";
 const withoutSession = text => text.replaceAll(/--supervisor '[0-9a-f-]{36}'/g, "--supervisor '<SESSION>'").replaceAll(/codexteer-s-[0-9a-f]{12}/g, "codexteer-s-<SESSION>");
 
 const exec = promisify(execFile), repo = fileURLToPath(new URL("../", import.meta.url));
-const root = await mkdtemp("/private/tmp/cs-package-");
+const root = await mkdtemp(tempPrefix("cs-package-"));
 const cache = path.join(root, "npm-cache"), workspace = path.join(root, "consumer"), home = path.join(root, "codex-home");
 const env = { PATH: process.env.PATH, HOME: root, CODEX_HOME: home, npm_config_cache: cache,
   npm_config_userconfig: path.join(root, "empty-npmrc"), npm_config_globalconfig: path.join(root, "empty-global-npmrc") };
 const ID = "11111111-1111-4111-8111-111111111111", TURN = "22222222-2222-4222-8222-222222222222";
 let lease, http, control, ws;
-try {
+if (process.platform !== "darwin") {
+  console.log(JSON.stringify({ suite: "package", result: "SKIP", reason: "the shared Desktop runtime uses the macOS /private/tmp namespace" }));
+  await rm(root, { recursive: true, force: true });
+} else try {
   await mkdir(home, { mode: 0o700 }); await mkdir(workspace);
   const cloudDocs = new Set(["docs/cloud.md", "docs/desktop-cloud.md"]);
   const source = await describeDistribution(repo);

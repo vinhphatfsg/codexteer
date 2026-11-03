@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm, symlink, chmod } from "node:fs/promises";
@@ -15,7 +16,7 @@ const ID = "11111111-1111-4111-8111-111111111111", OTHER = "22222222-2222-4222-8
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 const thread = () => ({ id: ID, status: { type: "active", activeFlags: [] }, turns: [{ id: "turn", status: "inProgress", items: [{ id: "u", type: "userMessage", content: [{ type: "text", text: "test this" }] }] }] });
 async function fixture(t) {
-  const home = await mkdtemp("/private/tmp/ct-workflow-");
+  const home = await mkdtemp(tempPrefix("ct-workflow-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   return { home };
 }
