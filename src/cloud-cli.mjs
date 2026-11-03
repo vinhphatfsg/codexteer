@@ -26,6 +26,7 @@ import { playSendSound } from "./sound.mjs";
 import { VERSION } from "./version.mjs";
 import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, verifyCheckpoint, runCheckpoint, attachArtifacts } from "./checkpoint.mjs";
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
+import { startWork } from "./work-start.mjs";
 
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code, execution_environment: "cloud" });
 function option(args, name, fallback) {
@@ -86,6 +87,21 @@ export async function mainCloud(argv) {
   const dependencies = desktopCloud ? desktopCloudConnection() : cloudConnection();
   if (desktopCloud && await desktopCloudCommands(command, args, { supervisor, output, bound, dependencies })) return;
 
+  if (command === "work") {
+    if (desktopCloud) throw failure("work start does not support Desktop Cloud because verified project assignment is unavailable.", "WORK_START_CONNECTION_UNSUPPORTED");
+    if (args.shift() !== "start" || supervisor) throw failure("Expected an unbound work start command.");
+    const project = option(args, "--project"), title = option(args, "--title"), branchOption = option(args, "--branch"), root = option(args, "--root", process.cwd());
+    const order = message(args), rows = (await cloudEnvironments()).environments, matches = rows.filter(e => e.id === project || e.name === project);
+    if (matches.length !== 1) throw failure("The cloud environment selector must match one accessible ID or exact name.");
+    const selected = matches[0], branch = branchOption ?? (selected.repositories.length === 1 ? selected.repositories[0].default_branch : null);
+    if (!branch) throw failure("Specify --branch: this environment does not identify one repository default branch.");
+    const data = await startWork({ project: selected.id, title, order, root, branch, connection: "cloud" }, {
+      create: async ({ project: environment, prompt, branch, attemptId }) => { const created = await createCloudTask(environment, branch, prompt, { attemptId }); return { ...created, thread_id: created.task_id, backend_project_id: environment }; },
+      reconcile: async record => { try { const receipt = await cloudCreationReceipt(record.attempt_id); return receipt.task_id ? { thread_id: receipt.task_id, backend_project_id: receipt.environment_selector } : null; } catch (error) { if (error.code === "CLOUD_RECEIPT_NOT_FOUND") return null; throw error; } },
+      read: (threadId, options) => observeThread(threadId, { ...options, limit: 1000 }, dependencies),
+    });
+    output("work.start", data); return;
+  }
   if (["read", "status", "watch"].includes(command)) {
     const options = { supervisor, connection, fullHistory: flag(args, "--full-history"), since: option(args, "--since"),
       limit: Number(option(args, "--limit", "50")), maxChars: Number(option(args, "--max-chars", "2000")), includeOutput: flag(args, "--include-output") };

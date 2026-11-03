@@ -86,3 +86,16 @@ native一覧はDesktopの実schemaに従い最新50件と全pinnedです。対�
 未知の応答、別プロジェクト、追加root、初回指示の不一致では停止し、作成や配送を繰り返しません。実環境で使う前に、その環境のDesktopとCLIでschema・所属・購読・承認動作を確認してください。
 
 DesktopのCloud環境構成で作成する場合は[Desktop Cloud](desktop-cloud.md)を参照してください。環境選択とローカルDesktopプロジェクト所属は別で、通常のリモートCloud環境への初回所属登録は未対応です。Desktop自身の実行環境に限定した署名付きAPIの対応範囲は、Desktop Cloudの説明を参照してください。
+
+## 方針付きの担当を一度に開始する
+
+`work start` は repository root 直下の `CODEXTEER.md` を読み、発注書と出典を分けて初回指示へ入れ、タスク作成、監督登録、managed project index への登録、初回観測までを行います。
+
+```sh
+codexteer work start --project 'サンプル' --title 'テスト担当' '失敗しているテストを直す' --json
+codexteer --connection cloud work start --project env_example --branch main --title '調査担当' - --json < order.txt
+```
+
+方針ファイルは `--root`（既定は現在のディレクトリ）直下の通常ファイルに限り、64 KiB以下、BOMなしのUTF-8で保存してください。改行や `${...}` などを展開せず原文のまま一度だけ入れます。ファイルがなければ正常に開始し、その旨を初回指示へ入れます。Web Cloudではサーバー側のcheckoutから方針を推測せず、`--root`で対応するローカルcheckoutを指定します。Desktop Cloudはproject assignmentを検証できないため未対応です。
+
+開始段階はローカルに保存されます。同じ発注を同時または再度開始してもcreateを繰り返しません。作成結果が不明な場合は読み取り照合だけを行い、自動で作り直しません。`thread create`と`supervise`は互換用の個別操作として引き続き利用できます。

@@ -63,3 +63,15 @@ export async function listManagedThreads(projectId, storage = {}) {
   for (const record of records) if (record?.project_id === projectId) result.push(validate(record, record.thread_id));
   return result.sort((a, b) => a.thread_id.localeCompare(b.thread_id));
 }
+
+export async function updateManagedThreadCursor(threadInput, syncCursor, storage = {}) {
+  const threadId = normalizeTaskId(threadInput);
+  if (typeof syncCursor !== "string" || !syncCursor) throw fail("A sync cursor is required.");
+  return withStoreLock(`project-index-${key(threadId)}`, async () => {
+    const current = await readRecord(bucket, key(threadId), storage);
+    if (!current) throw fail("Managed project membership was not found.", "PROJECT_INDEX_NOT_FOUND");
+    const record = validate({ ...current, sync_cursor: syncCursor }, threadId);
+    await writeRecord(bucket, key(threadId), record, storage);
+    return record;
+  }, storage);
+}

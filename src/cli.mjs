@@ -23,6 +23,8 @@ import { connectionMode, observationConnection, desktopReadOnly } from "./connec
 import { repairTurns } from "./turn-repair.mjs";
 import { listProjects, registeredRemoteProjects } from "./projects.mjs";
 import { createProjectThread } from "./thread-create.mjs";
+import { startWork } from "./work-start.mjs";
+import { readRecord } from "./store.mjs";
 import { verifyProjectThread } from "./thread-verify.mjs";
 import { withDeviceAccount, prepareDevice, recoverDeviceKey, enrollDevice, pairDevice, verifyDevice, deviceStatus, deviceIdentityInfo, readPairingCode } from "./remote-device.mjs";
 import { readDevice } from "./remote-device-store.mjs";
@@ -222,6 +224,19 @@ async function mainOnTarget(argv) {
     }
 
     let command = args.shift();
+    if (command === "work") {
+      if (args.shift() !== "start") throw usage("Expected: work start --project ID|NAME --title TITLE <WORK-ORDER>|-.");
+      if (supervisor) throw Object.assign(new Error("A bound supervisor cannot create another managed task."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+      if (connection !== "shared" || targetHost() !== "local") throw usage("Local work start requires --connection shared and a local Desktop project.");
+      const project = takeOption(args, "--project", undefined), title = takeOption(args, "--title", undefined), root = takeOption(args, "--root", process.cwd());
+      const order = readMessage(args);
+      const data = await startWork({ project, title, order, root, connection }, {
+        create: async ({ project: selector, title: name, prompt, attemptId }) => { const created = await createProjectThread(selector, prompt, { title: name, attemptId }); return { ...created, thread_id: created.thread_id, backend_project_id: created.project_id }; },
+        reconcile: async record => { const receipt = await readRecord("creations", record.attempt_id); return receipt?.thread_id ? { thread_id: receipt.thread_id, backend_project_id: receipt.project_id } : null; },
+        read: (threadId, options) => observeThread(threadId, { ...options, limit: 1000 }, connectionDependencies),
+      });
+      success("work.start", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
+    }
     if (command === "diff") throw usage("diff reads a Web Cloud task's recorded patch and is not available for local or remote Desktop tasks. Use read --include-output to inspect file changes.");
     const control = isControlTransport();
     if (targetHost() !== "local" && ["desktop", "debug-ui"].includes(command)) throw Object.assign(new Error("Desktop process/update and Accessibility diagnostics cannot target the remote host. No local operation was run."), { code: "REMOTE_HOST_OPERATION_UNSUPPORTED" });

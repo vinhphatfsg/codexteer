@@ -47,6 +47,7 @@ export const topics = {
       { need: "監督役（オーケストレーター）へ渡す本文だけを取得する（起動しない）", command: "help supervise prompt" },
       { need: "監督の観測→介入→結果確認の手順、Claude CodeのMonitorから使う", command: "help monitor" },
       { need: "指摘・解決条件・評価を追跡し、同じ指摘の重複介入を防ぐ", command: "help findings" },
+      { need: "方針付きの担当を作成から監督・初回観測まで一度に開始する", command: "help work" },
       { need: "作成先プロジェクトのIDとソースフォルダを調べる", command: "help projects" },
       { need: "送信先タスクのIDを探す", command: "help threads" },
       { need: "初回指示付きでタスクを作る・作成結果を照合する・URLをIDにする・残留ターンを修復する", command: "help thread" },
@@ -479,6 +480,27 @@ export const topics = {
       "画面を開くための明示的なコマンドで、送信や承認回答はしない。",
     ],
     see: ["thread", "debug-ui", "cloud", "remote"],
+  },
+
+  work: {
+    title: "方針を読み、担当タスクの作成から監督・初回観測までを一度に行う",
+    when: "リポジトリのCODEXTEER.mdと発注内容から、管理対象の担当を一つ立ち上げるとき。",
+    usage: ["work start --project ID|NAME --title TITLE [--root PATH] <WORK-ORDER>|-", "--connection cloud work start --project ENV_ID|NAME --title TITLE [--branch BRANCH] [--root PATH] <WORK-ORDER>|-"],
+    options: [
+      { name: "--project", text: "Desktopのproject ID/完全一致名、またはWeb Cloudのenvironment ID/完全一致名。" },
+      { name: "--title", text: "担当を識別する短い題名。役割の種類ではない。" },
+      { name: "--root", default: "現在のディレクトリ", text: "CODEXTEER.mdを読むローカルのrepository root。Web Cloudでも対応するローカルcheckoutを明示する。" },
+      { name: "--branch", text: "Web Cloudの取得可能なGit branch。環境に単一repositoryの既定branchがあれば省略可。" },
+    ],
+    returns: "attempt_id、段階、thread_id、監督・index・初回観測の完了状態。途中失敗後も同じ発注はcreateを再送せず、保存済み段階から読み取り照合だけを行う。",
+    examples: ["codexteer work start --project sample --title tests 'テストを追加する' --json", "codexteer --connection cloud work start --project env_example --branch main --title docs - --json < order.txt"],
+    notes: [
+      "CODEXTEER.mdはroot直下の通常ファイルだけを読み、64 KiB以下・BOMなしのUTF-8を改行も含め原文のまま一度だけ初回指示へ入れる。ない場合はその事実を初回指示へ書く。",
+      "方針は権限拡張や承認・質問への代理回答を許可しない。既存担当へ方針変更を自動送信しない。",
+      "Desktop Cloudは検証済みのproject assignment APIがないため未対応。既存のthread createとsuperviseは引き続き使える。",
+    ],
+    errors: [OPTIONS_INVALID, supervisorForbiddenError],
+    see: ["thread", "supervise", "cloud"],
   },
 
   "debug-ui": {

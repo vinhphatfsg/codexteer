@@ -36,7 +36,7 @@ export async function createStandaloneProjectThread(selector, prompt, settings, 
   workspace = projectWorkspace, history = fetchThread, membership = desktopMembership,
   inspectControl = verifyControlEndpoint, subscribe = ensureDesktopSubscription, write = writeRecord, sleep = delay,
 } = {}) {
-  const attemptId = randomUUID();
+  const attemptId = settings.attemptId ?? randomUUID();
   const title = settings.title ?? [...prompt.trim().replace(/\s+/gu, " ")].slice(0, 80).join("");
   let client, receipt, storage, creating = false, sending = false, accepted = false;
   try {
