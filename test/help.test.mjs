@@ -17,25 +17,17 @@ const source = readdirSync(path.join(root, "src")).filter(f => f.endsWith(".mjs"
   .map(f => readFileSync(path.join(root, "src", f), "utf8")).join("\n");
 const composedCodes = ["RUNTIME_PROTOCOL_UNSUPPORTED", "RUNTIME_PROTOCOL_UNVERIFIED", "CAPABILITY_UNSUPPORTED", "CAPABILITY_UNVERIFIED"];
 
-test("orchestration and monitoring help distinguish the local Web Cloud handoff from the Cloud orchestrate gate", () => {
+test("help routes orchestration verbs to four operations and preserves low-level details", () => {
+  const overview = helpData();
+  for (const verb of ["頼む", "見る", "言う", "止める", "再開する"]) assert.ok(overview.use_cases.some(c => c.need.includes(verb)));
+  assert.ok(overview.see.includes("details")); assert.ok(helpData("details").use_cases.some(c => c.command === "help supervise"));
   for (const name of ["orchestrate", "orchestrate prompt"]) {
-    const data = helpData(name);
-    assert.match(data.notes.join(" "), /cloud_command.*paired.*null/);
-    const error = helpData(name, { errors: true }).errors.find(row => row.code === "CLOUD_CAPABILITY_UNSUPPORTED");
-    assert.match(error.when, /Cloud経路にorchestrateはない/);
-  }
-  assert.match(helpData("orchestrate prompt").returns, /cloud_command/);
-  for (const name of ["orchestrate", "orchestrate prompt", "cloud"]) {
     const notes = helpData(name).notes.join(" ");
-    assert.match(notes, /占有せず.*並行作業を増やせる.*優先/);
-    assert.match(notes, /条件を満たさない、環境がない・照合できない場合は作成前にDesktop/);
-    assert.match(notes, /push済みブランチ/);
-    assert.match(notes, /GOALや方針で委任されていれば作業ブランチだけ.*委任がなければユーザーに確認/);
-    assert.match(notes, /既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止/);
+    assert.match(notes, /Desktop Cloud/); assert.match(notes, /work start/); assert.match(notes, /project control/);
+    assert.doesNotMatch(notes, /Web Cloud|--connection cloud(?:\s|$)|Codex担当は調査/);
   }
-  assert.match(helpData("monitor").notes.join(" "), /help cloud/);
-  const cloud = helpData("cloud").notes.join(" ");
-  for (const text of ["既定5000ms", "retry_after_ms", "完全なpatch/commit", "help monitor"]) assert.ok(cloud.includes(text));
+  assert.match(helpData("project").usage.join(" "), /project control pause\|stop\|resume/);
+  assert.match(helpData("orchestrate prompt").returns, /cloud_command（Desktop Cloud/);
 });
 
 test("every topic is served by the CLI as JSON and text with the fixed fields", () => {
@@ -75,7 +67,7 @@ test("help pages point to their error list, which --errors prints alone", () => 
 });
 
 test("related topics exist and the overview reaches every topic", () => {
-  const overview = JSON.stringify(topics.overview);
+  const overview = JSON.stringify(topics.overview) + JSON.stringify(topics.details);
   for (const [name, topic] of Object.entries(topics)) {
     for (const related of topic.see ?? []) assert.ok(topics[related], `${name} → ${related}`);
     assert.ok(name === "overview" || overview.includes(`help ${name}`), `overview does not route to ${name}`);

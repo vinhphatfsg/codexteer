@@ -484,17 +484,19 @@ export const topics = {
   },
 
   project: {
-    title: "managed projectの全担当を差分同期する",
+    title: "managed projectの全担当を差分同期・制御する",
     when: "オーケストレーターの再起動後や定期確認時に、全担当の進行・失敗・質問・承認待ちを一度に把握するとき。",
-    usage: ["project sync --project ID [--byte-budget N]", "project sync --continue TOKEN [--offset N] [--event-offset N] [--byte-budget N]", "project event TOKEN"],
+    usage: ["project control pause|stop|resume --project ID --all", "project control pause|stop|resume --project ID --work THREAD", "project sync --project ID [--byte-budget N]", "project sync --continue TOKEN [--offset N] [--event-offset N] [--byte-budget N]", "project event TOKEN"],
     options: [
       { name: "--project", text: "work startで登録したproject ID。" },
+      { name: "--all / --work THREAD", text: "project controlの対象。project全体か個別担当のどちらか一方を必ず指定する。" },
       { name: "--byte-budget", default: "16000", text: "構文的に完全なJSON出力へ使うUTF-8 byte予算（4096〜1048576）。" },
       { name: "--continue / --offset", text: "省略された担当を同じsync snapshotから取り出すtokenと開始位置。" },
     ],
-    returns: "membership_digest、complete、4群表示、3軸状態、history_gap、retry_after_ms、省略数、continuation_token。event tokenは長文をproject eventで全文取得できる。",
+    returns: "controlはrequested・changed・already・failedとcode、対象membership_digest。syncはcomplete、4群表示、3軸状態、history_gap、retry_after_ms、省略数、continuation_token。event tokenは長文をproject eventで全文取得できる。",
     examples: ["codexteer project sync --project sample --json", "codexteer project event <TOKEN> --json", "codexteer --connection desktop-cloud project sync --project sample --json"],
     notes: [
+      "controlは既存の担当別bindingを使い、部分失敗時も全結果を返す（終了値1・ok:false）。busyとbinding不在はfailed、同じ状態への再実行はalready。stop済みをresumeしない。受付済みプロセス自体は終了しない。",
       "常駐監視は開始しない。全担当を一巡してからbacklogをdrainし、completeな担当だけcursorを進める。",
       "未解決の質問・承認・失敗は解消を完全な観測で確認するまで再掲する。429は再試行せず、取得済み結果とretry_after_msを返す。",
       "未確認・history_gap・complete:falseを変化なしとして扱わない。既存read/watchは引き続き利用できる。",
@@ -554,4 +556,24 @@ export const topics = {
     ],
     see: ["doctor", "send", "open"],
   },
+};
+
+// Keep every existing low-level topic available behind the detailed entry.
+topics.details = { ...topics.overview, title: "詳細・低水準の操作", when: "単一スレッドの互換操作、配送照合、診断、実行環境や共有資源の詳細を調べるとき。" };
+topics.overview = {
+  title: "担当に頼む・見る・言う・止める",
+  when: "オーケストレーターは4操作を使う。再起動・要約後はproject syncから再開する。",
+  use_cases: [
+    { need: "頼む＝work start", command: "help work" },
+    { need: "見る＝project sync", command: "help project" },
+    { need: "言う＝work tell", command: "help work" },
+    { need: "止める＝project control", command: "help project" },
+    { need: "再開する＝project sync（pause解除は明示したresumeのみ）", command: "help project" },
+    { need: "詳細・低水準", command: "help details" },
+  ],
+  usage: ["help [TOPIC] [--errors]"],
+  examples: ["codexteer help work", "codexteer help project", "codexteer help orchestrate", "codexteer help details"],
+  returns: "発注、差分の確認、介入、制御の入口。担当範囲はCODEXTEER.mdと発注から決める。",
+  notes: ["Cloudの新規担当はDesktop Cloud。実行先の道具を確認して振り分け、unknownを再送しない。", "単一スレッドのsuperviseを含む既存topicはhelp detailsから使える。"],
+  see: ["work", "project", "orchestrate", "details"],
 };

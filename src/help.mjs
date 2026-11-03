@@ -14,6 +14,7 @@ export { VERSION };
 const byName = { ...supervision, ...observation, ...intervention, ...local, ...cloudRemote };
 export const topics = Object.fromEntries([
   "overview",
+  "details",
   "orchestrate",
   "orchestrate prompt",
   "supervise",

@@ -1,182 +1,70 @@
-# プロジェクトと目標からオーケストレーションを始める
+# オーケストレーション
 
-`prompt`を付けなければ、生成本文を渡して対話CLIを起動します。
+オーケストレーターは、担当への発注から検収・統合までを4操作で進めます。役割ラベルの指定や、担当ごとの監督ID・cursor・findingの手渡しは不要です。常駐プロセスは必要ありません。
 
-```bash
-codexteer orchestrate --project 'Example Project' '達成したい目標' --use-path-cli
-codexteer orchestrate --project 'Example Project' '達成したい目標' --agent codex
-codexteer orchestrate --project 'Example Project' '達成したい目標' --agent claude -- --model <MODEL>
-```
-
-起動方法は`supervise`と同じで、`--agent`の既定は`claude`です。`codex`も指定できます。これは起動先CLIの選択で、役割の本文はモデル非依存です。起動側は現在のcwd・環境・標準入出力を引き継ぎ、CLIの終了コードを返します。`SIGINT`・`SIGTERM`・`SIGHUP`を転送し、シグナル終了は128+シグナル番号です。
-
-最初の`--`以降はすべて起動するCLIの引数として、順序・空文字・改行を保持して渡します。その後ろにCLI側の`--`と生成本文を一つの引数として追加し、shellで再展開しません。`--json`は直接起動では使えません。本文のJSONが必要な場合は`orchestrate prompt ... --json`を使います。
-
-目標は一つの引用した引数か`-`で渡します。`--`で始まる目標はstdinの`-`を使ってください。stdinの目標は起動前に読み取るため、その入力は対話CLIへ再送しません。通常の引数で目標を渡す場合はstdinもそのまま対話CLIへ引き継ぎます。
-
-`--use-path-cli`は本文内のcodexteerコマンドをPATH方式にし、保存コピーを作りません。省略時は保存済みCLI・Node版・canonical `CODEX_HOME`・接続指定を固定した起動ファイル（`CODEX_HOME/codex-steer/bin/codexteer-p-<hash>`）のパスを、本文の実行コマンドにします。起動するエージェント自体は、どちらの方式でもPATHから選びます。PATH方式の直接起動でも`CODEX_HOME`の所有者と権限を検証し、必要ならディレクトリを作成します。入力不正や保存コピーの改変、unsafe profileではエージェントを起動しません。
-
-起動側はDesktopへ接続せず、本文を受け取ったオーケストレーターがプロジェクト照合・作成・監視を開始します。プロジェクト用の単一スレッド監督IDは作りません。各子の監督登録と制御は本文の手順に従います。
-
-## 本文だけ生成する
-
-```bash
-codexteer orchestrate prompt --project 'Example Project' \
-  'モーション図鑑で現状の動作を確認し、変更を指示できる状態にする'
-```
-
-生成した本文を同じPCのオーケストレーターへ依頼として渡します。役割はモデルに依存せず、Codex自身もオーケストレーターを担当できます。既存スレッドIDは不要です。特定スレッドを監督するときは、従来の `supervise prompt <THREAD> [MESSAGE]` を使います。
-
-生成ではDesktopへ接続しません。プロジェクトの照合、チャット作成、送信、監督登録、監視は、本文を受け取ったオーケストレーターが開始します。既定ではCLIと依存を内容ハッシュ別に保存・検証し、元のNodeとcanonical `CODEX_HOME`を使うコマンドを本文へ埋め込みます。
-
-```bash
-# 実行環境のPATHとCODEX_HOMEを使う本文。CLIのコピーは作らない
-codexteer orchestrate prompt --project 'Example Project' '達成したい目標' --use-path-cli
-
-# 子の監督IDと送信元のCLI識別を明示する（エージェントは起動しない）
-codexteer orchestrate prompt --project 'Example Project' '達成したい目標' --agent codex
-
-# 改行を含む目標を標準入力で渡す
-codexteer orchestrate prompt --project 'Example Project' - < goal.txt
-
-# 目標が -- で始まる場合
-codexteer orchestrate prompt --project 'Example Project' -- '--から始まる目標'
-
-codexteer help orchestrate prompt
-```
-
-`--project`はローカルでは登録済みプロジェクトのIDか完全一致名です。`--host HOST --remote-transport paired`では接続先の正式ID・Desktop登録ID・一意の完全一致名を使い、host・paired・指定したローカルcallerを子作成/監督コマンドへ保持します。接続先の選択とcaller条件は[リモートのCLI操作](remote-operations.md)を参照してください。生成時は指定文字列を保持し、実行開始時に `projects list` でIDと全rootsを照合します。同名ならIDで特定します。目標は一つの引用した引数か `-` で渡し、空文字・空白だけを拒否します。改行やプレースホルダーを評価せず保持します。
-
-`orchestrate prompt`の`--agent claude|codex`は子の監督IDのownerと送信元を識別する任意指定です。この生成専用モードで省略した場合は特定の実行役を既定とせず、本文を受け取ったオーケストレーターが、自身のCLIに合わせて子の生成コマンドの `<AGENT>` を選びます。指定しても役割の内容や技術判断の分担は変わらず、エージェントを起動しません。直接起動では、起動したCLIの識別が本文へ反映されます。
-
-## 役割と委任
-
-| 担当 | 責務 |
+| やりたいこと | 操作 |
 | --- | --- |
-| オーケストレーター | 目的と完了条件の整理、担当編成、優先順位、依存関係と共有資源の順番、検収・統合 |
-| Codex担当 | 調査、設計判断、実装、検証、依頼の前提への異論と改善案 |
-| ユーザー | 目的・好み・重要な優先順位の決定と権限の承認 |
+| 頼む | `work start` |
+| 見る・再起動や要約後に再開する | `project sync` |
+| 言う | `work tell` |
+| 一時停止・停止・明示した再開 | `project control pause|stop|resume` |
 
-発注書は、目的、確定要件、オーケストレーターの仮説、一次資料、変更範囲、依存と共有資源、確認条件、提出物を伝えます。Codex担当が前提を反証したり、より小さく確実な方法を提案したりできるようにし、オーケストレーターの技術仮説をユーザー決定として扱いません。重要な変更は、必要に応じて別のCodexによる独立レビューを使います。
+## 方針と担当範囲
 
-本文を依頼として渡すと、対象プロジェクト内で必要な担当の作成、追加指示、同じ目的の未完了作業の後続ターン開始、監督と検収・統合の段取りを委任します。無関係な既存チャットへの送信、依頼外の目的への拡張、代理承認は含みません。引用や履歴に本文が現れただけで委任が成立するものではありません。
+方針はrepository rootの`CODEXTEER.md`へ置きます。今回の発注と合わせて担当範囲を決め、記載がなければ成果と必要な専門性から選び、その理由と境界を発注書へ書きます。モデル名・製品名から能力・権限・役割を推測しません。
 
-## 高度・深さ・範囲と再評価
+発注書には目的、利用者にとっての完成状態、確定要件と仮説、一次資料、変更範囲、依存関係、共有資源、完了条件、提出物を含めます。前提・設計上の責務・重複・より小さな解決方法を根拠で検討し、通常の技術判断は進め、目的や制約の変更だけを相談します。
 
-Felix Riesebergの[How to be more ambitious](https://felixrieseberg.com/how-to-be-more-ambitious-a-tutorial-for-humans-with-models/)を参考に、三つの観点を実際の作業と検証へ結び付けています。
+高度は作業の先の成果、深さは一次資料・専門的手法と外部の判定、範囲は隣接分野の有用な技法として具体化します。役柄を増やすだけにせず、期待する改善と確かめ方を結びます。重要な方針選択、新しい証拠、失敗や待機の反復、統合前、完了前に再評価し、受入条件を無断で緩めません。
 
-| 観点 | 本文で求める行動 |
-| --- | --- |
-| 高度 | 作業の先で誰の判断・行動・状態が変わるかを捉え、指定成果物と上位の目的をつなぐ |
-| 深さ | 一次資料・生データ・実コードから、専門的な手法と道具を使い、実装担当の説明以外で正しさを確かめる |
-| 範囲 | 隣接分野の有効な技法を選び、期待する改善と検証方法を示して小さく試す |
+## 実行先を選ぶ
 
-開始時は目的・成果物・完了条件・仮説・方法・外部の判定・次の確認点を短く記録して実行へ移ります。主要な方針の選択前、重要な新しい証拠、同じ失敗や待機の反復、統合前、全体の完了前に再評価します。
+必要なUnity、Blender、GUI、実機、localの未コミット差分などが、その実行先で使えると確認済みかで選びます。Desktop Cloudの構成ごとに必要なら環境調査タスクを先に出し、確認済みの道具がなければlocal Desktopを選びます。実行先の名前だけで能力を推測しません。
 
-再評価では、目的へ近づいているか、前提が崩れていないか、代理指標だけを改善していないか、より良い手法がないかを確認します。結果は「継続・計画変更・権限や目的の確認」の判断と根拠、次の検証として残します。長い思考の実況や、通知ごとの儀式的な点検は求めません。
+新規Cloud担当はDesktop Cloudを使います。`--project`はcodexteerの調整用namespaceで、Desktop DBへの所属ではありません。`--environment`は公開済み構成のIDまたは完全一致名、`--root`は方針を読むローカルcheckoutです。方針の原文バイト・SHA-256とGit出典をreceiptに保存しますが、Cloud checkoutとの一致は未検証として扱います。
 
-現状・要求基準・挑戦目標を分け、高い到達点を試す余地を持たせます。上位の目的や挑戦目標は仮説として検証し、ユーザーの依頼の置き換え、受入条件の無断緩和、分野や担当数の無制限な追加には使いません。
+基点ブランチは作成引数で指定できません。pushが委任されていれば作業ブランチだけへpushし、担当にそのブランチとSHAをfetch・照合させます。main・既定ブランチへの直接pushや無関係な差分の混入は行いません。進行しない担当はsyncで確認し、unknownの再送や追加steerを起動の回避策にしません。
 
-## 作成から完了まで
+環境の再公開が実行中の担当へ影響した運用観測があります。条件や保証は未確認と区別し、再公開もビルド・画面・DB等と同じ共有資源として順番を管理します。resourceは協調用リースで、OSの強制ロックではありません。
 
-1. 対象プロジェクトと全rootsを照合し、既存の担当と共有資源を確認する。
-2. 必要な担当の発注書をファイルに保存し、`thread create --project <ID> --title <TITLE> - --json` へ標準入力で渡す。
-3. 作成結果のIDとreceiptを保存する。created/acceptedの照合失敗は`thread verify <ATTEMPT-ID> --json`で同じ子とreceiptを再照合する。部分成功・unknownでは同じ子を調べ、自動再作成・再送しない。verifyはDesktopへの読取りだけで、unknown/未受付を成功に変更しない。
-4. 同じCLIから子ごとの `supervise prompt` を生成・保存し、register/read/watchを開始する。子の監視を開始できなければ、追加作成を止めて報告する。
-5. 個別の監督ID、読了cursor、findings、配送照合を使って介入する。必要な継続は同じ委任の未完了作業に限る。
-6. 最終差分と検証・成果物を検収し、統合と統合後の確認を担当へ依頼して全体の目的達成まで追う。
-
-作成用コマンドは特定スレッドの `--supervisor` を持ちません。子の観測・送信は、子ごとに生成した監督用の起動ファイル（`supervise prompt --json`の`data.command`）を使います。既定の保存済みCLI方式とPATH方式を子の生成にも引き継ぎます。既存監督IDからの `orchestrate prompt` と、観測専用の `--connection desktop` は拒否します。
-
-担当ごとの生成方針には、目的の継続（idleの担当への`--new-turn`による再開の許可）、監視の終了条件（ユーザーの停止指示か全体の完了）、Codexの独立した判断、三つの観点を含めます。共通手順は方針による再開の許可と終了条件を受け付けますが、単一スレッド監督の標準方針はどちらも定めないため、その挙動は変わりません。
-
-## Web Cloudの担当を使う
-
-ローカルの`orchestrate`と`orchestrate prompt`の本文は、Web Cloud（`task_` ID）の条件付き手順を常に含みます。有効化フラグはありません。Web Cloudはローカルの画面・ビルド・実機やUnity Editorを占有せず並行作業を増やせるため、Cloudから取得できるソースとブランチで完結し、ローカル未コミット差分・実機・GUIが不要な担当で優先します。条件を満たさない、環境がない・照合できない場合は作成前にDesktopを選びます。発注書には取得可能な基点、提出物と統合先を含めます。ローカルファイルや差分の暗黙のアップロードは行いません。
-
-ローカル共有資源（Unity Editor等）の待ちが増える場合は、その資源なしで進められるコード変更を上記の条件でWeb Cloudへ分けます。ローカル資源は`resource`リースで順番に、統合後の確認・画面確認に使います。Cloudで利用できるビルド・検証手段は環境ごとに確認します。
-
-JSONの`data.cloud_command`は、監督IDを持たないWeb Cloud専用コマンドです。既存の`data.command`はDesktop用のままです。保存方式では同じ配布コピー・Node・canonical CODEX_HOMEを使う別の起動ファイル、PATH方式では`codexteer --connection cloud`になります。Desktop用起動ファイルへ`--connection cloud`を追加したり、内容を書き換えたりしません。pairedリモートでは`cloud_command: null`となり、本文にCloud手順を含めません。
-
-Cloud担当では、本文の専用コマンドで`projects list`を読み、対象リポジトリと環境を照合します。Desktopのproject IDとCloud環境IDは別物です。作成は`thread create --project <ENV-ID> --branch <BRANCH> - --json`へ発注書を渡します。`--title`・`--model`・ローカル権限指定は使いません。作成結果不明時は`thread receipt <ATTEMPT-ID>`を確認し、Desktopの`thread verify`は使いません。部分成功やunknownから自動再作成・再送しません。
-
-`<BRANCH>`はCloud環境から取得できるpush済みの作業ブランチです。必要なpushはGOALや方針で委任されていれば作業ブランチだけに行い、委任がなければユーザーに確認します。既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止です。`--branch`の省略は、環境が一つのリポジトリの既定ブランチを特定でき、その基点でよい場合に限ります。
-
-本文の`<CREATE-COMMAND>`は担当を作成した経路のコマンド全文に置き換え、子の`supervise prompt`生成と`supervise stop`に使います。子の観測・介入は、返された子自身の`data.command`を保持します。Cloudの送信方式・照会間隔・差分の限界と検収は、子の本文と[Cloudの手順](cloud.md)に従います。
-
-Cloud接続での`orchestrate`自体は未対応です。オーケストレーターは同じPCで動き、担当の作成先を選びます。
-
-## 制御と確認範囲
-
-`supervise pause/stop`は個別スレッドの監督制御です。プロジェクト全体の一括pause/stopや常駐スケジューラーは追加していません。オーケストレーターへの監督停止指示は、新規作成・追加送信・自分のMonitor/watchを止め、各担当の監督を`supervise stop`で終了する指示として扱い、実行中のCodex担当の作業自体を止める指示とは区別します。全体の完了時も各担当の監督を終了します。
-
-`resource`は参加者間の協調用リースで、OSの強制ロックや公平な待ち行列ではありません。利用順はオーケストレーターが調整します。監督登録がactiveでも、継続して監視できていることを証明しません。
-
-JSON出力は次の形です。`project_selector`は照合前の指定文字列です。
-
-```json
-{
-  "ok": true,
-  "command": "orchestrate.prompt",
-  "data": {
-    "project_selector": "Example Project",
-    "goal": "達成したい目標",
-    "agent": null,
-    "prompt": "目標・役割・再評価と操作手順を含む本文…",
-    "connection": "shared",
-    "cloud_command": "codexteer --connection cloud",
-    "cli_mode": "path",
-    "deployment": null,
-    "node": null
-  }
-}
-```
-
-既定の `cli_mode: saved` は、`supervise prompt`と同じdeploymentとnodeのメタデータを返します。生成時にプロジェクト用の監督IDや登録記録は作りません。
-
-生成成功は、受け取るAIの方針遵守や実プロジェクトの目的達成を証明するものではありません。
-
-## Managed mutationの分類
-
-managed threadの操作は次の4種類として扱います。
-
-1. **新しい外部効果**: send/new-turn、local spawn、remote `command/exec`、`thread/shellCommand`、resource acquire、checkpoint command dispatch。共通のexternal-effect gateでactive supervisorを検査し、同じsupervisor lockを通すため、pause/stopが成立した後は開始しません。受付receiptを得られないDesktop UI sendとpaired `command/exec`はmanaged threadでは未対応です。
-2. **受付済み操作の後始末・照合**: 実行結果の保存、受付済みresource runのlease renew/release、history/creation receiptの読み取り照合。新しい外部効果を起こさないためpause/stop後も完了できます。unknownを自動再送しません。
-3. **監督判断の記録変更**: findingのresolve/dismiss/reopen/evaluate、history mark、unknownの手動解決。現在の低水準コマンド契約を維持しており、この版ではmanaged pause/stopへの統一適用は未実装です。高水準介入面を追加する際に、stopped supervisorからの自動変更を拒否する必要があります。
-4. **読み取り**: read/status、記録一覧、receipt照合。pause中も利用できます。stopped supervisorの観測制限は各既存コマンドの契約を維持します。
-
-`thread repair --apply`は人間が明示的に行うoffline保守です。managed stateをactiveへ変更せず、新しいworker実行やsendを行わないため上記の外部効果には含めません。修復後は古いcursorを使わず読み直してください。
-
-## Managed担当への指示
-
-`codexteer work tell <THREAD> <INSTRUCTION> --json` は、その担当を含む最新のcompleteな`project sync`を基点にします。通常はsync token、cursor、finding、監督ID、source、kindを指定しません。membershipまたは並行syncが競合した場合だけ、再syncまたは確認済み`--sync-token`を要求します。
-
-配送直前に保存cursorから最新まで読み直し、新しいevent・turn変更・質問・承認待ち・attention不明・history gap・不完全syncがあれば配送しません。findingとjournalを内部作成し、同じ意図のaccepted/unknown配送を再送しません。unknown時はread-only照合だけを行います。`--new-turn`はidle/terminal担当で、同じ委任の未完了作業を続ける場合だけ使用します。この同一委任かどうかはCLIが推測しないため、オーケストレーターが人間の依頼に照らして判断します。
-
-質問・承認待ちに代理回答するoptionはありません。方針ファイルのhashが開始時から変わっていれば結果に表示しますが、変更後の方針を既存担当へ自動送信しません。
-
-## プロジェクト全体の再同期
-
-`codexteer project sync --project <ID> --json` は常駐プロセスを作らず、project indexの全担当を保存済みcursorから読みます。まず全担当を1ページずつ巡回してからbacklogをdrainするため、1件の巨大履歴より他担当の質問・承認待ちを優先して発見できます。completeな担当だけcursorが進みます。
-
-結果はexecution・attention・observationの3軸と、「動作中」「対応が必要」「検収待ち」「未確認」の4群を返します。未解決の質問・承認・失敗は、完全な観測で解消を確認するまで再掲します。cursor不正は`history_gap:true`、429は再試行せず`retry_after_ms`として、取得済みの他担当と一緒に返します。
-
-出力は既定16000 UTF-8 bytesを予算とし、JSONを途中で切りません。省略時は`omitted_works`・`omitted_events`・`continuation_token`を返します。`project sync --continue <TOKEN> --offset <NEXT_OFFSET> --event-offset <NEXT_EVENT_OFFSET>`で同じsnapshotの続きを取得できます。各eventの`full_command`または`project event <TOKEN>`は、syncで要約された長文を切らずに返します。`membership_digest`はsync開始時の対象集合を示します。
-
-`project sync`の出力はUTF-8のJSON byte予算を守ります。続きがあるときは、`continuation_token`、`next_offset`、`next_event_offset`をそのまま次の呼出しへ渡します。同じ担当のイベントも複数ページへ分割されます。
+## 4操作
 
 ```sh
-codexteer project sync --continue <TOKEN> --offset <NEXT_OFFSET> --event-offset <NEXT_EVENT_OFFSET> --byte-budget 4096 --json
+codexteer work start --project sample --root /path/to/checkout --title tests - --json < order.txt
+codexteer --connection desktop-cloud work start --project sample --environment example-config --root /path/to/checkout --title verify - --json < order.txt
+codexteer project sync --project sample --json
+codexteer work tell <THREAD> - --json < instruction.txt
+codexteer --connection desktop-cloud work tell <DURABLE-THREAD> - --json < instruction.txt
+codexteer project control pause --project sample --work <THREAD> --json
+codexteer project control resume --project sample --work <THREAD> --json
+codexteer project control stop --project sample --all --json
 ```
 
-`details_omitted:true`の詳細は、イベントの`token`または担当行の`detail_token`を`project event`へ渡して取得できます。byte予算は4096〜1048576です。未解決の質問・承認・失敗は、後続ページから消えただけでは解消扱いにしません。解消の明示的な観測証拠がない間は、以前の理由とイベントtokenを再掲します。不完全な観測では解消を確定せず、並行syncと競合した結果は送信の基点に使えません。
+sharedの作成先はDesktopの実在project ID・完全一致名とrootsを照合します。sharedとDesktop Cloudを同じproject集合に入れる場合は同じ調整用IDを使い、各担当の接続はmembershipへ保存します。発注本文をシェルコードとして評価しません。
 
-`work start`のCloud接続は`desktop-cloud`です。`--project`はcodexteerの調整用namespaceであり、Desktop DBへのproject割当は行いません。`--environment`には公開済みenvironment configurationのIDまたは完全一致名、`--root`には方針を読むローカルcheckoutを明示します。
+作成結果の担当IDとreceiptを記録します。同じ発注はcreateを繰り返さず、部分成功・unknown・観測不能では同じ担当を読み取り照合します。membershipを先に登録してから監督を結び、stoppedを自動で置き換えません。初回観測が不完全ならcursorを保存しません。
+
+syncは全担当を一巡してからbacklogを読み、動作中・対応が必要・検収待ち・未確認へ分類します。未解決attentionは明示的な解消証拠が得られるまで根拠とtokenを再掲します。履歴の欠落、429、不完全な取得を変化なしと扱いません。再起動・要約後はsyncから再開します。
 
 ```sh
-codexteer --connection desktop-cloud work start --project sample --environment codexteer --root /path/to/checkout --title tests - --json < order.txt
+codexteer project sync --continue <TOKEN> --offset <NEXT_OFFSET> --event-offset <NEXT_EVENT_OFFSET> --json
+codexteer project event <EVENT-TOKEN> --json
 ```
 
-方針の原文バイトとSHA-256、root、environment configuration ID、取得できたローカルGitのremote URL・branch・commitをローカルreceiptへ保存します。ローカルcheckoutの情報は出典であり、Cloud checkoutとの一致や未コミット差分の転送を意味しません。Cloud側との一致は`source.cloud_checkout_match: "unverified"`として明示します。
+出力は既定16000 UTF-8 bytes、指定範囲4096〜1048576です。同じ担当内のイベントも分割します。続きは返されたtokenと両offsetを使い、`details_omitted:true`ならeventのtokenまたは担当行のdetail_tokenから詳細を取得します。
 
-同じ発注の再実行は保存済みattemptを使い、初回配送を含め再作成・再送しません。作成結果が不明な場合は、attempt・environment・prompt digestと保存済みuser messageを読み取り照合します。見つからない、履歴が不完全、初回観測にhistory gapがある場合は完了を主張せずcursorを保存しません。質問・承認状態が不明なbackendでは`work tell`は拒否します。`--connection cloud work start`は未対応です。既存の低水準Cloudコマンドは維持します。
+tellは最新のcomplete syncから送信直前まで再照合し、新しいイベント、質問・承認待ち、attention不明、履歴欠落、不完全な観測では拒否します。代理回答はせず、同じ意図やunknownを自動再送しません。`--new-turn`はidle/terminalで同じ委任の未完了作業がある場合だけです。
+
+controlはproject全体の新しい監督IDを作らず、各担当の既存recordを制御します。`--all`と`--work`はどちらか一方を指定します。返り値のrequested・changed・already・failed、各code、membership_digestを確認してください。部分失敗でも全担当の結果を返し、CLIは終了値1（JSONはok:false）です。busyは未完了、binding不在は失敗、同じ状態への再実行はalreadyです。stop済みはresumeできません。対象集合は呼出し開始時のsnapshotで、新しく追加された担当は含まれません。
+
+pause/stopは新しい外部効果を拒否する制御で、受付済みの担当プロセス自体を終了させません。ユーザーの停止指示では新規作成・追加送信も止め、controlの部分失敗を報告します。停止中でも既存の結果保存・後始末はできます。別IDや低水準操作で制御を迂回しません。
+
+## 本文生成と互換操作
+
+`orchestrate prompt --project sample '目標' --json`で起動せず本文を取得できます。保存方式は同じCLI・Node・CODEX_HOMEを固定し、PATH方式は`--use-path-cli`です。`cloud_command`はDesktop Cloud用で、paired hostではnullです。paired hostのwork startは未対応のため、本文はそこで新規作成を指示しません。
+
+単一スレッドの`supervise`と既存の低水準操作は互換用に残します。入口は`help details`です。詳細な配送照合・checkpoint・resourceの契約は各topicを参照してください。
+
+## 検収
+
+受付、担当の完了報告、検収、統合済みを区別します。目的、確定要件、最終差分、検証の全件結果、成果物の実在を確認し、統合後も検証します。外観や操作が目的なら実物も確認します。テスト成功や他モデルの賛同だけで完了とせず、残件と未確認を報告し、完了時は対象をproject control stopで制御します。

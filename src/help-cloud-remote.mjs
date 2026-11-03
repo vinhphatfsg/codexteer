@@ -104,7 +104,7 @@ export const topics = {
       ATTEMPT_WEB_ONLY,
       "diff_available:falseはサーバーに記録済みのパッチがないだけで、変更ゼロの証明ではない。",
       "read --include-outputの変更・コマンド・終了コードと差分を照合する。完全なpatch/commitを取得して基点を確認し、委任済みの範囲で統合・検証する。差分取得は適用ではない。",
-      "ローカルのorchestrate本文は、ローカル資源を占有せず並行作業を増やせるWeb Cloudを、条件に向く担当で優先する。条件を満たさない、環境がない・照合できない場合は作成前にDesktopを選ぶ。Cloud接続のorchestrateは未対応。本文を失った監督役はhelp monitorに加えてこのCloud手順も読む。",
+      "新規担当はDesktop Cloudを推奨する。Web Cloudは既存利用向けの低水準経路。orchestrate本文は4操作を使い、必要な道具を構成ごとに確認する。",
       "基点はCloud環境から取得できるpush済みブランチ。必要なpushはGOALや方針で委任されていれば作業ブランチだけに行い、委任がなければユーザーに確認する。既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止。",
       "詳細はdocs/cloud.md。",
     ],

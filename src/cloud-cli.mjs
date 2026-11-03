@@ -1,3 +1,4 @@
+import { controlProject } from "./project-control.mjs";
 import { desktopCloudProjectDoctor, assignDesktopCloudProject, desktopCloudProjectReceipt, resolveDesktopCloudProjectAttempt } from "./desktop-cloud-project.mjs";
 import { listProjects as listDesktopProjects } from "./projects.mjs";
 import { isDesktopCloudTask, desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
@@ -91,6 +92,13 @@ export async function mainCloud(argv) {
 
   if (command === "project") {
     const action = args.shift();
+    if (action === "control") {
+      if (supervisor) throw failure("A bound supervisor cannot control project supervision.", "SUPERVISOR_CONTROL_FORBIDDEN");
+      const operation = args.shift(), project = option(args, "--project"), all = flag(args, "--all"), work = option(args, "--work"); exact(args, 0);
+      const data = await controlProject(project, operation, { all, work });
+      console.log(JSON.stringify(json ? { ok: data.complete, command: "project.control", data } : data, null, json ? undefined : 2));
+      if (!data.complete) process.exitCode = 1; return;
+    }
     if (action === "sync") {
       if (supervisor) throw failure("A bound supervisor cannot sync an entire project.", "SUPERVISOR_CONTROL_FORBIDDEN");
       const project = option(args, "--project"), byteBudget = Number(option(args, "--byte-budget", "16000")), continuation = option(args, "--continue"), offset = Number(option(args, "--offset", "0")), eventOffset = Number(option(args, "--event-offset", "0")); exact(args, 0);

@@ -21,52 +21,25 @@ function cli(options, args, input) {
   return spawnSync(process.execPath, [BIN, ...args], { ...options, ...(input === undefined ? {} : { input }) });
 }
 
-function childPreparation(prompt, agent = "codex", creationCommand = prompt.split("\n").find(line => line.endsWith(" --version")).slice(0, -" --version".length), thread = ID) {
-  const command = prompt.split("\n").find(line => line.includes(" supervise prompt <THREAD-ID> "));
-  assert.ok(command, "The workflow must generate an individually bound child prompt");
-  return command.replace("<CREATE-COMMAND>", creationCommand).replace("<THREAD-ID>", thread).replace("<AGENT>", agent);
-}
-
-test("orchestration preserves the goal and emits project operations and bound child preparation", () => {
-  const goal = "  見える成果\n{{command}} ${goal} $(touch should-not-exist)  ";
-  const data = orchestrationPrompt("My Project", goal, "prepared-command --connection shared");
-  assert.equal(data.goal, goal);
-  assert.equal(data.project_selector, "My Project");
-  assert.ok(data.prompt.includes(goal));
-  assert.equal(data.prompt.includes(ID), false, "An unrelated environment thread is not a target");
-  const operationLines = data.prompt.split("\n").filter(line => line.startsWith("prepared-command "));
-  assert.ok(operationLines.some(line => line.includes(" thread create --project <PROJECT-ID> ")));
-  assert.ok(operationLines.every(line => !line.includes("--supervisor")), "Project operations cannot borrow a child's supervisor ID");
-  assert.ok(childPreparation(data.prompt).includes(ORCHESTRATED_SUPERVISION_POLICY));
-  for (const rule of ["prepared-command --connection shared supervise stop <THREAD-ID> --json", "ユーザーの確定要件ではありません"]) assert.ok(data.prompt.includes(rule), rule);
+test("orchestration preserves literal goals, uses four operations and has no fixed model duties", () => {
+  const goal = "  user goal\n${literal} $(touch never)  ";
+  const data = orchestrationPrompt("P", goal, "prepared-command --connection shared", { cloudCommand: "prepared-cloud --connection desktop-cloud" });
+  assert.equal(data.goal, goal); assert.ok(data.prompt.includes(goal));
+  for (const operation of ["work start", "project sync", "work tell", "project control"]) assert.ok(data.prompt.includes(operation));
+  for (const text of ["CODEXTEER.md", "専門性", "理由と境界", "Unity", "Blender", "GUI", "実機", "確認タスク", "再起動", "unknown", "再公開", "fetch", "main", "高度", "一次資料", "隣接分野"]) assert.ok(data.prompt.includes(text), text);
+  assert.doesNotMatch(data.prompt, /supervise prompt|--supervisor|--agent|--based-on|findings create|--connection cloud(?:\s|$)|Web Cloud|Codex担当には/);
+  assert.doesNotMatch(ORCHESTRATED_SUPERVISION_POLICY, /Codex担当には|Claude|GPT|Gemini|[\r\n]/);
+  assert.ok(Buffer.byteLength(data.prompt) < 13000, "compact workflow limits context consumption");
 });
 
-test("PATH generation is deterministic, offline and does not create any state", t => {
-  const options = fixture(t);
-  options.env.PATH = "/no-cli-on-path";
-  const project = "日本語 'quoted' $(touch unexpected)", goal = "  user goal\n${command} {{threadId}} `literal`  ";
-  const args = ["orchestrate", "prompt", "--project", project, goal, "--use-path-cli"];
-  const plain = cli(options, args);
-  assert.equal(plain.status, 0, plain.stderr);
-  const result = cli(options, [...args, "--json"]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stderr, "");
-  const { command, data } = JSON.parse(result.stdout);
-  assert.equal(command, "orchestrate.prompt");
-  assert.equal(data.project_selector, project); assert.equal(data.goal, goal);
-  assert.equal(plain.stdout, data.prompt + "\n");
-  assert.equal(data.cli_mode, "path"); assert.equal(data.connection, "shared");
-  assert.equal(data.cloud_command, "codexteer --connection cloud");
-  assert.equal(data.deployment, null); assert.equal(data.node, null);
-  assert.equal(Object.hasOwn(data, "supervisor"), false);
-  assert.match(data.prompt, /^codexteer --connection shared projects list --json$/m);
-  assert.equal(data.agent, null);
-  assert.match(data.prompt, /--agent <AGENT> --use-path-cli --json/);
-  assert.match(childPreparation(data.prompt), / --agent codex --use-path-cli --json$/);
-  assert.doesNotMatch(data.prompt, /Claude|--agent claude/);
-  assert.doesNotMatch(data.prompt, /CODEX_HOME=|--require-node-version|codex-steer\/runtimes/);
-  assert.equal(existsSync(options.env.CODEX_HOME), false);
-  assert.deepEqual(readdirSync(options.cwd), []);
+test("PATH generation is deterministic, offline and retains the Desktop Cloud command", t => {
+  const options = fixture(t); options.env.PATH = "/no-cli-on-path";
+  const args = ["orchestrate", "prompt", "--project", "P", "goal", "--use-path-cli"];
+  const text = cli(options, args), result = cli(options, [...args, "--json"]);
+  assert.equal(result.status, 0, result.stderr); const { data } = JSON.parse(result.stdout);
+  assert.equal(text.stdout, data.prompt + "\n"); assert.equal(data.cloud_command, "codexteer --connection desktop-cloud");
+  assert.equal(data.agent, null); assert.equal(data.deployment, null); assert.equal(data.node, null);
+  assert.equal(existsSync(options.env.CODEX_HOME), false); assert.deepEqual(readdirSync(options.cwd), []);
 });
 
 test("stdin and literal goal arguments retain their exact content", t => {
@@ -115,157 +88,18 @@ test("invalid inputs and incompatible scope fail before deployment or a partial 
   assert.equal(plain.stdout, ""); assert.equal(plain.status, 1);
 });
 
-test("a saved project prompt creates a bound child prompt after the original source is removed", t => {
-  const options = fixture(t), source = path.join(options.cwd, "source");
-  mkdirSync(source);
+test("saved project and Desktop Cloud launchers survive removal of the original source", t => {
+  const options = fixture(t), source = path.join(options.cwd, "source"); mkdirSync(source);
   for (const entry of ["src", "bin", "assets", "scripts", "package.json", "LICENSE"]) cpSync(path.join(REPO, entry), path.join(source, entry), { recursive: true });
-  mkdirSync(path.join(source, "node_modules"));
-  cpSync(path.join(REPO, "node_modules/ws"), path.join(source, "node_modules/ws"), { recursive: true });
-  const generated = spawnSync(process.execPath, [path.join(source, "bin/codexteer.mjs"), "orchestrate", "prompt", "--project", "P", "goal", "--json"], options);
-  assert.equal(generated.status, 0, generated.stderr);
-  const { data } = JSON.parse(generated.stdout);
-  assert.equal(data.cli_mode, "saved");
-  assert.deepEqual(data.node, { path: realpathSync(process.execPath), version: process.version });
-  assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["bin", "runtimes"]);
-  rmSync(source, { recursive: true });
-  const receiving = { ...options, env: { ...options.env, PATH: "/missing-cli", CODEX_HOME: path.join(options.cwd, "other-home") } };
-  const versionCommand = data.prompt.split("\n").find(line => line.endsWith(" --version"));
-  const version = spawnSync("/bin/sh", ["-c", versionCommand], receiving);
-  assert.equal(version.status, 0, version.stderr);
-  assert.equal(version.stdout.trim(), data.deployment.version);
-  const child = spawnSync("/bin/sh", ["-c", childPreparation(data.prompt)], receiving);
-  assert.equal(child.status, 0, child.stderr);
-  const childData = JSON.parse(child.stdout).data;
-  assert.equal(childData.thread_id, ID);
-  assert.equal(childData.deployment.directory, data.deployment.directory);
-  assert.equal(childData.deployment.reused, true);
-  assert.equal(childData.supervisor.owner, "codex");
-  assert.ok(childData.prompt.includes(ORCHESTRATED_SUPERVISION_POLICY));
-  for (const rule of [/--new-turn[^。]*監督方針で再開/, /--new-turnでの再開[^。]*idle/, /監督方針の終了条件/, /監視の終了条件[^。]*全体の完了/]) assert.match(childData.prompt, rule, "The child prompt carries its own resume delegation and end condition");
-  const bootstrap = childData.prompt.split("\n").find(line => line.includes(` supervise register ${ID} `));
-  assert.match(path.basename(childData.command), /^codexteer-s-[0-9a-f]{12}$/);
-  assert.ok(bootstrap.startsWith(`${childData.command} `), "The child observes through its own launcher, not the project one");
-  const registered = spawnSync("/bin/sh", ["-c", bootstrap], receiving);
-  assert.equal(registered.status, 0, registered.stderr);
-  const savedCli = path.join(data.deployment.directory, "bin/codexteer.mjs");
-  const control = args => spawnSync(process.execPath, [savedCli, "--json", "supervise", ...args, ID], options);
-  const status = control(["status"]);
-  assert.equal(JSON.parse(status.stdout).data.session_id, childData.supervisor.session_id);
-  assert.equal(control(["pause"]).status, 0);
-  assert.equal(spawnSync("/bin/sh", ["-c", bootstrap], receiving).status, 0);
-  assert.equal(JSON.parse(control(["status"]).stdout).data.state, "paused", "Re-registration must not unpause a child");
-  const stop = data.prompt.split("\n").find(line => line.endsWith(" supervise stop <THREAD-ID> --json")).replace("<CREATE-COMMAND>", data.command).replace("<THREAD-ID>", ID);
-  assert.equal(JSON.parse(spawnSync("/bin/sh", ["-c", stop], receiving).stdout).ok, true);
-  assert.equal(JSON.parse(control(["status"]).stdout).data.state, "stopped", "The completion step ends the child's supervision");
-  const cloud = spawnSync("/bin/sh", ["-c", childPreparation(data.prompt, "codex", data.cloud_command, "task_fixture_orchestrate")], receiving);
-  assert.equal(cloud.status, 0, cloud.stderr);
-  const cloudData = JSON.parse(cloud.stdout).data;
-  assert.equal(cloudData.deployment.directory, data.deployment.directory);
-  assert.equal(cloudData.supervisor.connection, "cloud");
-  assert.ok(cloudData.prompt.includes(ORCHESTRATED_SUPERVISION_POLICY));
-  assert.match(readFileSync(data.cloud_command, "utf8"), /--connection cloud "\$@"/);
-  assert.doesNotMatch(readFileSync(data.cloud_command, "utf8"), /--host|--supervisor/);
-  assert.equal(existsSync(receiving.env.CODEX_HOME), false);
-});
-
-test("paired orchestration stays on its host and never prepares a Cloud command or workflow", t => {
-  for (const pathMode of [false, true]) {
-    const options = fixture(t);
-    const r = cli(options, ["--host", "remote-control:env_fixture", "--remote-transport", "paired", "orchestrate", "prompt", "--project", "P", "goal", ...(pathMode ? ["--use-path-cli"] : []), "--json"]);
-    assert.equal(r.status, 0, r.stdout + r.stderr);
-    const { data } = JSON.parse(r.stdout);
-    assert.equal(data.cloud_command, null);
-    assert.equal(data.host_id, "remote-control:env_fixture");
-    assert.equal(data.remote_transport, "paired");
-    assert.doesNotMatch(data.prompt, /Cloud|push済み|<CREATE-COMMAND>|--connection cloud|desktop-cloud|durable_/);
-    if (pathMode) {
-      assert.match(data.command, /--host 'remote-control:env_fixture' --remote-transport paired/);
-      assert.equal(existsSync(options.env.CODEX_HOME), false);
-    } else assert.equal(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer/bin")).length, 1);
+  mkdirSync(path.join(source, "node_modules")); cpSync(path.join(REPO, "node_modules/ws"), path.join(source, "node_modules/ws"), { recursive: true });
+  const result = spawnSync(process.execPath, [path.join(source, "bin/codexteer.mjs"), "orchestrate", "prompt", "--project", "P", "goal", "--json"], options);
+  assert.equal(result.status, 0, result.stderr); const { data } = JSON.parse(result.stdout); rmSync(source, { recursive: true });
+  for (const command of [data.command, data.cloud_command]) {
+    const r = spawnSync("/bin/sh", ["-c", command + " --version"], { ...options, env: { ...options.env, PATH: "/missing", CODEX_HOME: path.join(options.cwd, "other-home") } });
+    assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout.trim(), data.deployment.version);
   }
-});
-
-test("Web Cloud operation lines from saved and PATH orchestration are accepted by the CLI without mutations", t => {
-  const task = "task_fixture_orchestrate";
-  for (const pathMode of [false, true]) {
-    const options = fixture(t), bin = path.join(options.cwd, "bin"); mkdirSync(bin);
-    symlinkSync(BIN, path.join(bin, "codexteer")); symlinkSync(process.execPath, path.join(bin, "node"));
-    const preload = path.join(options.cwd, "cloud-read-only.mjs"), calls = path.join(options.cwd, "calls.jsonl");
-    writeFileSync(preload, `import fs from 'node:fs';
-globalThis.fetch = async (url, options) => {
-  fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({url, method:options.method})+'\\n');
-  if (options.method !== 'GET' || url !== 'https://chatgpt.com/backend-api/wham/environments') throw Error('Only the environment GET is allowed');
-  return new Response(JSON.stringify([{id:'env_fixture',label:'fixture/project',repo_map:{fixture:{repository_full_name:'fixture/project',default_branch:'main'}}}]));
-};`);
-    const token = `fixture.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "fixture-account" } })).toString("base64url")}.fixture`;
-    writeFileSync(path.join(bin, "codex"), `#!${process.execPath}
-const fs=require('node:fs'), args=process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify({args})+'\\n');
-if (args.join(' ')==='app-server --listen stdio://') {
-  let pending=''; process.stdin.setEncoding('utf8'); process.stdin.on('data',chunk=>{pending+=chunk;let i;while((i=pending.indexOf('\\n'))>=0){const m=JSON.parse(pending.slice(0,i));pending=pending.slice(i+1);if(m.id)console.log(JSON.stringify({id:m.id,result:m.method==='initialize'?{}:{authMethod:'chatgpt',authToken:${JSON.stringify(token)}}}));}});
-} else if(args.join(' ')==='cloud --version') console.log('codex-cli-cloud 0.157.1');
-else if(args.join(' ')==='cloud diff --help') console.log('Usage: codex cloud diff --attempt N');
-else if(args.join(' ')==='cloud diff ${task}') console.log('diff --git a/example b/example');
-else { console.error('Unexpected official CLI operation'); process.exitCode=85; }
-`, { mode: 0o700 });
-    options.env = { ...options.env, PATH: bin, NODE_OPTIONS: `--import=${preload}` };
-    const generated = cli(options, ["orchestrate", "prompt", "--project", "P", "goal", ...(pathMode ? ["--use-path-cli"] : []), "--json"]);
-    assert.equal(generated.status, 0, generated.stderr);
-    const { data } = JSON.parse(generated.stdout);
-    assert.equal(data.connection, "shared");
-    assert.doesNotMatch(data.prompt, /desktop-cloud|durable_/);
-    const sections = Object.fromEntries(data.prompt.split("\n\n").filter(section => /^[567]\. /.test(section)).map(section => [section[0], section]));
-    assert.match(sections[5], /Unity Editor.*第6節の条件に従ってWeb Cloud.*resourceリース.*統合後の確認・画面確認/);
-    assert.match(sections[6], /占有せず.*並行作業を増やせます/);
-    assert.match(sections[6], /ローカル未コミット差分・実機・GUIを必要としない担当はWeb Cloudを優先/);
-    assert.match(sections[6], /条件を満たさない場合や作成前に環境がない・照合できない場合はDesktop/);
-    assert.match(sections[7], /選んだ作成先の手順だけを実行/);
-    assert.ok(sections[7].indexOf(data.cloud_command + " thread create ") < sections[7].indexOf(data.command + " thread create "), "The preferred Cloud path is presented before Desktop");
-    assert.match(sections[7], /Cloud環境から取得できるpush済みの作業ブランチ/);
-    assert.match(sections[7], /GOALや方針で委任されていれば作業ブランチだけ.*委任がなければユーザーに確認/);
-    assert.match(sections[7], /既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止/);
-    assert.doesNotMatch(data.prompt, /batchmode|EditMode/);
-    assert.doesNotMatch(ORCHESTRATED_SUPERVISION_POLICY, /[\r\n\u2028\u2029]/);
-    assert.equal(data.prompt.split(ORCHESTRATED_SUPERVISION_POLICY).length - 1, 1, "The child policy is emitted only once");
-    const workOrder = path.join(options.cwd, "work-order.txt"); writeFileSync(workOrder, "fixture work order");
-    const receiptDir = path.join(options.env.CODEX_HOME, "codex-steer/cloud-creations"); mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
-    writeFileSync(path.join(receiptDir, ID + ".json"), JSON.stringify({ schema: 1, attempt_id: ID, creation_status: "not_created", submission_status: "not_sent" }), { mode: 0o600 });
-    const execute = command => {
-      const r = spawnSync("/bin/sh", ["-c", command], { ...options, timeout: 15000 });
-      assert.equal(r.status, 0, `${command}\n${r.stdout}\n${r.stderr}`);
-      return JSON.parse(r.stdout).data;
-    };
-    const lines = data.prompt.split("\n").filter(line => line.startsWith(data.cloud_command + " "));
-    assert.equal(lines.length, 3, "Execute every concrete Cloud operation in the orchestration body");
-    let environments;
-    for (const line of lines) {
-      let command = line.replace("<ENV-ID>", "env_fixture").replace("<BRANCH>", "feature/fixture").replace("<ATTEMPT-ID>", ID).replace("<WORK-ORDER-FILE>", workOrder);
-      if (line.includes(" thread create ")) command = command.replace(" - --json", " - --json --dry-run");
-      const result = execute(command);
-      if (line.includes(" projects list ")) environments = result.projects;
-      if (line.includes(" thread create ")) {
-        assert.equal(result.creation_status, "not_created"); assert.equal(result.submission_status, "not_sent");
-        assert.equal(execute(command.replace(" --branch feature/fixture", "")).branch_source, "environment-default");
-      }
-    }
-    assert.equal(environments[0].project_id, "env_fixture");
-    const child = execute(childPreparation(data.prompt, "codex", data.cloud_command, task));
-    assert.equal(child.cli_mode, data.cli_mode);
-    assert.equal(child.supervisor.connection, "cloud");
-    assert.equal(child.deployment?.directory, data.deployment?.directory);
-    const childLines = child.prompt.split("\n");
-    execute(childLines.find(line => line.startsWith(child.command + " supervise register ")) + " --json");
-    for (const help of ["monitor", "cloud"]) execute(`${child.command} help ${help} --json`);
-    execute(childLines.find(line => line === child.command + " help cloud") + " --json");
-    const patch = execute(childLines.find(line => line.startsWith(child.command + " diff ")));
-    assert.equal(patch.diff_available, true);
-    const stop = data.prompt.split("\n").find(line => line.endsWith(" supervise stop <THREAD-ID> --json"));
-    assert.equal(execute(stop.replace("<CREATE-COMMAND>", data.cloud_command).replace("<THREAD-ID>", task)).state, "stopped");
-    const recorded = readFileSync(calls, "utf8").trim().split("\n").map(line => JSON.parse(line));
-    assert.ok(recorded.some(row => row.method === "GET"));
-    assert.ok(recorded.every(row => row.method === "GET" || row.args?.[0] === "app-server" || row.args?.[1] === "diff" || row.args?.[1] === "--version"), "No create or send was dispatched");
-    assert.deepEqual(readdirSync(receiptDir), [ID + ".json"], "Dry-run creates no additional receipt");
-  }
+  assert.match(readFileSync(data.cloud_command, "utf8"), /--connection desktop-cloud/);
+  assert.doesNotMatch(data.prompt, /supervise prompt|--connection cloud(?:\s|$)/);
 });
 
 test("the project launcher is reused by content, and a modified one is refused without being rewritten", t => {
@@ -284,40 +118,48 @@ test("the project launcher is reused by content, and a modified one is refused w
   assert.equal(readFileSync(first.command, "utf8"), tampered);
 });
 
-test("PATH orchestration retains PATH mode when generating the child's managed prompt", t => {
-  const options = fixture(t), bin = path.join(options.cwd, "bin");
-  const generated = cli(options, ["orchestrate", "prompt", "--project", "P", "goal", "--use-path-cli", "--json"]);
-  const { data } = JSON.parse(generated.stdout);
-  mkdirSync(bin);
-  symlinkSync(BIN, path.join(bin, "codexteer"));
-  symlinkSync(process.execPath, path.join(bin, "node"));
-  const child = spawnSync("/bin/sh", ["-c", childPreparation(data.prompt)], { ...options, env: { ...options.env, PATH: bin } });
-  assert.equal(child.status, 0, child.stderr);
-  const childData = JSON.parse(child.stdout).data;
-  assert.equal(childData.cli_mode, "path");
-  assert.equal(childData.deployment, null); assert.equal(childData.node, null);
-  assert.match(childData.prompt, new RegExp(`--supervisor '${childData.supervisor.session_id}' --connection shared`));
-  assert.ok(childData.prompt.includes(ORCHESTRATED_SUPERVISION_POLICY));
-  assert.equal(existsSync(options.env.CODEX_HOME), false);
+test("paired orchestration never issues unsupported work-start or Cloud examples", t => {
+  for (const pathMode of [false, true]) {
+    const options = fixture(t), r = cli(options, ["--host", "remote-control:env_fixture", "--remote-transport", "paired", "orchestrate", "prompt", "--project", "P", "goal", ...(pathMode ? ["--use-path-cli"] : []), "--json"]);
+    assert.equal(r.status, 0, r.stdout + r.stderr); const { data } = JSON.parse(r.stdout);
+    assert.equal(data.cloud_command, null); assert.equal(data.host_id, "remote-control:env_fixture");
+    assert.ok(!data.prompt.split("\n").some(l => l.startsWith(data.command + " work start ")));
+    assert.doesNotMatch(data.prompt, /--connection cloud|--connection desktop-cloud/);
+  }
 });
 
-test("either CLI identity can supervise without changing the model-neutral role division", t => {
-  const options = fixture(t), bin = path.join(options.cwd, "bin");
-  mkdirSync(bin);
-  symlinkSync(BIN, path.join(bin, "codexteer"));
-  symlinkSync(process.execPath, path.join(bin, "node"));
+test("launch identity never imposes worker scope or agent flags on the workflow", t => {
+  const options = fixture(t);
   for (const agent of ["claude", "codex"]) {
-    const generated = cli(options, ["orchestrate", "prompt", "--project", "P", "goal", "--agent", agent, "--use-path-cli", "--json"]);
-    assert.equal(generated.status, 0, generated.stderr);
-    const { data } = JSON.parse(generated.stdout);
-    assert.equal(data.agent, agent);
-    const command = childPreparation(data.prompt);
-    assert.ok(command.includes(` --agent ${agent} `));
-    const child = spawnSync("/bin/sh", ["-c", command], { ...options, env: { ...options.env, PATH: bin } });
-    assert.equal(child.status, 0, child.stderr);
-    const childData = JSON.parse(child.stdout).data;
-    assert.equal(childData.supervisor.owner, agent);
-    assert.ok(childData.prompt.includes(`--source ${agent === "claude" ? "claude-code" : "codex"}`));
+    const result = cli(options, ["orchestrate", "prompt", "--project", "P", "goal", "--agent", agent, "--use-path-cli", "--json"]);
+    assert.equal(result.status, 0, result.stderr); const { data } = JSON.parse(result.stdout);
+    assert.equal(data.agent, agent); assert.doesNotMatch(data.prompt, /--agent|Claude|Codex担当には/);
   }
-  assert.equal(existsSync(options.env.CODEX_HOME), false);
+});
+
+test("every saved and PATH prompt command example reaches the real CLI parser without live backend effects", t => {
+  for (const pathMode of [false, true]) {
+    const options = fixture(t), bin = path.join(options.cwd, "bin"); mkdirSync(bin);
+    symlinkSync(BIN, path.join(bin, "codexteer")); symlinkSync(process.execPath, path.join(bin, "node"));
+    const result = cli(options, ["orchestrate", "prompt", "--project", "P", "goal", ...(pathMode ? ["--use-path-cli"] : []), "--json"]);
+    assert.equal(result.status, 0, result.stderr); const { data } = JSON.parse(result.stdout);
+    mkdirSync(options.env.CODEX_HOME, { recursive: true, mode: 0o700 });
+    const order = path.join(options.cwd, "order.txt"); writeFileSync(order, "fixture instruction");
+    const lines = data.prompt.split("\n").filter(l => [data.command, data.cloud_command].some(prefix => prefix && l.startsWith(prefix + " ")));
+    assert.ok(lines.length >= 13);
+    for (const line of lines) {
+      const expanded = line.replace(/<PROJECT>/g, "P").replace(/<CHECKOUT>/g, options.cwd).replace(/<TITLE>/g, "fixture")
+        .replace(/<ORDER-FILE>|<INSTRUCTION-FILE>/g, order).replace(/<DURABLE-THREAD>/g, "durable_" + ID)
+        .replace(/<THREAD>|<TOKEN>|<EVENT-TOKEN>/g, ID).replace(/<EVENT-OFFSET>|<OFFSET>/g, "0").replace(/<ENVIRONMENT>/g, "fixture-config");
+      const r = spawnSync("/bin/sh", ["-c", expanded], { ...options, env: { ...options.env, PATH: bin, CODEX_THREAD_ID: "" }, timeout: 10000 });
+      assert.ok([0, 1].includes(r.status), expanded + "\n" + r.stderr);
+      if (line.endsWith(" --version")) { assert.equal(r.status, 0); assert.ok(r.stdout.trim()); continue; }
+      const response = JSON.parse(r.stdout);
+      if (!response.ok) {
+        const expected = new Set(["RUNTIME_UNAVAILABLE", "RUNTIME_NOT_READY", "CLOUD_AUTH_UNAVAILABLE", "WORK_TELL_UNMANAGED", "PROJECT_CONTROL_UNMANAGED", "PROJECT_SYNC_CONTINUATION_NOT_FOUND", "PROJECT_EVENT_NOT_FOUND"]);
+        assert.ok(expected.has(response.error?.code), expanded + "\n" + r.stdout);
+      }
+    }
+    assert.equal(existsSync(path.join(options.cwd, "never")), false);
+  }
 });

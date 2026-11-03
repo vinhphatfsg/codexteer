@@ -1,3 +1,4 @@
+import { controlProject } from "./project-control.mjs";
 import { readFileSync } from "node:fs";
 import { desktopDoctor, inspectDesktopUi, openDesktopThread } from "./desktop.mjs";
 import { sendDesktopUiMessage } from "./desktop-ui-send.mjs";
@@ -231,6 +232,15 @@ async function mainOnTarget(argv) {
     let command = args.shift();
     if (command === "project") {
       const action = args.shift();
+      if (action === "control") {
+        if (supervisor) throw Object.assign(new Error("A bound supervisor cannot control project supervision."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        const operation = args.shift(), project = takeOption(args, "--project", undefined), all = takeFlag(args, "--all"), work = takeOption(args, "--work", undefined);
+        if (args.length) throw usage("Unexpected project control arguments.");
+        const data = await controlProject(project, operation, { all, work });
+        if (json) console.log(JSON.stringify({ ok: data.complete, command: "project.control", data }));
+        else console.log(JSON.stringify(data, null, 2));
+        if (!data.complete) process.exitCode = 1; return;
+      }
       if (action === "sync") {
         if (supervisor) throw Object.assign(new Error("A bound supervisor cannot sync an entire project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         const project = takeOption(args, "--project", undefined), byteBudget = Number(takeOption(args, "--byte-budget", "16000"));

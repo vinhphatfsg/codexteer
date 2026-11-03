@@ -100,7 +100,7 @@ export async function registerSupervisor(threadInput, sessionInput, { owner = "e
   }, storage), storage);
 }
 
-export async function controlSupervisor(threadInput, action, { expectedSession, ...storage } = {}) {
+export async function controlSupervisor(threadInput, action, { expectedSession, expectedConnection, reportTransition = false, ...storage } = {}) {
   const threadId = normalizeTaskId(threadInput);
   if (!["pause", "resume", "stop"].includes(action)) throw failure("Expected pause, resume or stop.", "SUPERVISOR_INVALID");
   return withStoreLock(`supervisor-${threadId}`, async () => {
@@ -108,12 +108,15 @@ export async function controlSupervisor(threadInput, action, { expectedSession, 
     if (!record) throw failure("No supervisor is registered for this task.", "SUPERVISOR_NOT_REGISTERED");
     if (targetHost() !== "local" && (record.remote_transport ?? "native") !== remoteTransport()) throw failure("Keep the registered remote transport when controlling this supervisor. No state was changed.", "SUPERVISOR_MISMATCH");
     if (expectedSession && record.session_id !== supervisorId(expectedSession)) throw failure("The supervisor session changed.", "SUPERVISOR_MISMATCH");
+    if (expectedConnection && record.connection !== expectedConnection) throw failure("The supervisor connection differs from project membership.", "SUPERVISOR_MISMATCH");
     if (record.state === "stopped" && action !== "stop") throw failure("A stopped supervisor cannot be resumed. Start a new supervisor.", "SUPERVISOR_STOPPED");
     if (action === "resume") await assertSupervisor(threadId, record.session_id, storage);
+    const desired = { pause: "paused", resume: "active", stop: "stopped" }[action];
+    if (record.state === desired) return reportTransition ? { ...record, changed: false } : record;
     const updated = { ...record, state: { pause: "paused", resume: "active", stop: "stopped" }[action], updated_at: new Date().toISOString() };
     updated.stopped_session_ids = stoppedSessionIds(updated);
     await writeRecord(supervisorBucket(threadId), threadId, updated, storage);
-    return updated;
+    return reportTransition ? { ...updated, changed: true } : updated;
   }, storage);
 }
 

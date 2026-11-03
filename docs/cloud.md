@@ -1,4 +1,6 @@
-# Codex Cloudを既存の操作体系で使う
+新規担当は[Desktop Cloud](desktop-cloud.md)を推奨します。このページは既存のWeb Cloudタスクの互換操作です。
+
+# Web Cloud（既存利用向け）
 
 CloudのタスクIDまたは公式リンクを指定すると、通常の`read`・`watch`・`send`・`supervise`・`history`・`instructions`・`findings`を使えます。Desktopには接続・フォールバックしません。タスクをまだ選んでいない環境一覧・タスク一覧・新規作成では`--connection cloud`で接続先を指定します。
 
@@ -34,7 +36,7 @@ codexteer --supervisor <SESSION_ID> --connection cloud history check task_exampl
 
 監督プロンプトが返した実際のSESSION_ID・保存済みCLI・Node・CODEX_HOMEをそのまま使います。PATHモードも共通です。監督エージェントの起動前に登録し、終了時にその登録を停止します。自分の状態を解除したり、IDを外して介入したりしないでください。
 
-ローカルの`orchestrate`本文は、ローカル資源を占有せず並行作業を増やせるWeb Cloudを、条件に向く担当で優先します。Cloudから取得できるソース・ブランチで完結し、ローカル未コミット差分・実機・GUIが不要な担当が対象です。条件を満たさない、環境がない・照合できない場合は作成前にDesktopを選びます。専用の`cloud_command`で環境照合・作成・子の監督本文生成・監督停止を行い、Desktop用コマンドの接続指定は変えません。[オーケストレーション](orchestration.md)を参照してください。`--connection cloud orchestrate`自体は未対応です。
+新規担当には[Desktop Cloud](desktop-cloud.md)を使います。`--connection cloud`は既存利用のための低水準経路で、`work start`では受け付けません。オーケストレーターの手順は[4操作](orchestration.md)を参照してください。
 
 要約や再起動で保存した監督本文を失った場合は、生成された監督コマンドで`help monitor`と`help cloud`を読み直します。`help monitor`は共通手順で、接続をcloudにしてもCloud固有の注意は含みません。
 

@@ -4,6 +4,8 @@
 
 ## 0.22.0 — 未公開
 
+- `project control pause|stop|resume`で個別または全担当を制御できます。部分失敗とbusyを明示し、stop済みの担当は再開しません。オーケストレーター本文とhelpを4操作へ整理し、担当範囲を方針と発注から決め、確認済みの道具でDesktop Cloudとlocal Desktopを選びます。
+
 - `project sync`の並行実行によるcursorの巻き戻りを防ぎ、未解決attentionの根拠をページをまたいで保持します。担当内のイベントもcontinuationで分割してbyte予算を守り、不正な観測ページや停止済み担当の自動再登録を拒否します。
 
 - `work tell`を追加しました。最新のcomplete project syncから送信直前までを再照合し、質問・承認待ち、attention不明、history gap、並行sync、membership変更では送信しません。finding・source・kind・監督IDを内部化し、unknownと同一意図を自動再送しません。

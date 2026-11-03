@@ -1,5 +1,15 @@
 # Desktop Cloud
 
+新規Cloud担当の推奨経路です。高水準の操作は`work start`、`project sync`、`work tell`、`project control`を使います。必要な道具は構成ごとに確認し、実行先名からGUI・実機・Unity・Blender等の可用性を推測しません。未確認なら環境調査タスクかlocal Desktopを選びます。
+
+```sh
+codexteer --connection desktop-cloud work start --project sample --environment example-config --root /path/to/checkout --title verify - --json < order.txt
+codexteer project sync --project sample --json
+codexteer project control stop --project sample --all --json
+```
+
+基点ブランチは作成引数で指定できません。委任された作業ブランチをpushし、発注書にfetchするブランチとSHAを書きます。進行しない場合はsyncで確認し、unknownを再送しません。環境再公開が実行中の担当へ影響した運用観測があるため、共有資源として順番を管理します。影響の条件や保証は未確認として区別します。
+
 Desktop Cloud environment configurations use a different service from Web Cloud tasks. Use the same observation, sending, supervision, findings and instruction commands with a `durable_` task identifier or a `codex://threads/<UUID>?hostId=durable` link. A bare UUID continues to mean a local Desktop task; it never silently selects Cloud.
 
 ```sh
@@ -13,7 +23,7 @@ Authentication comes from the official CLI getAuthStatus API into memory. No cre
 
 Creation selects exactly one accessible configuration by ID or exact name and uses the server's default model. The first turn and later continuations carry the thread's selected environment and its deferred allocation flag. Omitting that flag can produce a server internal error despite successful thread creation. Internal errors, timeouts and disconnections after mutation dispatch remain unknown; they are never automatically retried. Creation receipts survive partial success. JSON and human-readable errors expose the created thread ID, attempt ID, receipt path and creation/delivery status even if setting a title or delivering the initial instruction fails. Inspect these identifiers rather than creating a replacement.
 
-A configuration is not a Desktop project. The tested remote Cloud thread/start rejects project assignment, while the general Desktop move tool cannot safely establish the source project of a directly created Cloud task. The separate signed assignment endpoint described below is restricted to Desktop execution. `--project` therefore fails before creation. Environment-only creation explicitly returns `project_membership: not_requested`. This implementation does not claim that such a task appears inside a local Desktop project. It does not edit Desktop's membership database or forge a caller context to work around the rejection.
+A configuration is not a Desktop project. The tested remote Cloud thread/start rejects project assignment, while the general Desktop move tool cannot safely establish the source project of a directly created Cloud task. The separate signed assignment endpoint described below is restricted to Desktop execution. The low-level `thread create --project` therefore fails before creation. The high-level `work start --project` is a separate codexteer coordination namespace and does not request Desktop DB assignment. Environment-only creation explicitly returns `project_membership: not_requested`. This implementation does not claim that such a task appears inside a local Desktop project. It does not edit Desktop's membership database or forge a caller context to work around the rejection.
 
 Read/watch/Monitor use the shared event model, cursor validation, reconnect reporting and supervisor controls. The service can return null backwards cursors for nonempty histories, so the adapter fetches complete turn pages and uses the shared aggregate cursor rather than synthesizing server bookmarks. The adapter permits at most 100 pages and a bounded receive size per response. This costs more than Desktop's fast paged path on long histories.
 
