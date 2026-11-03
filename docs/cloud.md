@@ -32,6 +32,10 @@ codexteer --supervisor <SESSION_ID> --connection cloud history check task_exampl
 
 監督プロンプトが返した実際のSESSION_ID・保存済みCLI・Node・CODEX_HOMEをそのまま使います。PATHモードも共通です。監督エージェントの起動前に登録し、終了時にその登録を停止します。自分の状態を解除したり、IDを外して介入したりしないでください。
 
+ローカルの`orchestrate`本文は、必要な担当だけをWeb Cloudで作成する条件付き手順を含みます。専用の`cloud_command`で環境照合・作成・子の監督本文生成・監督停止を行い、Desktop用コマンドの接続指定は変えません。[オーケストレーション](orchestration.md)を参照してください。`--connection cloud orchestrate`自体は未対応です。
+
+要約や再起動で保存した監督本文を失った場合は、生成された監督コマンドで`help monitor`と`help cloud`を読み直します。`help monitor`は共通手順で、接続をcloudにしてもCloud固有の注意は含みません。
+
 監督AIのsandboxがCLIのランチャー照会等を拒否する場合は、利用者が選んだ通常のコマンド承認レビューに、同じ固定CLIコマンドと必要理由を提示します。審査で拒否されたら停止し、許可範囲や書込み先を広げません。公式Codex CLI 0.157.1の`--approve-for-me`はworkspace-writeを選んで自動審査へ送るため、`--sandbox`と同時指定しません。監督CLIの終了コードだけを成功の証拠にせず、doctor・read・watch等の実行結果を確認します。
 
 ユーザーは通常の制御を使えます。
@@ -87,6 +91,8 @@ codexteer diff task_example --attempt 1 --json
 公式CLIが返す差分をそのまま返し、ローカルへ適用しません。既定試行で公式CLIが差分を提供せず、APIでも完了ターンに記録済みパッチがないことを確認できたときは、`diff_available: false`・`diff: null`・`local_changes: unknown`です。実機ではファイルの実差分があっても記録済みパッチが提供されない場合がありました。変更ゼロと解釈せず、`read --include-output`のコマンド証拠と区別します。特定の`--attempt 1..4`では他の試行から推測しません。
 
 checkpoint・resourceは同じローカル記録/コマンド機能で、Cloudタスクにも関連付けられます。明示したローカル入力・成果物・コマンドが対象であり、Cloud作業コピーがローカルにあるとは仮定しません。出力に`execution_environment: local`を示します。ローカルのテスト成功をCloud側の検証と取り違えないでください。
+
+検収では`read --include-output`の変更・コマンド・終了コードを差分と照合し、切り詰められた出力を完全なpatchと扱いません。取得した完全なpatch/commitは基点を確認して、委任された範囲で統合し、統合後に検証します。差分取得は適用ではなく、成果物を確認できない項目は未検証のままにします。
 
 Cloud作成時のタイトル・モデル/推論設定・ローカルの権限上書きは、現在の作成経路で適用を確認できていないため、無視せず送信前に拒否します。監督エージェント自身のモデルなどは、従来どおり`supervise --agent ... -- <AGENT_ARGS>`でそのエージェントへ渡します。承認/質問の代理回答、環境登録、Desktop UI操作はこのCloud接続の対象外です。
 

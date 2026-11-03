@@ -16,6 +16,19 @@ const source = readdirSync(path.join(root, "src")).filter(f => f.endsWith(".mjs"
   .map(f => readFileSync(path.join(root, "src", f), "utf8")).join("\n");
 const composedCodes = ["RUNTIME_PROTOCOL_UNSUPPORTED", "RUNTIME_PROTOCOL_UNVERIFIED", "CAPABILITY_UNSUPPORTED", "CAPABILITY_UNVERIFIED"];
 
+test("orchestration and monitoring help distinguish the local Web Cloud handoff from the Cloud orchestrate gate", () => {
+  for (const name of ["orchestrate", "orchestrate prompt"]) {
+    const data = helpData(name);
+    assert.match(data.notes.join(" "), /cloud_command.*paired.*null/);
+    const error = helpData(name, { errors: true }).errors.find(row => row.code === "CLOUD_CAPABILITY_UNSUPPORTED");
+    assert.match(error.when, /Cloud経路にorchestrateはない/);
+  }
+  assert.match(helpData("orchestrate prompt").returns, /cloud_command/);
+  assert.match(helpData("monitor").notes.join(" "), /help cloud/);
+  const cloud = helpData("cloud").notes.join(" ");
+  for (const text of ["既定5000ms", "retry_after_ms", "完全なpatch/commit", "help monitor"]) assert.ok(cloud.includes(text));
+});
+
 test("every topic is served by the CLI as JSON and text with the fixed fields", () => {
   for (const name of Object.keys(topics)) {
     const json = spawnSync(process.execPath, [BIN, "help", ...name.split(" "), "--json"], { encoding: "utf8" });

@@ -4,7 +4,7 @@ import { shellArgument, SUPERVISOR_AGENTS } from "./prompt-command.mjs";
 // to the existing child prompt generator, without a shell or template expansion.
 export const ORCHESTRATED_SUPERVISION_POLICY = [
   "このスレッドは、ユーザーがプロジェクトと目標を指定して委任した作業の担当です。全体の目標・確定要件と担当の完了条件に沿って監督し、必要な追加指示と同じ目的の未完了作業の継続を行います。",
-  "目的の変更・依頼外への拡張・人間の代理承認は委任に含みません。--new-turnでの再開は同じ委任の未完了作業が残るidleの担当に限り許可し、paused/stoppedや承認・質問待ちは迂回しません。監視の終了条件はユーザーの停止指示か全体の完了の確認で、監督はオーケストレーターがプロジェクト用の実行コマンドによるsupervise stopで終了します。",
+  "目的の変更・依頼外への拡張・人間の代理承認は委任に含みません。--new-turnでの再開は同じ委任の未完了作業が残るidleの担当に限り許可し、paused/stoppedや承認・質問待ちは迂回しません。監視の終了条件はユーザーの停止指示か全体の完了の確認で、監督はオーケストレーターが担当と同じ接続のプロジェクト用実行コマンドによるsupervise stopで終了します。",
   "Codex担当には調査・設計判断・実装・検証と、依頼の前提や設計への異論・改善案を求めます。ユーザーの確定要件とオーケストレーターの技術仮説を分け、反証が妥当なら計画と依頼を更新してください。",
   "設計上の責務、過剰な設計、作業の焦点を実ファイルと証拠で確認します。重要な発見・行き詰まり・検収時には、作業の先の成果、一次資料と専門的手法・外部検証、隣接分野の有用な技法を再点検します。",
   "新しい根拠のない同じ介入を繰り返さず、最終差分と検証結果・成果物を確認します。通常の進捗通知の言い換えは不要で、判断・成果・阻害要因が変わったときに報告します。",
@@ -25,17 +25,18 @@ export function validateOrchestrationInput(project, goal, agent) {
   }
 }
 
-export function orchestrationPrompt(project, goal, command, { agent, usePathCli = false } = {}) {
+export function orchestrationPrompt(project, goal, command, { agent, usePathCli = false, cloudCommand = null } = {}) {
   validateOrchestrationInput(project, goal, agent);
   if (typeof command !== "string" || !command) throw new Error("A prepared orchestration command is required.");
-  const childPrompt = `${command} supervise prompt <THREAD-ID> ${shellArgument(ORCHESTRATED_SUPERVISION_POLICY)} --agent ${agent ?? "<AGENT>"}${usePathCli ? " --use-path-cli" : ""} --json`;
+  const creationCommand = cloudCommand ? "<CREATE-COMMAND>" : command;
+  const childPrompt = `${creationCommand} supervise prompt <THREAD-ID> ${shellArgument(ORCHESTRATED_SUPERVISION_POLICY)} --agent ${agent ?? "<AGENT>"}${usePathCli ? " --use-path-cli" : ""} --json`;
   return {
     project_selector: project,
     goal,
     agent: agent ?? null,
     prompt: [
       `1. 役割・目標・委任範囲
-あなたは、Codex Desktopの担当を編成し、ユーザーの目的達成まで進めるオーケストレーターです。役割は特定のモデルに依存せず、Codex自身もオーケストレーターを担当できます。codexteerはCodex担当の適切な利用とステアリングに使います。
+あなたは、Codex担当を編成し、ユーザーの目的達成まで進めるオーケストレーターです。役割は特定のモデルに依存せず、Codex自身もオーケストレーターを担当できます。codexteerはCodex担当の適切な利用とステアリングに使います。
 プロジェクトの指定（開始時にIDを照合）: ${JSON.stringify(project)}
 ユーザーが指定した目標（以下を変更せず出発点にする）:
 ${goal}
@@ -71,12 +72,21 @@ ${command}
 ${usePathCli ? "command -v codexteer\n" : ""}${command} --version
 ${command} help thread --json
 ${command} projects list --json
-一覧から指定${JSON.stringify(project)}をIDまたは完全一致名で照合し、project_idと全rootsを記録します。同名ならIDをユーザーに確認します。cwdや別の既存チャットから所属を推測しません。以下の<PROJECT-ID>は照合した実在IDに置き換えます。`,
+一覧から指定${JSON.stringify(project)}をIDまたは完全一致名で照合し、project_idと全rootsを記録します。同名ならIDをユーザーに確認します。cwdや別の既存チャットから所属を推測しません。以下の<PROJECT-ID>は照合した実在IDに置き換えます。${cloudCommand ? `
+Web Cloudを使う場合だけ、Cloudから取得できるソース・ブランチで完結し、ローカル未コミット差分・実機・GUIを必要としない担当を選びます。次がWeb Cloud専用の作成用コマンドです。同じCLI・プロファイルを使い、--supervisorは持ちません。
+${cloudCommand}
+${cloudCommand} projects list --json
+環境のリポジトリと目標の対象を照合し、<ENV-ID>を特定します。Desktopのproject IDや同名だけで選ばず、発注書に取得可能な基点・提出物・統合先を記載します。ローカルのファイルや差分は暗黙にアップロードされません。` : ""}`,
       `7. 担当の作成と監督開始
-発注書をファイルに保存し、<TITLE>と<WORK-ORDER-FILE>を実際のタイトルとファイルに置き換え、シェル引数を正しく引用してください。目標や発注書をシェルコードとして評価しません。
+発注書をファイルに保存し、<TITLE>と<WORK-ORDER-FILE>を実際のタイトルとファイルに置き換え、シェル引数を正しく引用してください。目標や発注書をシェルコードとして評価しません。Desktop担当は次で作成します。
 ${command} thread create --project <PROJECT-ID> --title <TITLE> - --json < <WORK-ORDER-FILE>
 返されたthread_id、attempt_id、native_call_id、creation_status、delivery_status、verification_status、receipt_pathを保存します。createdやacceptedはすでに子が存在し入力を受け付けた状態で、後段の照合失敗でも作り直しません。created/acceptedの照合失敗は ${command} thread verify <ATTEMPT-ID> --json で同じreceiptと子を再照合できます（Desktopは読取りのみ）。unknown/dispatchingは未作成の証拠ではありません。receiptと同じ子を読取り照合し、作成や初回送信を自動再試行しません。
-子IDが分かったら、同じCLIから次を一度生成し、そのJSONをファイルに保存します。<THREAD-ID>は実在の子IDへ置き換えます。
+${cloudCommand ? `Web Cloud担当は次で作成します。<BRANCH>はCloudから取得可能なブランチです。環境が一つのリポジトリの既定ブランチを特定できる場合だけ--branchを省略できます。--title・--model・ローカル権限指定は付けません。
+${cloudCommand} thread create --project <ENV-ID> --branch <BRANCH> - --json < <WORK-ORDER-FILE>
+作成結果のtask_id/thread_id・attempt_id・creation_statusとreceiptを保存し、unknownは再作成しません。Cloudにthread verifyは使わず、作成結果不明時は次で保存済みreceiptを確認します。
+${cloudCommand} thread receipt <ATTEMPT-ID> --json
+以下の<CREATE-COMMAND>は、Desktop担当なら第6節のプロジェクト用、Web Cloud担当ならWeb Cloud専用の実行コマンド全文へ置き換えます。接続指定を追加・変更せず、担当IDと選んだコマンドを記録してください。
+` : ""}子IDが分かったら、同じCLIから次を一度生成し、そのJSONをファイルに保存します。<THREAD-ID>は実在の子IDへ置き換えます。
 ${agent === undefined ? "<AGENT>は、この本文を実行する監督CLIに合わせてclaudeまたはcodexへ置き換えます。特定の実行役を既定とせず、自分のCLI識別を選び、ユーザーへ選択の確認を求める必要はありません。" : `監督CLIの識別は指定された${agent}を使います。`}--agentは子の監督IDのownerと送信元の識別に使うもので、オーケストレーターの能力や役割を特定モデルに結び付けません。エージェントを起動する操作でもありません。
 ${childPrompt}
 data.supervisor.session_idを子の記録に結び付け、data.promptの開始手順を実行します。生成だけで監督登録や監視開始にはなりません。初回は共通手順を読み、各担当についてdoctor・register・readと履歴・有効指示・findingsの確認を行い、読み残しをdrainしたcursorからwatchを開始します。
@@ -89,7 +99,7 @@ data.supervisor.session_idを子の記録に結び付け、data.promptの開始�
 受付、担当の完了報告、検収、統合済みを区別します。提出後は目的との対応、最終差分、検証の対象と結果、成果物の実在を確認し、必要な統合と統合後の確認を担当へ依頼して完了まで追います。見た目や操作感が目的なら、数値やテストに加えて実物・画像・映像を確認します。独立レビューも証拠として検討し、別のモデルの賛同だけで正しさを認定しません。
 findingsの解決には子の手順に従い現在有効なcheckpointと条件を満たす根拠を残します。テスト成功だけで設計の妥当性や全体の目的達成を認定しません。最後に第3節の再評価を行い、最初の目標と確定要件を満たしたことを確認して全体の完了とします。満たせない条件は未確認・未完了のまま、残件と必要な判断を示します。
 全体の完了を確認したら、自分が起動したMonitor/watchを止め、担当ごとに次で監督を終了します。
-${command} supervise stop <THREAD-ID> --json`,
+${creationCommand} supervise stop <THREAD-ID> --json`,
       `10. 報告と停止
 ユーザーには、達成したこと、判断が必要なこと、阻害要因、見通しや計画の変化を簡潔に報告します。通知を言い換えただけの定期報告は不要です。
 既存のsupervise pause/stopは担当ごとの監督制御で、プロジェクト全体の新規作成や全担当を一括停止する機能ではありません。ユーザーからこのオーケストレーションの停止を指示されたら、新規作成・追加送信と自分が起動した全Monitor/watchを止め、第9節のsupervise stopで担当の監督を終了します。Codexの作業自体を停止する指示とは区別し、監督停止だけで実行中のCodexを終了させません。個別のpausedは観測だけ、stopped・SUPERVISOR_STOPPED・SUPERVISOR_MISMATCHはその監督を終了します。自分で解除したり、新しいID・別経路・IDなし送信へ切り替えて制御を迂回したりしません。`,

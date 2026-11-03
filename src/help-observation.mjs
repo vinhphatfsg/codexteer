@@ -104,6 +104,7 @@ export const topics = {
     ],
     procedure: supervisionSteps(),
     notes: [
+      "Web Cloudの監督はhelp cloudも併読する。この共通手順だけではCloudの送信方式・429・差分とローカル検証の限界を含まない。",
       ...NOTIFICATION_NOTES,
       ...STREAM_NOTES,
       "既存のログ監視を続け、その通知後にread --sinceを呼ぶ運用もできる。",

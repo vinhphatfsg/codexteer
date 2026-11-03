@@ -90,6 +90,18 @@ Felix Riesebergの[How to be more ambitious](https://felixrieseberg.com/how-to-b
 
 担当ごとの生成方針には、目的の継続（idleの担当への`--new-turn`による再開の許可）、監視の終了条件（ユーザーの停止指示か全体の完了）、Codexの独立した判断、三つの観点を含めます。共通手順は方針による再開の許可と終了条件を受け付けますが、単一スレッド監督の標準方針はどちらも定めないため、その挙動は変わりません。
 
+## Web Cloudの担当を使う
+
+ローカルの`orchestrate`と`orchestrate prompt`の本文は、Web Cloud（`task_` ID）の条件付き手順を常に含みます。有効化フラグはなく、オーケストレーターが担当ごとに判断します。Cloudから取得できるソースとブランチで完結し、ローカル未コミット差分・実機・GUIが不要な仕事が対象です。発注書には取得可能な基点、提出物と統合先を含めます。ローカルファイルや差分の暗黙のアップロードは行いません。
+
+JSONの`data.cloud_command`は、監督IDを持たないWeb Cloud専用コマンドです。既存の`data.command`はDesktop用のままです。保存方式では同じ配布コピー・Node・canonical CODEX_HOMEを使う別の起動ファイル、PATH方式では`codexteer --connection cloud`になります。Desktop用起動ファイルへ`--connection cloud`を追加したり、内容を書き換えたりしません。pairedリモートでは`cloud_command: null`となり、本文にCloud手順を含めません。
+
+Cloud担当では、本文の専用コマンドで`projects list`を読み、対象リポジトリと環境を照合します。Desktopのproject IDとCloud環境IDは別物です。作成は`thread create --project <ENV-ID> --branch <BRANCH> - --json`へ発注書を渡します。`--title`・`--model`・ローカル権限指定は使いません。作成結果不明時は`thread receipt <ATTEMPT-ID>`を確認し、Desktopの`thread verify`は使いません。部分成功やunknownから自動再作成・再送しません。
+
+本文の`<CREATE-COMMAND>`は担当を作成した経路のコマンド全文に置き換え、子の`supervise prompt`生成と`supervise stop`に使います。子の観測・介入は、返された子自身の`data.command`を保持します。Cloudの送信方式・照会間隔・差分の限界と検収は、子の本文と[Cloudの手順](cloud.md)に従います。
+
+Cloud接続での`orchestrate`自体は未対応です。オーケストレーターは同じPCで動き、必要な担当だけをCloudへ割り当てます。
+
 ## 制御と確認範囲
 
 `supervise pause/stop`は個別スレッドの監督制御です。プロジェクト全体の一括pause/stopや常駐スケジューラーは追加していません。オーケストレーターへの監督停止指示は、新規作成・追加送信・自分のMonitor/watchを止め、各担当の監督を`supervise stop`で終了する指示として扱い、実行中のCodex担当の作業自体を止める指示とは区別します。全体の完了時も各担当の監督を終了します。
@@ -108,6 +120,7 @@ JSON出力は次の形です。`project_selector`は照合前の指定文字列�
     "agent": null,
     "prompt": "目標・役割・再評価と操作手順を含む本文…",
     "connection": "shared",
+    "cloud_command": "codexteer --connection cloud",
     "cli_mode": "path",
     "deployment": null,
     "node": null
