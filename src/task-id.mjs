@@ -23,7 +23,7 @@ export function taskConnection(value, selected = "shared") {
   return cloud ? "cloud" : selected;
 }
 
-const values = new Set("--environment --connection --supervisor --require-node-version --host --remote-transport --context-thread --thread --backend --source --kind --evidence --based-on --finding --expires-at --supersedes --checkpoint --limit --max-chars --since --poll-ms --timeout-ms --until --notify --settle-ms --max-hold-ms --owner --key --condition --note --rating --reason --root --path --exclude --command --cwd --artifact --status --by --token --ttl-ms --agent --project --env --branch --title --byte-budget --continue --offset --model --thinking --cursor --attempt".split(" "));
+const values = new Set("--environment --connection --supervisor --require-node-version --host --remote-transport --context-thread --thread --backend --source --kind --evidence --based-on --finding --expires-at --supersedes --checkpoint --limit --max-chars --since --poll-ms --timeout-ms --until --notify --settle-ms --max-hold-ms --owner --key --condition --note --rating --reason --root --path --exclude --command --cwd --artifact --status --by --token --ttl-ms --agent --project --env --branch --title --byte-budget --continue --offset --sync-token --model --thinking --cursor --attempt".split(" "));
 
 // "cloud", "desktop-cloud", or false for local. The router and error-usage selection
 // both read this one rule.

@@ -25,6 +25,7 @@ import { repairTurns } from "./turn-repair.mjs";
 import { listProjects, registeredRemoteProjects } from "./projects.mjs";
 import { createProjectThread } from "./thread-create.mjs";
 import { startWork } from "./work-start.mjs";
+import { tellWork } from "./work-tell.mjs";
 import { readRecord } from "./store.mjs";
 import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
 import { verifyProjectThread } from "./thread-verify.mjs";
@@ -243,7 +244,16 @@ async function mainOnTarget(argv) {
       throw usage("Expected: project sync|event.");
     }
     if (command === "work") {
-      if (args.shift() !== "start") throw usage("Expected: work start --project ID|NAME --title TITLE <WORK-ORDER>|-.");
+      const action = args.shift();
+      if (action === "tell") {
+        if (supervisor) throw Object.assign(new Error("A bound supervisor cannot invoke work tell recursively."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        const syncToken = takeOption(args, "--sync-token", undefined), newTurn = takeFlag(args, "--new-turn"), threadId = normalizeThreadId(args.shift());
+        const body = readMessage(args), data = await tellWork(threadId, body, { syncToken, newTurn }, {
+          read: (id, options) => observeThread(id, { ...options, limit: 1000 }, observationConnection(options.connection)), connectionDependencies,
+        });
+        success("work.tell", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
+      }
+      if (action !== "start") throw usage("Expected: work start|tell.");
       if (supervisor) throw Object.assign(new Error("A bound supervisor cannot create another managed task."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
       if (connection !== "shared" || targetHost() !== "local") throw usage("Local work start requires --connection shared and a local Desktop project.");
       const project = takeOption(args, "--project", undefined), title = takeOption(args, "--title", undefined), root = takeOption(args, "--root", process.cwd());

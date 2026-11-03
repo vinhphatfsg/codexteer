@@ -102,6 +102,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     else if (!state.complete && priorAttention) unresolved[state.member.thread_id] = priorAttention;
     works.push({ thread_id: state.member.thread_id, title: state.latest?.title ?? null, ...axes, history_gap: state.history_gap,
       retry_after_ms: state.retry_after_ms, complete: state.complete, cursor: state.complete ? state.cursor : null, events: eventSummaries,
+      turn_identity: state.latest?.latest_turn_id ?? state.latest?.current_turn_id ?? state.latest?.turn_id ?? state.latest?.active_turn_id ?? null,
       attention_repeated: !!priorAttention });
   }
   works.sort((a, b) => (a.group === "対応が必要" ? -1 : 0) - (b.group === "対応が必要" ? -1 : 0) || a.thread_id.localeCompare(b.thread_id));
@@ -122,7 +123,11 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   for (const state of states.values()) if (state.complete) await updateManagedThreadCursor(state.member.thread_id, state.cursor, storage);
   const head = { schema: 1, project_id: projectId, sync_token: syncToken, membership_digest: membershipDigest, complete: syncComplete,
     complete_work_ids: works.filter(work => work.complete).map(work => work.thread_id), unresolved_attention: unresolved, created_at: base.created_at };
-  await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, () => writeRecord("project-sync-heads", hash(projectId).slice(0, 40), head, storage), storage);
+  await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => {
+    const current = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage);
+    if (current?.sync_token && current.sync_token !== previous?.sync_token) head.conflict_tokens = [current.sync_token, syncToken];
+    await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), head, storage);
+  }, storage);
   const result = { ...base, output_bytes: 0, byte_budget: byteBudget };
   for (let previous = -1; result.output_bytes !== previous;) { previous = result.output_bytes; result.output_bytes = bytes(result); }
   return result;

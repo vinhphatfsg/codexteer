@@ -147,6 +147,14 @@ managed threadの操作は次の4種類として扱います。
 
 `thread repair --apply`は人間が明示的に行うoffline保守です。managed stateをactiveへ変更せず、新しいworker実行やsendを行わないため上記の外部効果には含めません。修復後は古いcursorを使わず読み直してください。
 
+## Managed担当への指示
+
+`codexteer work tell <THREAD> <INSTRUCTION> --json` は、その担当を含む最新のcompleteな`project sync`を基点にします。通常はsync token、cursor、finding、監督ID、source、kindを指定しません。membershipまたは並行syncが競合した場合だけ、再syncまたは確認済み`--sync-token`を要求します。
+
+配送直前に保存cursorから最新まで読み直し、新しいevent・turn変更・質問・承認待ち・attention不明・history gap・不完全syncがあれば配送しません。findingとjournalを内部作成し、同じ意図のaccepted/unknown配送を再送しません。unknown時はread-only照合だけを行います。`--new-turn`はidle/terminal担当で、同じ委任の未完了作業を続ける場合だけ使用します。この同一委任かどうかはCLIが推測しないため、オーケストレーターが人間の依頼に照らして判断します。
+
+質問・承認待ちに代理回答するoptionはありません。方針ファイルのhashが開始時から変わっていれば結果に表示しますが、変更後の方針を既存担当へ自動送信しません。
+
 ## プロジェクト全体の再同期
 
 `codexteer project sync --project <ID> --json` は常駐プロセスを作らず、project indexの全担当を保存済みcursorから読みます。まず全担当を1ページずつ巡回してからbacklogをdrainするため、1件の巨大履歴より他担当の質問・承認待ちを優先して発見できます。completeな担当だけcursorが進みます。

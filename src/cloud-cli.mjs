@@ -27,6 +27,7 @@ import { VERSION } from "./version.mjs";
 import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, verifyCheckpoint, runCheckpoint, attachArtifacts } from "./checkpoint.mjs";
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 import { startWork } from "./work-start.mjs";
+import { tellWork } from "./work-tell.mjs";
 import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
 
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code, execution_environment: "cloud" });
@@ -99,8 +100,14 @@ export async function mainCloud(argv) {
     throw failure("Expected project sync|event.");
   }
   if (command === "work") {
+    const action = args.shift();
+    if (action === "tell") {
+      if (supervisor) throw failure("A bound supervisor cannot invoke work tell recursively.", "SUPERVISOR_CONTROL_FORBIDDEN");
+      const syncToken = option(args, "--sync-token"), newTurn = flag(args, "--new-turn"), id = targetId(args.shift()), body = message(args);
+      output("work.tell", await tellWork(id, body, { syncToken, newTurn }, { read: (threadId, options) => observeThread(threadId, { ...options, limit: 1000 }, dependencies), connectionDependencies: dependencies })); return;
+    }
     if (desktopCloud) throw failure("work start does not support Desktop Cloud because verified project assignment is unavailable.", "WORK_START_CONNECTION_UNSUPPORTED");
-    if (args.shift() !== "start" || supervisor) throw failure("Expected an unbound work start command.");
+    if (action !== "start" || supervisor) throw failure("Expected an unbound work start command.");
     const project = option(args, "--project"), title = option(args, "--title"), branchOption = option(args, "--branch"), root = option(args, "--root", process.cwd());
     const order = message(args), rows = (await cloudEnvironments()).environments, matches = rows.filter(e => e.id === project || e.name === project);
     if (matches.length !== 1) throw failure("The cloud environment selector must match one accessible ID or exact name.");
