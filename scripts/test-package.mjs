@@ -1,6 +1,6 @@
-import { tempPrefix } from "../test-support/temp.mjs";
 // Validate our own tarball only. No public package execution, real Desktop,
 // account credentials, paid agents, or real task messages are involved.
+import { tempPrefix } from "../test-support/temp.mjs";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";

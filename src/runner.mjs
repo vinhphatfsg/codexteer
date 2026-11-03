@@ -2,10 +2,10 @@ import { spawn } from "node:child_process";
 import { targetHost } from "./target.mjs";
 import { runRemoteCommand, runRemoteShellCommand } from "./remote-io.mjs";
 
-export function runCommand(argv, { cwd, timeoutMs = 0, onStart = async () => {}, signal: abortSignal, execBackend = "app-server", threadId, remoteShell, supervisor, connection } = {}) {
+export function runCommand(argv, { cwd, timeoutMs = 0, onStart = async () => {}, signal: abortSignal, execBackend = "app-server", threadId, remoteShell, supervisor, connection, supervisionHeld = false } = {}) {
   if (!argv.length || !argv[0] || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw Object.assign(new Error("A command and timeout-ms between 0 and 86400000 are required."), { code: "OPTIONS_INVALID" });
   if (!["app-server", "thread-shell"].includes(execBackend)) throw Object.assign(new Error("--exec-backend must be app-server or thread-shell."), { code: "OPTIONS_INVALID" });
-  if (targetHost() !== "local") return (execBackend === "thread-shell" ? runRemoteShellCommand : runRemoteCommand)(argv, { cwd, timeoutMs, onStart, signal: abortSignal, threadId, shell: remoteShell, supervisor, connection });
+  if (targetHost() !== "local") return (execBackend === "thread-shell" ? runRemoteShellCommand : runRemoteCommand)(argv, { cwd, timeoutMs, onStart, signal: abortSignal, threadId, shell: remoteShell, supervisor, connection, supervisionHeld });
   if (execBackend !== "app-server") throw Object.assign(new Error("thread-shell is an explicit remote execution backend."), { code: "OPTIONS_INVALID" });
   return new Promise((resolve, reject) => {
     const started = new Date().toISOString();

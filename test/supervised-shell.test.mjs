@@ -6,12 +6,14 @@ import { withTarget } from "../src/target.mjs";
 import { registerSupervisor, assertSupervisor, controlSupervisor, getSupervisor } from "../src/supervision.mjs";
 import { runRemoteShellCommand } from "../src/remote-io.mjs";
 import { runWithResource, resourceStatus } from "../src/resource.mjs";
+import { registerManagedThread } from "../src/project-index.mjs";
 
 const HOST = "remote-control:env_fixture", ID = "11111111-1111-4111-8111-111111111111", SESSION = "22222222-2222-4222-8222-222222222222";
 const scope = fn => withTarget(HOST, undefined, fn, { transport: "paired" });
 async function fixture(t) {
   const home = await mkdtemp(tempPrefix("ct-supervised-shell-"));
   t.after(() => rm(home, { recursive: true, force: true }));
+  await registerManagedThread(ID, { projectId: "project-fixture", connection: "shared", remoteTransport: "paired", backendProjectId: "remote-project" }, { home });
   await registerSupervisor(ID, SESSION, { home, owner: "fixture", connection: "shared" });
   let dispatched = 0, command;
   const client = { close() {}, async request(method, args) {

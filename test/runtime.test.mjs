@@ -6,9 +6,9 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { once } from "node:events";
-const desktopRuntimeTest = process.platform === "darwin" ? test : test.skip;
-
 import { claimRuntime, discoverRuntime, readRuntime, runtimePaths, verifyControlEndpoint } from "../src/runtime.mjs";
+
+const desktopRuntimeTest = process.platform === "darwin" ? test : test.skip;
 
 async function setup(t) {
   const home = await mkdtemp(tempPrefix("cs-home-test-"));

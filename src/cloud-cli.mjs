@@ -173,13 +173,13 @@ export async function mainCloud(argv) {
     const action = args.shift(), includeOutput = flag(args, "--include-output"); let data;
     if (action === "capture") {
       const paths = repeated(args, "--path"), excludes = repeated(args, "--exclude"); exact(args, 2);
-      data = await createCheckpoint(await bound(args[0]), args[1], { paths, excludes });
+      data = await createCheckpoint(await bound(args[0]), args[1], { paths, excludes, supervisor, connection });
     } else if (action === "run") {
       const timeoutMs = Number(option(args, "--timeout-ms", "0"));
       if (args[2] !== "--" || args.length < 4) throw failure("Expected checkpoint run <TASK> <ID> -- <COMMAND> [ARGS...].");
-      data = await runCheckpoint(await bound(args[0]), args[1], args.slice(3), { timeoutMs });
+      data = await runCheckpoint(await bound(args[0]), args[1], args.slice(3), { timeoutMs, supervisor, connection });
       if (!includeOutput) delete data.output_tail; if (!data.valid) process.exitCode = 1;
-    } else if (action === "attach") { const refs = repeated(args, "--artifact"); exact(args, 2); data = await attachArtifacts(await bound(args[0]), args[1], refs); }
+    } else if (action === "attach") { const refs = repeated(args, "--artifact"); exact(args, 2); data = await attachArtifacts(await bound(args[0]), args[1], refs, { supervisor, connection }); }
     else if (action === "list") { exact(args, 1); data = await listCheckpoints(await bound(args[0])); }
     else if (["show", "verify"].includes(action)) { exact(args, 2); const id = await bound(args[0]); data = action === "verify" ? await verifyCheckpoint(id, args[1]) : checkpointSummary(await getCheckpoint(id, args[1]), includeOutput); if (action === "verify" && !data.valid) process.exitCode = 1; }
     else throw failure("Unknown checkpoint operation.");
@@ -191,7 +191,7 @@ export async function mainCloud(argv) {
     if (supervisor && !threadId) throw failure("A supervisor resource command requires its --thread target.", "SUPERVISOR_CONTROL_FORBIDDEN");
     let data;
     if (["acquire", "run"].includes(action)) {
-      const settings = { owner: option(args, "--owner"), ttlMs: Number(option(args, "--ttl-ms", "600000")), reason: option(args, "--reason", ""), condition: option(args, "--condition", ""), threadId };
+      const settings = { owner: option(args, "--owner"), ttlMs: Number(option(args, "--ttl-ms", "600000")), reason: option(args, "--reason", ""), condition: option(args, "--condition", ""), threadId, supervisor, connection };
       if (action === "run") {
         const timeoutMs = Number(option(args, "--timeout-ms", "0")), includeOutput = flag(args, "--include-output");
         if (args[1] !== "--" || args.length < 3) throw failure("Expected resource run <NAME> --owner NAME -- <COMMAND> [ARGS...].");
@@ -199,7 +199,7 @@ export async function mainCloud(argv) {
       } else { exact(args, 1); data = await acquireResource(args[0], settings); }
     } else if (["renew", "release"].includes(action)) {
       const token = option(args, "--token"), ttlMs = Number(option(args, "--ttl-ms", "600000")); exact(args, 1);
-      data = action === "renew" ? await renewResource(args[0], token, { ttlMs }) : await releaseResource(args[0], token);
+      data = action === "renew" ? await renewResource(args[0], token, { ttlMs, threadId, supervisor, connection }) : await releaseResource(args[0], token);
     } else if (action === "status") { exact(args, 1); data = await resourceStatus(args[0]); }
     else if (action === "list") { exact(args, 0); data = await listResources(); }
     else throw failure("Unknown resource operation.");

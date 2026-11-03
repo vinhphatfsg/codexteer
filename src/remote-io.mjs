@@ -118,7 +118,7 @@ export function remoteShellScript(argv, { cwd, shell, marker }) {
 
 // This is an explicitly selected, task-scoped host shell (the official API is
 // unsandboxed). Never use it as fallback for a refused command/exec request.
-export async function runRemoteShellCommand(argv, { cwd, threadId, shell, timeoutMs = 0, signal, onStart = async () => {}, supervisor, connection } = {}, dependencies = {}) {
+export async function runRemoteShellCommand(argv, { cwd, threadId, shell, timeoutMs = 0, signal, onStart = async () => {}, supervisor, connection, supervisionHeld = false } = {}, dependencies = {}) {
   requirePairedManagement();
   if (!threadId) throw fail("thread-shell requires --thread (checkpoint uses its own task).", "REMOTE_SHELL_REQUIRED");
   threadId = normalizeThreadId(threadId);
@@ -134,10 +134,11 @@ export async function runRemoteShellCommand(argv, { cwd, threadId, shell, timeou
       // so it cannot acknowledge between this check and dispatch acceptance.
       // Release after the RPC receipt; an accepted command is not cancellable
       // through supervisor control and can still be observed while paused.
-      const acknowledgement = await withSupervisedMutation(threadId, supervisor, () => {
+      const dispatch = () => {
         if (signal?.aborted) throw fail("Remote shell cancelled before dispatch.", "CANCELLED");
         return client.request("thread/shellCommand", { threadId, command, timeoutMs: timeout }, { mutation: true });
-      }, { connection, home: runtime.paths.home }); accepted = true;
+      };
+      const acknowledgement = await (supervisionHeld ? dispatch() : withSupervisedMutation(threadId, supervisor, dispatch, { connection, home: runtime.paths.home })); accepted = true;
       if (!acknowledgement || typeof acknowledgement !== "object" || Array.isArray(acknowledgement)) throw fail("Remote shell acknowledgement was invalid. Inspect the same command before retrying.", "REMOTE_COMMAND_UNKNOWN");
       const deadline = Date.now() + timeout + 10000;
       do {

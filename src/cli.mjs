@@ -355,12 +355,12 @@ async function mainOnTarget(argv) {
           if (!data.valid) process.exitCode = 1;
         } else {
           if (args.length !== 1) throw usage("Expected: resource acquire <NAME> --owner NAME.");
-          data = await acquireResource(args[0], options);
+          data = await acquireResource(args[0], { ...options, supervisor, connection });
         }
       } else if (["renew", "release"].includes(action)) {
         const token = takeOption(args, "--token", undefined), ttlMs = action === "renew" ? Number(takeOption(args, "--ttl-ms", "600000")) : undefined;
         if (args.length !== 1) throw usage(`Expected: resource ${action} <NAME> --token TOKEN.`);
-        data = action === "renew" ? await renewResource(args[0], token, { ttlMs }) : await releaseResource(args[0], token);
+        data = action === "renew" ? await renewResource(args[0], token, { ttlMs, threadId, supervisor, connection }) : await releaseResource(args[0], token);
       } else if (action === "status" && args.length === 1) data = await resourceStatus(args[0]);
       else if (action === "list" && args.length === 0) data = await listResources();
       else throw usage("See codexteer help resource.");
@@ -375,7 +375,7 @@ async function mainOnTarget(argv) {
       if (action === "capture") {
         const paths = takeOptions(args, "--path"), excludes = takeOptions(args, "--exclude");
         if (args.length !== 2) throw usage("Expected: checkpoint capture <THREAD> <NAME> --path PATH ...");
-        data = await createCheckpoint(args[0], args[1], { paths, excludes });
+        data = await createCheckpoint(args[0], args[1], { paths, excludes, supervisor, connection });
       } else if (action === "run") {
         const timeoutMs = Number(takeOption(args, "--timeout-ms", "0")), execBackend = takeOption(args, "--exec-backend", "app-server"), remoteShell = takeOption(args, "--shell", undefined);
         if (supervisor && execBackend === "thread-shell") await assertSupervisor(args[0], supervisor, { connection, sending: true });
@@ -386,7 +386,7 @@ async function mainOnTarget(argv) {
       } else if (action === "attach") {
         const refs = takeOptions(args, "--artifact");
         if (args.length !== 2) throw usage("Expected: checkpoint attach <THREAD> <ID> --artifact FILE ...");
-        data = await attachArtifacts(args[0], args[1], refs);
+        data = await attachArtifacts(args[0], args[1], refs, { supervisor, connection });
       } else if (action === "list") {
         if (args.length !== 1) throw usage("Expected: checkpoint list <THREAD>.");
         data = await listCheckpoints(args[0]);

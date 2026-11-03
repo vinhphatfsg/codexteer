@@ -3,6 +3,7 @@ import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs
 import { targetHost, remoteReadOnly, remoteTransport, isControlTransport } from "./target.mjs";
 import { normalizeTaskId, isCloudTask } from "./task-id.mjs";
 import { isAlive } from "./runtime.mjs";
+import { getManagedThread } from "./project-index.mjs";
 
 const failure = (message, code) => Object.assign(new Error(message), { code });
 const states = new Set(["active", "paused", "stopped"]);
@@ -165,10 +166,16 @@ export async function recordSupervisorFailure(threadId, sessionId, error, storag
   catch { /* The original failure is returned to the consumer. */ }
 }
 
+// Mutation lock order is: project-index lookup (no lock) -> supervisor ->
+// message/checkpoint/resource. Project-index writers release their own lock
+// before entering this function; project-wide operations must do the same.
 export async function withSupervisedMutation(threadInput, sessionInput, mutate, { connection, ...storage } = {}) {
   if (targetHost() !== "local" && !isControlTransport()) throw remoteReadOnly();
-  if (sessionInput === undefined) return mutate();
-  const threadId = normalizeTaskId(threadInput), sessionId = supervisorId(sessionInput);
+  const threadId = normalizeTaskId(threadInput), managed = await getManagedThread(threadId, storage);
+  if (sessionInput === undefined && !managed) return mutate();
+  const registered = managed && await getSupervisor(threadId, storage);
+  if (managed && !registered) throw failure("This managed task has no supervisor binding. Repair its project membership before mutating it.", "MANAGED_SUPERVISOR_REQUIRED");
+  const sessionId = supervisorId(sessionInput ?? registered.session_id);
   // Holding this lock through the receipt serializes pause/stop with the actual
   // mutation. A busy pause is an error, never a false acknowledgement of a stop.
   return withStoreLock(`supervisor-${threadId}`, async () => {

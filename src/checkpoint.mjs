@@ -9,6 +9,7 @@ import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs
 import { runCommand } from "./runner.mjs";
 import { targetHost } from "./target.mjs";
 import { remoteCaptureInputs, remoteCheckpointScope, remoteWatchInputs } from "./remote-io.mjs";
+import { withSupervisedMutation } from "./supervision.mjs";
 
 const within = (file, root) => file === root || file.startsWith(root + path.sep);
 function excluded(file, excludes) { return file.split(path.sep).includes(".git") || excludes.some(x => within(file, x)); }
@@ -46,19 +47,20 @@ export async function getCheckpoint(threadInput, id, storage = {}) {
   return entry;
 }
 
-export async function createCheckpoint(threadInput, name, { paths, excludes = [], cwd = process.cwd(), ...storage }) {
+export async function createCheckpoint(threadInput, name, { paths, excludes = [], cwd = process.cwd(), supervisor, connection, ...storage }) {
   const threadId = normalizeTaskId(threadInput);
-  if (!name?.trim() || !paths?.length) throw Object.assign(new Error("capture requires a name and at least one --path."), { code: "OPTIONS_INVALID" });
-  const scope = targetHost() === "local" ? { cwd: path.resolve(cwd), roots: [...new Set(paths.map(p => path.resolve(cwd, p)))], excludes: excludes.map(p => path.resolve(cwd, p)) }
-    : await remoteCheckpointScope(threadId, paths, excludes);
-  const { roots, excludes: omit } = scope;
-  const snapshot = await captureInputs(roots, omit);
-  if (!snapshot.files.some(f => f.type === "file")) throw Object.assign(new Error("No input files were selected."), { code: "OPTIONS_INVALID" });
-  const entry = { schema: 1, id: randomUUID(), thread_id: threadId, name, cwd: scope.cwd, created_at: new Date().toISOString(), snapshot, runs: [], artifacts: [] };
-  await writeRecord("checkpoints", entry.id, entry, storage);
-  return checkpointSummary(entry);
+  return withSupervisedMutation(threadId, supervisor, async () => {
+    if (!name?.trim() || !paths?.length) throw Object.assign(new Error("capture requires a name and at least one --path."), { code: "OPTIONS_INVALID" });
+    const scope = targetHost() === "local" ? { cwd: path.resolve(cwd), roots: [...new Set(paths.map(p => path.resolve(cwd, p)))], excludes: excludes.map(p => path.resolve(cwd, p)) }
+      : await remoteCheckpointScope(threadId, paths, excludes);
+    const { roots, excludes: omit } = scope;
+    const snapshot = await captureInputs(roots, omit);
+    if (!snapshot.files.some(f => f.type === "file")) throw Object.assign(new Error("No input files were selected."), { code: "OPTIONS_INVALID" });
+    const entry = { schema: 1, id: randomUUID(), thread_id: threadId, name, cwd: scope.cwd, created_at: new Date().toISOString(), snapshot, runs: [], artifacts: [] };
+    await writeRecord("checkpoints", entry.id, entry, storage);
+    return checkpointSummary(entry);
+  }, { connection, ...storage });
 }
-
 const withoutOutput = ({ output_tail, ...rest }) => rest;
 export function checkpointSummary(entry, includeOutput = false) {
   return { ...entry, runs: includeOutput ? entry.runs : entry.runs.map(withoutOutput), snapshot: { ...entry.snapshot, files: undefined, file_count: entry.snapshot.files.filter(f => f.type === "file").length, directory_count: entry.snapshot.files.filter(f => f.type === "directory").length } };
@@ -117,7 +119,7 @@ function watchInputs(snapshot) {
 export async function runCheckpoint(threadInput, id, argv, { timeoutMs = 0, execBackend, remoteShell, supervisor, connection, ...storage } = {}) {
   if (!argv.length || !argv[0] || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 86400000) throw Object.assign(new Error("A command and timeout-ms between 0 and 86400000 are required."), { code: "OPTIONS_INVALID" });
   const threadId = normalizeTaskId(threadInput);
-  return withStoreLock(`checkpoint-${id}`, async () => {
+  return withSupervisedMutation(threadId, supervisor, () => withStoreLock(`checkpoint-${id}`, async () => {
     const entry = await getCheckpoint(threadId, id, storage), watcher = targetHost() === "local" ? watchInputs(entry.snapshot) : await remoteWatchInputs(entry.snapshot);
     try {
       const before = await captureInputs(entry.snapshot.roots, entry.snapshot.excludes, { allowMissing: true });
@@ -125,7 +127,7 @@ export async function runCheckpoint(threadInput, id, argv, { timeoutMs = 0, exec
       const run = { id: randomUUID(), argv, status: "running", started_at: new Date().toISOString() };
       entry.runs.push(run); await writeRecord("checkpoints", id, entry, storage);
       let result;
-      try { result = await runCommand(argv, { cwd: entry.cwd, timeoutMs, execBackend, remoteShell, supervisor, connection, threadId, onStart: async (pid, info) => { Object.assign(run, { pid }, info); await writeRecord("checkpoints", id, entry, storage); } }); }
+      try { result = await runCommand(argv, { cwd: entry.cwd, timeoutMs, execBackend, remoteShell, supervisor, connection, supervisionHeld: true, threadId, onStart: async (pid, info) => { Object.assign(run, { pid }, info); await writeRecord("checkpoints", id, entry, storage); } }); }
       catch (error) {
         Object.assign(run, { status: error.uncertain ? "unknown" : "failed", error_code: error.code, error: error.message, inputs_unchanged: false,
           remote_process_id: error.remote_process_id, touched_paths: [...watcher.touched], observation_error: watcher.error, completed_at: new Date().toISOString() });
@@ -141,12 +143,13 @@ export async function runCheckpoint(threadInput, id, argv, { timeoutMs = 0, exec
       await writeRecord("checkpoints", id, entry, storage);
       return { checkpoint_id: id, ...run, valid: run.exit_code === 0 && !run.error && !run.timed_out && run.inputs_unchanged };
     } finally { await watcher.close(); }
-  }, storage);
+  }, storage), { connection, ...storage });
 }
 
-export async function attachArtifacts(threadInput, id, refs, storage = {}) {
+export async function attachArtifacts(threadInput, id, refs, { supervisor, connection, ...storage } = {}) {
   if (!refs.length) throw Object.assign(new Error("At least one --artifact file is required."), { code: "OPTIONS_INVALID" });
-  return withStoreLock(`checkpoint-${id}`, async () => {
+  const threadId = normalizeTaskId(threadInput);
+  return withSupervisedMutation(threadId, supervisor, () => withStoreLock(`checkpoint-${id}`, async () => {
     const verified = await verifyCheckpoint(threadInput, id, storage);
     if (!verified.valid) throw Object.assign(new Error("A successful run against unchanged inputs is required before attaching artifacts."), { code: "STALE_CHECKPOINT" });
     const artifacts = await collectEvidence(refs);
@@ -155,7 +158,7 @@ export async function attachArtifacts(threadInput, id, refs, storage = {}) {
     entry.artifacts.push(...artifacts.map(a => ({ ...a, run_id: entry.runs.at(-1).id, attached_at: new Date().toISOString() })));
     await writeRecord("checkpoints", id, entry, storage);
     return checkpointSummary(entry);
-  }, storage);
+  }, storage), { connection, ...storage });
 }
 
 export async function listCheckpoints(threadInput, storage = {}) {
