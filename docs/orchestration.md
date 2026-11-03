@@ -170,3 +170,13 @@ codexteer project sync --continue <TOKEN> --offset <NEXT_OFFSET> --event-offset 
 ```
 
 `details_omitted:true`の詳細は、イベントの`token`または担当行の`detail_token`を`project event`へ渡して取得できます。byte予算は4096〜1048576です。未解決の質問・承認・失敗は、後続ページから消えただけでは解消扱いにしません。解消の明示的な観測証拠がない間は、以前の理由とイベントtokenを再掲します。不完全な観測では解消を確定せず、並行syncと競合した結果は送信の基点に使えません。
+
+`work start`のCloud接続は`desktop-cloud`です。`--project`はcodexteerの調整用namespaceであり、Desktop DBへのproject割当は行いません。`--environment`には公開済みenvironment configurationのIDまたは完全一致名、`--root`には方針を読むローカルcheckoutを明示します。
+
+```sh
+codexteer --connection desktop-cloud work start --project sample --environment codexteer --root /path/to/checkout --title tests - --json < order.txt
+```
+
+方針の原文バイトとSHA-256、root、environment configuration ID、取得できたローカルGitのremote URL・branch・commitをローカルreceiptへ保存します。ローカルcheckoutの情報は出典であり、Cloud checkoutとの一致や未コミット差分の転送を意味しません。Cloud側との一致は`source.cloud_checkout_match: "unverified"`として明示します。
+
+同じ発注の再実行は保存済みattemptを使い、初回配送を含め再作成・再送しません。作成結果が不明な場合は、attempt・environment・prompt digestと保存済みuser messageを読み取り照合します。見つからない、履歴が不完全、初回観測にhistory gapがある場合は完了を主張せずcursorを保存しません。質問・承認状態が不明なbackendでは`work tell`は拒否します。`--connection cloud work start`は未対応です。既存の低水準Cloudコマンドは維持します。

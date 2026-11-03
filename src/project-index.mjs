@@ -17,7 +17,7 @@ function validate(record, threadId) {
   if (!record || record.schema !== 1 || record.thread_id !== threadId || typeof record.project_id !== "string" || !record.project_id
     || !connections.has(record.connection) || !optionalString(record.host_id)
     || (record.remote_transport !== undefined && record.remote_transport !== null && !transports.has(record.remote_transport))
-    || !optionalString(record.backend_project_id) || !optionalString(record.creation_attempt_id)
+    || !optionalString(record.environment_config_id) || !optionalString(record.backend_project_id) || !optionalString(record.creation_attempt_id)
     || (record.policy_sha256 !== undefined && record.policy_sha256 !== null && !/^[a-f0-9]{64}$/.test(record.policy_sha256))
     || (record.sync_revision !== undefined && (!Number.isSafeInteger(record.sync_revision) || record.sync_revision < 0))
     || !optionalString(record.sync_cursor)) throw fail("Invalid managed project membership. Inspect the local project index before continuing.");
@@ -36,6 +36,7 @@ export async function registerManagedThread(threadInput, membership, storage = {
   const record = validate({ schema: 1, thread_id: threadId, project_id: membership.projectId, connection: membership.connection,
     ...(membership.hostId === undefined ? {} : { host_id: membership.hostId }),
     ...(membership.remoteTransport === undefined ? {} : { remote_transport: membership.remoteTransport }),
+    ...(membership.environmentConfigId === undefined ? {} : { environment_config_id: membership.environmentConfigId }),
     ...(membership.backendProjectId === undefined ? {} : { backend_project_id: membership.backendProjectId }),
     ...(membership.creationAttemptId === undefined ? {} : { creation_attempt_id: membership.creationAttemptId }),
     ...(membership.policySha256 === undefined ? {} : { policy_sha256: membership.policySha256 }),
@@ -88,7 +89,7 @@ export function managedMembershipDigest(members) {
   return createHash("sha256").update(JSON.stringify(members.map(m => ({
     thread_id: m.thread_id, project_id: m.project_id, connection: m.connection,
     host_id: m.host_id ?? null, remote_transport: m.remote_transport ?? null,
-    backend_project_id: m.backend_project_id ?? null, creation_attempt_id: m.creation_attempt_id ?? null,
+    environment_config_id: m.environment_config_id ?? null, backend_project_id: m.backend_project_id ?? null, creation_attempt_id: m.creation_attempt_id ?? null,
     policy_sha256: m.policy_sha256 ?? null, registered_at: m.registered_at,
   })))).digest("hex");
 }

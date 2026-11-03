@@ -2,7 +2,7 @@ import { desktopCloudProjectDoctor, assignDesktopCloudProject, desktopCloudProje
 import { listProjects as listDesktopProjects } from "./projects.mjs";
 import { isDesktopCloudTask, desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
 import { desktopCloudConnection, desktopCloudEnvironments } from "./desktop-cloud-api.mjs";
-import { createDesktopCloudTask, listDesktopCloudTasks, desktopCloudReceipt } from "./desktop-cloud.mjs";
+import { createDesktopCloudTask, listDesktopCloudTasks, desktopCloudReceipt, reconcileDesktopCloudCreation } from "./desktop-cloud.mjs";
 import { isCloudTask, selectedCloudInvocation } from "./task-id.mjs";
 import { cloudTaskId } from "./cloud-id.mjs";
 import { normalizeThreadId } from "./thread-id.mjs";
@@ -106,16 +106,20 @@ export async function mainCloud(argv) {
       const syncToken = option(args, "--sync-token"), newTurn = flag(args, "--new-turn"), id = targetId(args.shift()), body = message(args);
       output("work.tell", await tellWork(id, body, { syncToken, newTurn }, { read: (threadId, options) => observeThread(threadId, { ...options, limit: 1000 }, dependencies), connectionDependencies: dependencies })); return;
     }
-    if (desktopCloud) throw failure("work start does not support Desktop Cloud because verified project assignment is unavailable.", "WORK_START_CONNECTION_UNSUPPORTED");
+    if (!desktopCloud) throw failure("work start requires shared or desktop-cloud; the legacy cloud route is unsupported.", "WORK_START_CONNECTION_UNSUPPORTED");
     if (action !== "start" || supervisor) throw failure("Expected an unbound work start command.");
-    const project = option(args, "--project"), title = option(args, "--title"), branchOption = option(args, "--branch"), root = option(args, "--root", process.cwd());
-    const order = message(args), rows = (await cloudEnvironments()).environments, matches = rows.filter(e => e.id === project || e.name === project);
-    if (matches.length !== 1) throw failure("The cloud environment selector must match one accessible ID or exact name.");
-    const selected = matches[0], branch = branchOption ?? (selected.repositories.length === 1 ? selected.repositories[0].default_branch : null);
-    if (!branch) throw failure("Specify --branch: this environment does not identify one repository default branch.");
-    const data = await startWork({ project: selected.id, title, order, root, branch, connection: "cloud" }, {
-      create: async ({ project: environment, prompt, branch, attemptId }) => { const created = await createCloudTask(environment, branch, prompt, { attemptId }); return { ...created, thread_id: created.task_id, backend_project_id: environment }; },
-      reconcile: async record => { try { const receipt = await cloudCreationReceipt(record.attempt_id); return receipt.task_id ? { thread_id: receipt.task_id, backend_project_id: receipt.environment_selector, project_selector: receipt.environment_selector, attempt_id: receipt.attempt_id, prompt_sha256: receipt.prompt_sha256 } : null; } catch (error) { if (error.code === "CLOUD_RECEIPT_NOT_FOUND") return null; throw error; } },
+    const project = option(args, "--project"), title = option(args, "--title"), environment = option(args, "--environment"), root = option(args, "--root");
+    const end = args.includes("--") ? args.indexOf("--") : args.length;
+    rejectUnknownOptions(args.slice(0, end), "work start", "Put literal flags after --.", failure);
+    const order = message(args);
+    const data = await startWork({ project, title, order, root, environment, connection: "desktop-cloud" }, {
+      resolveEnvironment: async selector => {
+        const matches = (await desktopCloudEnvironments()).environments.filter(e => e.id === selector || e.name === selector);
+        if (matches.length !== 1) throw failure("Select exactly one accessible Desktop Cloud environment configuration.");
+        return matches[0];
+      },
+      create: ({ environmentConfigId, prompt, title: name, attemptId }) => createDesktopCloudTask(environmentConfigId, prompt, { title: name, attemptId }),
+      reconcile: record => reconcileDesktopCloudCreation(record),
       read: (threadId, options) => observeThread(threadId, { ...options, limit: 1000 }, dependencies),
     });
     output("work.start", data); return;

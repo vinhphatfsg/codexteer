@@ -48,6 +48,7 @@ export function threadSnapshot(thread) {
   const flags = thread.status?.activeFlags;
   const state = { thread_id: thread.id, status: thread.status?.type ?? "unknown", active_turn_id: active.length === 1 ? active[0].id : null,
     attention: Array.isArray(flags) ? flags : thread.status?.type === "active" ? null : [], cwd: thread.cwd ?? null, title: thread.name ?? null };
+  if (thread.environments !== undefined) state.environment_config_id = Array.isArray(thread.environments) && thread.environments.length === 1 && typeof thread.environments[0]?.environmentConfigId === "string" ? thread.environments[0].environmentConfigId : null;
   return { state, events, hashes: events.map(digest), user_revision: digest(events.filter(e => e.type === "userMessage")) };
 }
 

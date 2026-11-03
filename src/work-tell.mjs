@@ -4,7 +4,7 @@ import { getSupervisor } from "./supervision.mjs";
 import { createFinding } from "./findings.mjs";
 import { sendTrackedMessage, reconcileMessages } from "./journal.mjs";
 import { readRecord, listRecords, withStoreLock } from "./store.mjs";
-import { validateSyncPage } from "./project-sync.mjs";
+import { validateSyncPage } from "./sync-page.mjs";
 import { readRepositoryPolicy } from "./work-start.mjs";
 
 const sha = value => createHash("sha256").update(value).digest("hex");
@@ -46,6 +46,7 @@ async function freshObservation(threadId, member, basis, read) {
   let cursor = basis.work.cursor, latest, pages = 0; const seen = new Set([cursor]), events = [];
   do {
     latest = validateSyncPage(await read(threadId, { connection: member.connection, since: cursor, limit: 1000 }), threadId, cursor, seen);
+    if (member.environment_config_id && latest.environment_config_id !== member.environment_config_id) throw fail("The task environment differs from its managed route.", "WORK_TELL_ROUTE_MISMATCH");
     assertNoHumanAttention(latest);
     if (!latest?.cursor || ++pages > 1000 || (latest.has_more && seen.has(latest.cursor))) throw fail("Freshness read did not advance its cursor.", "WORK_TELL_FRESHNESS_INCOMPLETE");
     seen.add(latest.cursor); cursor = latest.cursor; events.push(...(latest.events ?? []));

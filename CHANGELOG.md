@@ -9,7 +9,7 @@
 - `work tell`を追加しました。最新のcomplete project syncから送信直前までを再照合し、質問・承認待ち、attention不明、history gap、並行sync、membership変更では送信しません。finding・source・kind・監督IDを内部化し、unknownと同一意図を自動再送しません。
 - managed threadの外部効果を共通gateへ集約しました。受付確認できないDesktop UI sendとpaired `command/exec`は拒否し、方針ファイルの差し替え、作成照合の不一致、stopped supervisorの自動再登録をfail closedにします。
 - `project sync`を追加しました。managed projectの全担当を前回cursorから公平に差分取得し、動作中・対応が必要・検収待ち・未確認へ分類します。未解決attentionを再掲し、history gap・429・不完全取得・出力省略を明示します。長文は`project event`で全文取得できます。
-- `work start`を追加しました。repository rootの`CODEXTEER.md`を原文のまま発注書へ入れ、Desktop sharedまたはWeb Cloudで作成・監督登録・managed index登録・初回観測までを一度に行います。段階を保存して同じ作成を再送せず、作成結果が不明なときは読み取り照合だけを行います。Desktop Cloudは未対応です。
+- `work start`を追加しました。repository rootの`CODEXTEER.md`を原文のまま発注書へ入れ、Desktop sharedまたはDesktop Cloudで作成・managed index登録・監督登録・初回観測までを一度に行います。段階を保存して同じ作成を再送せず、作成結果が不明なときは読み取り照合だけを行います。Desktop Cloudはenvironment configurationと明示したローカルcheckoutを使い、調整用projectへ登録します。work startのWeb Cloud経路は提供しません。
 
 ## 0.21.0 — 2026-11-03公開
 
