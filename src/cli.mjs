@@ -266,6 +266,7 @@ async function mainOnTarget(argv) {
       const action = args.shift();
       if (action === "tell") {
         if (supervisor) throw Object.assign(new Error("A bound supervisor cannot invoke work tell recursively."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        if (connection === "desktop") throw desktopReadOnly();
         const syncToken = takeOption(args, "--sync-token", undefined), newTurn = takeFlag(args, "--new-turn"), threadId = normalizeThreadId(args.shift());
         const body = readMessage(args), data = await tellWork(threadId, body, { syncToken, newTurn }, {
           read: (id, options) => observeThread(id, { ...options, limit: 1000 }, observationConnection(options.connection)), connectionDependencies,

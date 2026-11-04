@@ -130,7 +130,9 @@ export async function reconcileDesktopCloudCreation(record, { connect = connectD
     if (thread.environments?.length !== 1 || thread.environments[0].environmentConfigId !== record.environment_config_id) throw failure("Recovered task has another environment.", "WORK_RECONCILE_MISMATCH");
     const matches = thread.turns.flatMap(turn => turn.items ?? []).filter(item => item.type === "userMessage"
       && hash((item.content ?? []).filter(p => p.type === "text").map(p => p.text).join("\n")) === record.prompt_sha256
-      && (!receipt.client_message_id || item.clientId === receipt.client_message_id));
+      // Desktop Cloud may store the message without its client ID; the journal
+      // then proves delivery by the accepted turn and the message digest.
+      && (!receipt.client_message_id || item.clientId === receipt.client_message_id || (item.clientId == null && receipt.message_id)));
     if (matches.length !== 1) return null;
     if (receipt.message_id) {
       const { reconcileMessages } = await import("./journal.mjs");

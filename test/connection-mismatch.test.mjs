@@ -137,3 +137,12 @@ test("an option value documented in help is never read as the routing target", a
   assert.ok(options.has("--event-offset") && options.has("--work"));
   for (const option of options) assert.equal(selectedCloudInvocation([option, cloud, "read", local]), false, option);
 });
+
+test("work tell routes a Desktop Cloud target automatically and refuses the observation-only connection", async t => {
+  const { run } = await fixture(t);
+  const error = args => JSON.parse(run([...args, "--json"]).stdout).error;
+  assert.equal(error(["work", "tell", durable, "fixture"]).code, "WORK_TELL_UNMANAGED");
+  assert.equal(error(["work", "tell", desktopCloudLink(durable), "fixture"]).code, "WORK_TELL_UNMANAGED");
+  assert.equal(error(["--connection", "desktop", "work", "tell", local, "fixture"]).code, "DESKTOP_READ_ONLY");
+  assert.equal(error(["work", "tell", local, "fixture"]).code, "WORK_TELL_UNMANAGED");
+});

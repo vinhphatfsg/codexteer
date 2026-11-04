@@ -36,7 +36,7 @@ async function fixture(t) {
     }
     if (method === "thread/turns/list") return { data: state.turns.map(turn => ({ ...turn, itemsView: "full" })), nextCursor: null, backwardsCursor: null };
     if (method === "turn/start") {
-      const turn = { id: `turn-${state.turns.length}`, status: "inProgress", items: [{ id: randomUUID(), type: "userMessage", clientId: params.clientUserMessageId, content: params.input }] };
+      const turn = { id: `turn-${state.turns.length}`, status: "inProgress", items: [{ id: randomUUID(), type: "userMessage", clientId: state.nullClientId ? null : params.clientUserMessageId, content: params.input }] };
       state.turns.push(turn); state.status = "active";
       if (state.lost) throw Object.assign(new Error("lost receipt"), { uncertain: true });
       return { turn: { id: turn.id } };
@@ -79,6 +79,14 @@ for (const boundary of ["attempt_saved", "before_create_rpc", "create_returned",
     assert.equal((await startWork(f.input, f.deps)).stage, "observed"); assert.equal(creates(f), 1); assert.equal(deliveries(f), 1);
   });
 }
+
+test("Desktop Cloud recovery proves a creation whose stored message has no client ID by its accepted turn and digest", async t => {
+  const f = await fixture(t); f.state.nullClientId = true; let injected = false;
+  f.deps.hook = async name => { if (!injected && name === "create_returned") { injected = true; throw Object.assign(new Error("interrupt"), { code: "INTERRUPTED" }); } };
+  await assert.rejects(startWork(f.input, f.deps), { code: "INTERRUPTED" }); delete f.deps.hook;
+  assert.equal((await startWork(f.input, f.deps)).stage, "observed");
+  assert.equal(creates(f), 1); assert.equal(deliveries(f), 1);
+});
 
 test("unknown initial delivery reconciles stored prompt read-only, and missing history never causes replay", async t => {
   const f = await fixture(t); f.state.lost = true;

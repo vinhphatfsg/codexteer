@@ -42,7 +42,8 @@ export function selectedCloudInvocation(argv) {
   if (["doctor", "resource"].includes(command) && thread >= 0) return isDesktopCloudTask(own[thread + 1]) ? "desktop-cloud" : isCloudTask(own[thread + 1]) ? "cloud" : false;
   if (command === "thread" && action === "create") return false;
   const nested = ["history", "instructions", "findings", "checkpoint", "thread"].includes(command)
-    || (command === "supervise" && ["prompt", "register", "status", "pause", "resume", "stop", "list"].includes(action));
+    || (command === "supervise" && ["prompt", "register", "status", "pause", "resume", "stop", "list"].includes(action))
+    || (command === "work" && action === "tell");
   const target = isCloudTask(command) || isDesktopCloudTask(command) ? command : positional[nested ? 2 : 1];
   return isDesktopCloudTask(target) ? "desktop-cloud" : isCloudTask(target) ? "cloud" : false;
 }
