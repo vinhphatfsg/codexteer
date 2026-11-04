@@ -52,11 +52,13 @@ export async function inspectNativeCommandProtocol(state, { run = spawnSync, exe
     if (standalone) {
       const names = ["ThreadStartParams", "ThreadStartResponse", "TurnStartParams", "TurnStartResponse", "ThreadSetNameParams", "ThreadMetadataUpdateParams"];
       const creation = Object.fromEntries(await Promise.all(names.map(async name => [name, JSON.parse(await readFile(path.join(directory, "v2", `${name}.json`), "utf8"))])));
-      validateStandaloneCreationSchemas(creation); schemas.push(creation);
+      validateStandaloneCreationSchemas(creation);
+      validatePermissionSchemas(creation);
+      schemas.push(creation);
     }
     return { status: "verified", source: "matching-bundled-command-schema", cli_version: installed, schema_sha256: createHash("sha256").update(JSON.stringify(schemas)).digest("hex"),
       ...(standalone ? { standalone_creation: "verified" } : {}), ...(remoteControl ? { remote_control_methods: remoteMethods } : {}) };
-  } catch (error) { if (error.code === "NATIVE_COMMAND_UNVERIFIED") throw error; throw failure("Cannot read native helper command schemas.", "NATIVE_COMMAND_UNVERIFIED"); }
+  } catch (error) { if (["NATIVE_COMMAND_UNVERIFIED", "DESKTOP_PERMISSION_UNVERIFIED"].includes(error.code)) throw error; throw failure("Cannot read native helper command schemas.", "NATIVE_COMMAND_UNVERIFIED"); }
   finally { await rm(directory, { recursive: true, force: true }); }
 }
 
@@ -96,5 +98,15 @@ export async function nativeOnAppServer(client, endpoint, action, args, context,
   } finally {
     try { await rm(directory, { recursive: true, force: true }); }
     catch { if (result) result.native_request_cleanup_required = true; else if (error) error.native_request_cleanup_required = true; }
+  }
+}
+
+export function validatePermissionSchemas(schemas) {
+  for (const name of ["ThreadStartParams", "TurnStartParams"]) {
+    const schema = schemas[name];
+    if (schema?.properties?.permissions?.type?.includes("string") !== true
+      || !schema.properties.approvalPolicy || !schema.properties.approvalsReviewer
+      || !schema.properties[name === "ThreadStartParams" ? "sandbox" : "sandboxPolicy"]
+      || !schema.definitions?.ApprovalsReviewer?.enum?.includes("auto_review")) throw Object.assign(new Error("Bundled and running App Server permission schemas must match."), { code: "DESKTOP_PERMISSION_UNVERIFIED" });
   }
 }

@@ -65,3 +65,45 @@ test("internal command RPC errors keep native mutation outcomes unknown", async 
     assert.equal(calls, 1);
   }
 });
+
+function creationSchemas() {
+  const properties = keys => Object.fromEntries(keys.map(key => [key, {}]));
+  const permissions = { properties: { permissions: { type: ["string", "null"] }, approvalPolicy: {}, approvalsReviewer: {} }, definitions: { ApprovalsReviewer: { enum: ["user", "auto_review"] } } };
+  return {
+    CommandExecParams: { properties: properties(["command", "cwd", "timeoutMs", "outputBytesCap", "sandboxPolicy"]), definitions: { SandboxPolicy: { oneOf: [{ properties: { type: { enum: ["readOnly"] }, networkAccess: { type: "boolean" } } }] } } },
+    CommandExecResponse: { properties: properties(["exitCode", "stdout", "stderr"]) },
+    ThreadStartParams: { ...structuredClone(permissions), properties: { ...permissions.properties, ...properties(["cwd", "projectId", "runtimeWorkspaceRoots", "model", "config", "ephemeral", "sandbox"]) } },
+    TurnStartParams: { ...structuredClone(permissions), properties: { ...permissions.properties, ...properties(["threadId", "input", "clientUserMessageId", "effort", "sandboxPolicy"]) } },
+    ThreadStartResponse: { properties: { thread: {} } }, TurnStartResponse: { properties: { turn: {} } },
+    ThreadSetNameParams: { properties: properties(["threadId", "name"]) }, ThreadMetadataUpdateParams: { properties: properties(["threadId", "projectId"]) },
+  };
+}
+
+async function schemaRun(schemas, callback) {
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  let generations = 0, versions = 0;
+  const run = (_executable, args, options) => {
+    if (args[0] === "--version") { versions++; return { status: 0, stdout: "codex-cli fixture" }; }
+    assert.deepEqual(args.slice(0, 5), ["app-server", "generate-json-schema", "--experimental", "--out", args[4]]);
+    assert.equal(options.maxBuffer, 8 * 1024 * 1024); generations++;
+    mkdirSync(`${args[4]}/v2`);
+    for (const [name, schema] of Object.entries(schemas)) writeFileSync(`${args[4]}/v2/${name}.json`, JSON.stringify(schema));
+    return { status: 0 };
+  };
+  await callback(run);
+  assert.equal(generations, 1); assert.equal(versions, 1);
+}
+
+test("standalone preflight verifies command, creation and permission schemas with one generation", async () => {
+  await schemaRun(creationSchemas(), async run => {
+    const result = await inspectNativeCommandProtocol({ cli_version: "fixture" }, { run, standalone: true });
+    assert.equal(result.standalone_creation, "verified");
+  });
+});
+
+test("shared standalone preflight rejects incompatible permissions before creation", async () => {
+  for (const name of ["ThreadStartParams", "TurnStartParams"]) {
+    const schemas = creationSchemas(); delete schemas[name].properties.approvalsReviewer;
+    await schemaRun(schemas, run => assert.rejects(inspectNativeCommandProtocol({ cli_version: "fixture" }, { run, standalone: true }), { code: "DESKTOP_PERMISSION_UNVERIFIED" }));
+  }
+});
