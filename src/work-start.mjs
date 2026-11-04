@@ -100,10 +100,11 @@ export async function startWork(input, dependencies = {}) {
       if (record.stage === "create_dispatching" || record.stage === "create_unknown") {
         const found = reconciledChild(await dependencies.reconcile?.(record), record);
         if (!found) throw Object.assign(fail("Creation may have been dispatched. Read-only reconciliation did not find one child; creation was not repeated.", "WORK_CREATE_UNKNOWN"), summary(record));
+        delete record.create_error; delete record.create_failure; delete record.known_thread_id;
         Object.assign(record, found, { stage: "child_known" }); await writeHistoryRecord("work-starts", key, record, storage);
       } else {
         await hook("before_create_rpc", record);
-        delete record.create_error; delete record.create_failure;
+        delete record.create_error; delete record.create_failure; delete record.known_thread_id;
         record.stage = "create_dispatching"; await writeHistoryRecord("work-starts", key, record, storage);
         let created;
         try { created = await dependencies.create({ project, title, prompt, branch, attemptId: record.attempt_id, environmentConfigId: record.environment_config_id, connection }); }
