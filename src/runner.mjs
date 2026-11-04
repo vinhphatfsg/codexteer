@@ -8,7 +8,7 @@ function startLocal(argv, { cwd, timeoutMs, onStart, signal: abortSignal }) {
   const accepted = new Promise((resolve, reject) => { accept = resolve; rejectAccept = reject; });
   const completion = new Promise(resolve => {
     const started = new Date().toISOString();
-    let output = "", truncated = false, timedOut = false, failure, killer, timer, startUpdate = Promise.resolve(), closed = false;
+    let output = "", truncated = false, timedOut = false, failure, startFailure, killer, timer, startUpdate = Promise.resolve(), closed = false;
     const child = spawn(argv[0], argv.slice(1), { cwd, shell: false, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     const terminate = signal => { if (!child.pid || closed) return; try { process.kill(-child.pid, signal); } catch (e) { if (e.code !== "ESRCH") failure ??= e; } };
     const stop = () => { terminate("SIGTERM"); killer ??= setTimeout(() => terminate("SIGKILL"), 1000); };
@@ -17,14 +17,16 @@ function startLocal(argv, { cwd, timeoutMs, onStart, signal: abortSignal }) {
     for (const stream of [child.stdout, child.stderr]) { stream.setEncoding("utf8"); stream.on("data", data => { output += data; if (output.length > 32768) { truncated = true; output = output.slice(-32768); } }); }
     child.once("spawn", async () => {
       if (abortSignal?.aborted) interrupt();
-      try { await onStart(child.pid); accept(); } catch (error) { failure = error; stop(); rejectAccept(error); }
+      try { await onStart(child.pid); accept(); } catch (error) { failure = startFailure = error; stop(); }
     });
     child.once("error", error => { failure = error; accept(); });
     if (timeoutMs) timer = setTimeout(() => { timedOut = true; stop(); }, timeoutMs);
     child.once("close", async (code, signal) => {
       closed = true; clearTimeout(timer); clearTimeout(killer); process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt); abortSignal?.removeEventListener("abort", interrupt);
       await startUpdate;
-      accept();
+      // A failed start is reported only after the child has exited, so callers
+      // cannot release a resource lease while the child still runs.
+      if (startFailure) rejectAccept(startFailure); else accept();
       resolve({ pid: child.pid ?? null, exit_code: code, signal, timed_out: timedOut, started_at: started, completed_at: new Date().toISOString(), output_tail: output, output_truncated: truncated, error: failure?.message ?? null, error_code: failure ? failure.code ?? null : null });
     });
   });

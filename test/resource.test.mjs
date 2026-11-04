@@ -124,3 +124,19 @@ test("a bound supervisor's resource commands require its --thread and the same s
   for (const [name, command] of Object.entries(commands(held))) assert.equal(as(SESSION, THREAD, command).error?.code, "SUPERVISOR_STOPPED", name);
   assert.equal((await resourceStatus("lock", f)).state, "held");
 });
+
+test("a failed start releases the lease only after the child has exited", async t => {
+  const f = await fixture(t);
+  let pid;
+  const ready = `${f.home}/ready`;
+  const script = "process.on('SIGTERM',()=>{});require('fs').writeFileSync(process.argv[1],'');setInterval(()=>{},1000)";
+  const untilReady = async () => { while (!(await readFile(ready).then(() => true, () => false))) await new Promise(resolve => setTimeout(resolve, 10)); };
+  const busy = Object.assign(new Error("startup bookkeeping is busy"), { code: "STORE_BUSY" });
+  const outcome = await runWithResource("unity", [process.execPath, "-e", script, ready], { ...f, owner: "codex", ttlMs: 6000, timeoutMs: 15000 }, {
+    execute: (argv, options) => runCommand(argv, { ...options, onStart: async started => { pid = started; await untilReady(); throw busy; } }),
+  }).then(result => ({ result }), error => ({ error }));
+  assert.equal((outcome.error ?? outcome.result).code ?? outcome.result?.error_code, "STORE_BUSY");
+  assert.ok(Number.isInteger(pid));
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "child still alive after the lease was released");
+  assert.equal((await resourceStatus("unity", f)).state, "released");
+});
