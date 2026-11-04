@@ -213,3 +213,14 @@ test("thread help and bundled skill route new Cloud creation through Desktop Clo
   assert.doesNotMatch(skill, /--connection cloud thread create/);
   assert.match(skill, /--connection desktop-cloud work start/);
 });
+
+test("a stopped managed task routes continuation through a new work start, not a new supervisor prompt", () => {
+  for (const [argv, code] of [[["work", "tell", THREAD, "fixture"], "SUPERVISOR_STOPPED"], [["work", "start", "--project", "sample", "--title", "t", "fixture"], "MANAGED_SUPERVISOR_STOPPED"]]) {
+    const remedy = errorRemedy(argv, code);
+    assert.equal(remedy.help, "work", code);
+    assert.match(remedy.action, /work start/, code);
+    assert.match(remedy.action, /ユーザーが明示的に指示/, code);
+    assert.doesNotMatch(remedy.action, /本文の生成/, code);
+  }
+  assert.equal(errorRemedy(["supervise", "status", THREAD], "SUPERVISOR_STOPPED").action, sharedErrors.SUPERVISOR_STOPPED.action);
+});

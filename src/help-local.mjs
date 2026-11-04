@@ -12,6 +12,19 @@ const desktopReadOnlyError = {
   action: "接続は自動で切り替わらない。必要なら既定sharedで別に実行する。監督中に--connectionを外して送信を回避しない。",
 };
 
+const managedStoppedErrors = [
+  {
+    code: "SUPERVISOR_STOPPED",
+    when: "project control stopで停止済みの担当へwork tellした。",
+    action: "送信しない。停止済みの担当は再開も別担当への置換もしない。続けるのはユーザーが明示的に指示したときだけで、そのときは新しい題名か発注でwork startを実行し、別の担当として立ち上げる。",
+  },
+  {
+    code: "MANAGED_SUPERVISOR_STOPPED",
+    when: "停止済みの担当と同じ題名・発注・方針でwork startを再実行した。",
+    action: "停止済みの担当は再開しない。続けるのはユーザーが明示的に指示したときだけで、そのときは新しい題名か発注でwork startを実行し、別の担当として立ち上げる。",
+  },
+];
+
 const supervisorForbiddenError = {
   code: "SUPERVISOR_CONTROL_FORBIDDEN",
   when: "監督本文の--supervisor付きで、担当タスクの外に及ぶ操作（作成・照合・修復・Desktop更新など）を実行した",
@@ -526,7 +539,7 @@ export const topics = {
       "work tellは最新のcomplete project syncを要求し、送信直前に差分をdrainする。新event、質問・承認待ち、attention不明、不完全syncでは送らない。",
       "finding・source・kind・監督IDは内部化する。質問・承認への回答を代理生成するflagは提供しない。",
     ],
-    errors: [OPTIONS_INVALID, supervisorForbiddenError],
+    errors: [OPTIONS_INVALID, supervisorForbiddenError, ...managedStoppedErrors],
     see: ["thread", "supervise", "cloud"],
   },
 
