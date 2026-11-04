@@ -1,0 +1,310 @@
+import { parseCursor } from "./cursor.mjs";
+import { withHistoryReservation, assertHistoryBatch } from "./project-history.mjs";
+import { validateSyncPage } from "./sync-page.mjs";
+export { validateSyncPage } from "./sync-page.mjs";
+import { createHash, randomUUID } from "node:crypto";
+import { listManagedThreads, updateManagedThreadCursor, managedMembershipDigest } from "./project-index.mjs";
+import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
+
+const hash = value => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
+const bytes = value => Buffer.byteLength(JSON.stringify(value));
+const failure = (message, code = "PROJECT_SYNC_INVALID") => Object.assign(new Error(message), { code });
+const gapCodes = new Set(["STALE_CURSOR", "INVALID_CURSOR", "CURSOR_UPGRADE_REQUIRED", "OBSERVATION_CHANGED", "WORK_INITIAL_HISTORY_GAP"]);
+const terminal = new Set(["completed", "failed", "cancelled"]), active = new Set(["active", "inProgress", "in_progress", "pending", "queued", "running"]);
+
+// A command/tool outcome is scoped to that item, not to the delegated work.
+const failedTurn = event => event.type === "turn" && event.status === "failed";
+const failedWork = observation => ["failed", "systemError"].includes(observation?.status) || observation?.latest_turn_status === "failed" || (observation?.events ?? []).some(failedTurn);
+const provenWorkFailure = entry => ["failed", "systemError"].includes(entry?.reason?.backend_status) || entry?.reason?.latest_turn_status === "failed"
+  || (entry?.events ?? []).some(failedTurn);
+const commandOnlyFailure = entry => entry?.attention === "failure" && entry.reason?.failure_event === true
+  && !entry.reason.question_event && !entry.reason.backend_status && Array.isArray(entry.events) && entry.events.length > 0
+  && entry.events.every(event => event.type === "commandExecution");
+
+function classify(observation, complete, connection) {
+  const status = observation?.status ?? "unknown", flags = observation?.attention;
+  const events = observation?.events ?? [], questions = events.some(event => Array.isArray(event.questions) && event.questions.length);
+  const failed = failedWork(observation);
+  const human = questions || (Array.isArray(flags) && flags.length > 0);
+  const execution = active.has(status) ? "active" : ["idle", "notLoaded"].includes(status) ? "idle" : terminal.has(status) ? "terminal" : "unknown";
+  const idleCompleted = status === "idle" && observation.latest_turn_status === "completed"
+    && typeof observation.latest_turn_id === "string" && !!observation.latest_turn_id && observation.active_turn_count === 0;
+  const attentionKnown = Array.isArray(flags);
+  const attention = human ? "human" : failed ? "failure" : !complete || connection === "cloud" || !attentionKnown ? "unknown"
+    : idleCompleted || execution === "terminal" ? "review" : execution === "idle" || execution === "unknown" ? "unknown" : "none";
+  const observationState = complete ? "current" : "incomplete";
+  const group = observationState !== "current" ? "未確認" : ["human", "failure"].includes(attention) ? "対応が必要" : attention === "review" ? "検収待ち" : execution === "unknown" || attention === "unknown" ? "未確認" : "動作中";
+  return { execution, attention, observation: observationState, group, reason: { backend_status: status, attention_flags: flags ?? null, question_event: questions, failure_event: failed,
+    ...(attention === "review" && idleCompleted ? { review_basis: "idle_after_completed_turn", latest_turn_id: observation.latest_turn_id,
+      latest_turn_status: observation.latest_turn_status, active_turn_count: observation.active_turn_count } : {}) } };
+}
+
+function summarizeEvent(event, threadId, store) {
+  const token = randomUUID(), text = event.text ?? event.output ?? null;
+  const summary = { token, thread_id: threadId, event_id: event.id ?? null, type: event.type ?? "unknown", status: event.status ?? null,
+    text: typeof text === "string" ? [...text].slice(0, 500).join("") + ([...text].length > 500 ? "…" : "") : null,
+    full_bytes: bytes(event), full_command: `codexteer project event ${token} --json` };
+  store.push({ token, thread_id: threadId, event }); return summary;
+}
+
+export async function projectEvent(token, storage = {}) {
+  if (typeof token !== "string" || !/^[0-9a-f-]{36}$/i.test(token)) throw failure("A project event token is required.");
+  const record = await readRecord("project-sync-events", token, storage);
+  if (!record) throw failure("Project sync event was not found or was removed by project prune.", "PROJECT_EVENT_NOT_FOUND");
+  return record;
+}
+
+function validateBudget(value) {
+  if (!Number.isInteger(value) || value < 4096 || value > 1024 * 1024) throw failure("Invalid sync byte budget.");
+  return value;
+}
+
+
+function outputSize(result) {
+  for (let old = -1; old !== result.output_bytes;) { old = result.output_bytes; result.output_bytes = bytes(result); }
+  return result;
+}
+
+function compactWork(work) {
+  return { thread_id: work.thread_id, group: work.group, execution: work.execution, attention: work.attention,
+    observation: work.observation, complete: work.complete, history_gap: work.history_gap, retry_after_ms: work.retry_after_ms,
+    error: work.error, attention_repeated: work.attention_repeated, resolution_unconfirmed: work.resolution_unconfirmed,
+    detail_token: work.detail_token, details_omitted: true };
+}
+
+// Split inside a work as well as between works. Tokens always refer to the full
+// durable record; compact envelopes never silently truncate that record.
+function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0) {
+  if (!Number.isInteger(offset) || offset < 0 || offset > saved.works.length || !Number.isInteger(eventOffset) || eventOffset < 0
+    || (offset === saved.works.length ? eventOffset !== 0 : eventOffset > saved.works[offset].events.length)) throw failure("Invalid continuation offset.");
+  const result = { project_id: saved.project_id, sync_token: token, membership_digest: saved.membership_digest,
+    membership_count: saved.works.length, complete: saved.complete, works: [], omitted_works: 0, omitted_events: 0,
+    continuation_token: null, continuation_offset: offset, continuation_event_offset: eventOffset,
+    created_at: saved.created_at, output_bytes: 0, byte_budget: byteBudget };
+  let wi = offset, ei = eventOffset;
+  const finish = () => {
+    result.omitted_works = saved.works.length - wi;
+    result.omitted_events = saved.works.slice(wi).reduce((n, w, i) => n + w.events.length - (i === 0 ? ei : 0), 0);
+    result.continuation_token = wi < saved.works.length ? token : null;
+    result.next_offset = wi; result.next_event_offset = ei;
+    return outputSize(result);
+  };
+  if (bytes(finish()) > byteBudget) throw failure("The fixed sync envelope exceeds the byte budget.", "PROJECT_SYNC_BUDGET_TOO_SMALL");
+  while (wi < saved.works.length) {
+    const work = saved.works[wi], start = ei;
+    let row = { ...work, events: [], event_offset: start, events_complete: false };
+    result.works.push(row);
+    if (bytes(finish()) > byteBudget) { row = { ...compactWork(work), events: [], event_offset: start, events_complete: false }; result.works[result.works.length - 1] = row; }
+    let rejected = false;
+    while (ei < work.events.length) {
+      const event = work.events[ei]; row.events.push(event);
+      if (bytes(finish()) > byteBudget) {
+        row.events[row.events.length - 1] = { token: event.token, thread_id: work.thread_id, details_omitted: true };
+        if (bytes(finish()) > byteBudget) { row.events.pop(); rejected = true; break; }
+      }
+      ei++;
+    }
+    if (ei === work.events.length) { row.events_complete = true; wi++; ei = 0; }
+    if (bytes(finish()) > byteBudget || (rejected && ei === start)) {
+      result.works.pop(); wi = offset + result.works.filter(w => w.events_complete).length; ei = start;
+      if (!result.works.length) throw failure("A minimal work envelope exceeds the byte budget.", "PROJECT_SYNC_BUDGET_TOO_SMALL");
+      break;
+    }
+    if (rejected) break;
+  }
+  return finish();
+}
+
+export async function continueProjectSync(token, options = {}, storage = {}) {
+  const byteBudget = validateBudget(options.byteBudget ?? 16000);
+  if (typeof token !== "string" || !/^[0-9a-f-]{36}$/i.test(token)) throw failure("Invalid sync token.");
+  const saved = await readRecord("project-sync-results", token, storage);
+  if (!saved) throw failure("Project sync continuation was not found or was removed by project prune.", "PROJECT_SYNC_CONTINUATION_NOT_FOUND");
+  return pageResult(saved, token, byteBudget, options.offset ?? 0, options.eventOffset ?? 0);
+}
+
+// Attention is a reducer over the entire delta, not a property of its last page.
+// Current backend flags and durable question/failure evidence resolve separately.
+function reduceAttention(state, prior, summaries) {
+  // Reclassify only persisted evidence that proves the old command-level false
+  // positive. Opaque legacy evidence, real turn failures and questions survive.
+  const priorEntries = (prior?.entries ?? (prior ? [["legacy", prior]] : [])).filter(([, entry]) => !commandOnlyFailure(entry)).map(([id, entry]) => [id, entry.attention === "failure" && !provenWorkFailure(entry)
+    ? { ...entry, attention: "unknown", reason: { unverified_prior_failure: entry.reason ?? null } } : entry]);
+  const entries = new Map(priorEntries);
+  const summaryById = new Map(state.events.map((event, i) => [event.id, summaries[i]]));
+  for (const page of state.observations) {
+    if (["failed", "systemError"].includes(page.status)) entries.set("backend:failure", { attention: "failure", reason: { backend_status: page.status }, events: [] });
+    for (const flag of page.attention ?? []) entries.set(`flag:${flag}`, { attention: "human", reason: { attention_flags: [flag] }, events: [] });
+    for (const event of page.events) {
+      if (["answered", "resolved"].includes(event.status)) { if (state.complete) entries.delete(event.id); continue; }
+      if (state.complete && event.type === "userMessage" && event.change !== "updated") {
+        for (const [id, entry] of entries) if (entry.reason?.question_event) entries.delete(id);
+      }
+      if (state.complete && event.type === "turn" && ["completed", "cancelled", "interrupted"].includes(event.status)) entries.delete(event.id);
+      const question = Array.isArray(event.questions) && event.questions.length;
+      const failed = failedTurn(event);
+      if (question || failed) entries.set(event.id, { attention: question ? "human" : "failure", reason: { question_event: !!question, failure_event: failed }, events: [summaryById.get(event.id)] });
+    }
+  }
+  if (state.complete && Array.isArray(state.latest?.attention)) {
+    const flags = new Set(state.latest.attention);
+    for (const id of entries.keys()) if (id.startsWith("flag:") && !flags.has(id.slice(5))) entries.delete(id);
+  }
+  if (["failed", "systemError"].includes(state.latest?.status) || state.latest?.latest_turn_status === "failed") entries.set("backend:failure", { attention: "failure", reason: { backend_status: state.latest.status, latest_turn_status: state.latest.latest_turn_status }, events: [] });
+  // Incomplete observations cannot erase any previous unresolved evidence.
+  if (!state.complete && prior) for (const [id, entry] of priorEntries) if (!entries.has(id)) entries.set(id, entry);
+  if (state.complete && state.latest?.latest_turn_status === "completed" && !["failed", "systemError"].includes(state.latest.status)) {
+    entries.delete("backend:failure");
+    for (const [id, entry] of entries) if (entry.attention === "failure" && entry.events?.every(e => e.type === "turn" && typeof e.event_id === "string" && e.event_id !== state.latest.latest_turn_id)) entries.delete(id);
+  }
+  // Unverifiable legacy information is historical caution, not current work state.
+  if (state.complete && state.latest?.latest_turn_status === "completed" && state.latest.active_turn_count === 0
+    && ["idle", "completed"].includes(state.latest.status) && Array.isArray(state.latest.attention) && state.latest.attention.length === 0) {
+    state.historyNotes = [...entries.values()].filter(entry => entry.attention === "unknown");
+    for (const [id, entry] of entries) if (entry.attention === "unknown") entries.delete(id);
+  }
+  if (!entries.size) return null;
+  const values = [...entries.values()], attention = values.some(e => e.attention === "human") ? "human" : values.some(e => e.attention === "failure") ? "failure" : "unknown";
+  return { attention, reason: { evidence: values.map(e => e.reason) }, events: [...new Map(values.flatMap(e => e.events ?? []).map(e => [e.token, e])).values()], entries: [...entries] };
+}
+
+function initialBoundaryProven(start, threadId) {
+  if (start.initial_boundary_proven === true) return true;
+  try {
+    const claim = parseCursor(start.sync_cursor, threadId);
+    const captured = new Set(start.initial_events.map(e => JSON.stringify([e.turn_id, e.id]))).size;
+    return claim.v === 1 && claim.count === captured;
+  } catch { return false; } // Opaque legacy boundaries remain unproven.
+}
+
+export async function syncProject(projectId, options = {}, dependencies = {}) {
+  if (typeof projectId !== "string" || !projectId) throw failure("project sync requires --project.");
+  const byteBudget = validateBudget(options.byteBudget ?? 16000), pageLimit = options.pageLimit ?? 1000, maxPagesPerWork = options.maxPagesPerWork ?? 100;
+  if (!Number.isInteger(maxPagesPerWork) || maxPagesPerWork < 1 || !Number.isInteger(pageLimit) || pageLimit < 1 || pageLimit > 1000) throw failure("Invalid sync byte/page budget.");
+  // Reject an oversized fixed envelope before reading or committing state.
+  pageResult({ project_id: projectId, membership_digest: "0".repeat(64), complete: false, works: [], created_at: new Date().toISOString() }, "0".repeat(36), byteBudget);
+  const storage = dependencies.storage ?? {}, read = dependencies.read;
+  if (typeof read !== "function") throw failure("Project sync reader is unavailable.");
+  const members = await listManagedThreads(projectId, storage), membershipDigest = managedMembershipDigest(members);
+  const previous = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage), eventRecords = [], states = new Map();
+  for (const member of members) states.set(member.thread_id, { member, cursor: member.sync_cursor, events: [], observations: [], seen: new Set([member.sync_cursor]), pages: 0, complete: false, history_gap: false, retry_after_ms: null, error: null });
+  // A successful start observed these events but has not presented them yet.
+  // Keep them until membership publication commits the first sync cursor.
+  const starts = members.some(member => !member.sync_cursor) ? await listRecords("work-starts", storage) : [];
+  for (const state of states.values()) if (!state.member.sync_cursor) {
+    const start = starts.find(record => record.thread_id === state.member.thread_id && Array.isArray(record.initial_events) && record.sync_cursor);
+    if (start) {
+      if (!initialBoundaryProven(start, state.member.thread_id)) { state.error = "WORK_INITIAL_HISTORY_GAP"; state.history_gap = true; continue; }
+      state.events.push(...start.initial_events); state.observations.push({ events: start.initial_events }); state.cursor = start.sync_cursor; state.seen.add(start.sync_cursor);
+    }
+  }
+  const readPage = async state => {
+    try {
+      const page = validateSyncPage(await read(state.member.thread_id, { connection: state.member.connection, since: state.cursor, limit: pageLimit, fullEvents: true }), state.member.thread_id, state.cursor, state.seen);
+      if (page.omitted_older_events > 0 || (!state.cursor && page.omitted_older_events !== 0)) throw failure("Initial history boundary is unproven.", "WORK_INITIAL_HISTORY_GAP");
+      assertHistoryBatch(state.events, page.events);
+      if (state.member.environment_config_id && page.environment_config_id !== state.member.environment_config_id) throw failure("The task environment differs from its managed route.", "PROJECT_ROUTE_MISMATCH");
+      state.seen.add(page.cursor); state.observations.push(page);
+      state.pages++; state.cursor = page.cursor; state.events.push(...(page.events ?? [])); state.latest = page; state.complete = !page.has_more; return page.has_more;
+    } catch (error) {
+      state.complete = false; state.error = error.code ?? "OBSERVATION_FAILED"; state.history_gap = gapCodes.has(error.code);
+      if (error.code === "CLOUD_RATE_LIMITED" || error.http_status === 429) state.retry_after_ms = error.retry_after_ms ?? 15000;
+      return false;
+    }
+  };
+  // Fair first round: every member gets one page before any backlog is drained.
+  for (const state of states.values()) if (!state.error) await readPage(state);
+  let pending = [...states.values()].filter(state => !state.complete && !state.error);
+  while (pending.length) {
+    const next = [];
+    for (const state of pending) {
+      if (state.pages >= maxPagesPerWork) { state.error = "PAGE_BUDGET_EXHAUSTED"; continue; }
+      if (await readPage(state)) next.push(state);
+    }
+    pending = next;
+  }
+  // Verify completed heads once more so events arriving during backlog draining
+  // are not reported as part of a falsely complete snapshot.
+  for (const state of states.values()) if (state.complete && !state.error) {
+    if (await readPage(state)) { state.complete = false; state.error = "SYNC_HEAD_ADVANCED"; }
+  }
+
+  const works = [], unresolved = {}, historical = { ...previous?.historical_attention };
+  for (const state of states.values()) {
+    const priorAttention = previous?.unresolved_attention?.[state.member.thread_id] ?? null;
+    let axes;
+    if (state.latest) axes = classify({ ...state.latest, events: [] }, state.complete, state.member.connection);
+    else axes = { execution: "unknown", attention: "unknown", observation: "unavailable", group: "未確認", reason: { error: state.error } };
+    state.events = [...new Map(state.events.map(e => [JSON.stringify([e.turn_id ?? null, e.id]), e])).values()];
+    const eventSummaries = state.events.map(event => summarizeEvent(event, state.member.thread_id, eventRecords));
+    state.eventSummaries = eventSummaries;
+    const currentAttention = reduceAttention(state, priorAttention, eventSummaries);
+    if (state.historyNotes?.length) historical[state.member.thread_id] = [...new Map([...historical[state.member.thread_id] ?? [], ...state.historyNotes].map(entry => [JSON.stringify(entry), entry])).values()];
+    if (currentAttention) {
+      unresolved[state.member.thread_id] = currentAttention;
+      axes.attention = currentAttention.attention; axes.reason = currentAttention.reason; axes.group = currentAttention.attention === "unknown" ? "未確認" : "対応が必要";
+    }
+    const repeatedEvents = currentAttention?.events.filter(e => !eventSummaries.some(s => s.token === e.token)) ?? [];
+    works.push({ thread_id: state.member.thread_id, title: state.latest?.title ?? null, ...axes, history_gap: state.history_gap,
+      retry_after_ms: state.retry_after_ms, complete: state.complete, cursor: state.complete ? state.cursor : null, events: [...repeatedEvents, ...eventSummaries], error: state.error,
+      turn_identity: state.latest?.latest_turn_id ?? state.latest?.current_turn_id ?? state.latest?.turn_id ?? state.latest?.active_turn_id ?? null,
+      history_notes: historical[state.member.thread_id] ?? [],
+      resolution_unconfirmed: !!currentAttention, attention_repeated: !!priorAttention && !!currentAttention });
+  }
+  works.sort((a, b) => (a.group === "対応が必要" ? -1 : 0) - (b.group === "対応が必要" ? -1 : 0) || a.thread_id.localeCompare(b.thread_id));
+  const syncToken = randomUUID(), createdAt = new Date().toISOString();
+  const head = { schema: 1, project_id: projectId, sync_token: syncToken, membership_digest: membershipDigest,
+    complete: works.every(w => w.complete), complete_work_ids: works.filter(w => w.complete).map(w => w.thread_id),
+    unresolved_attention: unresolved, historical_attention: historical, created_at: createdAt };
+  for (const work of works) work.detail_token = randomUUID();
+  // The existing project head lock protects only publication, never network I/O.
+  // A stale reader must not replace a newer attention head, even after a CAS miss.
+  try {
+    await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => withHistoryReservation({ eventRecords, works, head, previous }, async (historyWrite) => {
+      const current = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage);
+      if (hash(current ?? null) !== hash(previous ?? null)) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");
+      // Persist attention evidence before advancing any cursor. A crash during
+      // publication leaves an incomplete head that the next sync can recover.
+      for (const record of eventRecords) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
+      await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), { ...head, complete: false, complete_work_ids: [], publication_pending: true }, storage);
+      // CAS uses the snapshot revision even if an empty read returns the same cursor.
+      for (const state of states.values()) if (state.complete) {
+        const work = works.find(w => w.thread_id === state.member.thread_id);
+        try {
+          const updated = await updateManagedThreadCursor(state.member.thread_id, state.member.sync_cursor, state.cursor, storage, state.member.sync_revision ?? 0);
+          work.sync_revision = updated.sync_revision;
+        } catch (error) {
+          work.complete = false; work.cursor = null; work.error = error.code; work.observation = "incomplete";
+          state.complete = false;
+          const retained = reduceAttention(state, previous?.unresolved_attention?.[work.thread_id], state.eventSummaries);
+          if (retained) {
+            unresolved[work.thread_id] = retained; work.attention = retained.attention; work.reason = retained.reason;
+            work.group = retained.attention === "unknown" ? "未確認" : "対応が必要"; work.resolution_unconfirmed = true;
+            work.attention_repeated = !!previous?.unresolved_attention?.[work.thread_id];
+            work.events = [...new Map([...retained.events, ...work.events].map(e => [e.token, e])).values()];
+          }
+        }
+      }
+      head.complete = works.every(w => w.complete);
+      head.complete_work_ids = works.filter(w => w.complete).map(w => w.thread_id);
+      // Save detail records before publishing a head that work tell may consume.
+      const detailStart = eventRecords.length;
+      for (const work of works) {
+        eventRecords.push({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...work } } });
+      }
+      await historyWrite("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, complete: head.complete, works, created_at: createdAt }, storage);
+      for (const record of eventRecords.slice(detailStart)) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
+      await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), head, storage);
+    }, storage), storage);
+  } catch (error) {
+    if (!["SYNC_CURSOR_CONFLICT", "PROJECT_SYNC_CONFLICT", "RECORD_BUSY"].includes(error.code)) throw error;
+    head.complete = false;
+    for (const work of works) { work.complete = false; work.cursor = null; work.error ??= error.code === "SYNC_CURSOR_CONFLICT" ? "SYNC_CURSOR_CONFLICT" : "PROJECT_SYNC_CONFLICT"; work.observation = "incomplete"; }
+    for (const work of works) eventRecords.push({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...work } } });
+    await withHistoryReservation({ eventRecords, works, head, previous }, async (historyWrite) => {
+      await historyWrite("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, complete: false, works, created_at: createdAt }, storage);
+      for (const record of eventRecords) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
+    }, storage);
+  }
+  return pageResult({ project_id: projectId, membership_digest: membershipDigest, complete: head.complete, works, created_at: createdAt }, syncToken, byteBudget);
+}

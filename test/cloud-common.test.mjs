@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
@@ -146,7 +147,7 @@ test("Cloud Monitor respects the server rate-limit delay and stops rather than r
 });
 
 async function fixture(t) {
-  const root=await mkdtemp("/private/tmp/codexteer-cloud-common-");t.after(()=>rm(root,{recursive:true,force:true}));
+  const root=await mkdtemp(tempPrefix("codexteer-cloud-common-"));t.after(()=>rm(root,{recursive:true,force:true}));
   const home=`${root}/home`,bin=`${root}/bin`,state=`${root}/state.json`,preload=`${root}/http.mjs`;await mkdir(home,{mode:0o700});await mkdir(bin,{mode:0o700});
   const assistant={id:first,role:"assistant",turn_status:"completed",created_at:2,output_items:[{type:"message",role:"assistant",content:[{content_type:"text",text:"initial answer"}]}]};
   await writeFile(state,JSON.stringify({sequence:1,posts:0,details:{task:{id:task,current_turn_id:first},current_assistant_turn:assistant},history:{current_turn_id:first,turn_mapping:{

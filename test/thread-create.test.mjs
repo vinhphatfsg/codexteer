@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, symlink, readFile, readdir } from "node:fs/promises";
@@ -19,7 +20,7 @@ export const catalog = { tools: [
 const result = value => ({ success: true, contentItems: [{ type: "inputText", text: JSON.stringify(value) }] });
 
 async function fixture(t) {
-  const home = await mkdtemp("/private/tmp/ct-create-"); t.after(() => rm(home, { recursive: true, force: true }));
+  const home = await mkdtemp(tempPrefix("ct-create-")); t.after(() => rm(home, { recursive: true, force: true }));
   const roots = [path.join(home, "primary"), path.join(home, "secondary")]; await Promise.all(roots.map(root => mkdir(root)));
   const project = { id: "canonical", name: "サンプル", roots: roots.map(path => ({ path })) }, calls = [], writes = [];
   let canonical;

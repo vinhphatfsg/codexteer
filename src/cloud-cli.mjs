@@ -1,8 +1,10 @@
+import { pruneProjectHistory } from "./project-history.mjs";
+import { controlProject } from "./project-control.mjs";
 import { desktopCloudProjectDoctor, assignDesktopCloudProject, desktopCloudProjectReceipt, resolveDesktopCloudProjectAttempt } from "./desktop-cloud-project.mjs";
 import { listProjects as listDesktopProjects } from "./projects.mjs";
 import { isDesktopCloudTask, desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
 import { desktopCloudConnection, desktopCloudEnvironments } from "./desktop-cloud-api.mjs";
-import { createDesktopCloudTask, listDesktopCloudTasks, desktopCloudReceipt } from "./desktop-cloud.mjs";
+import { createDesktopCloudTask, listDesktopCloudTasks, desktopCloudReceipt, reconcileDesktopCloudCreation } from "./desktop-cloud.mjs";
 import { isCloudTask, selectedCloudInvocation } from "./task-id.mjs";
 import { cloudTaskId } from "./cloud-id.mjs";
 import { normalizeThreadId } from "./thread-id.mjs";
@@ -26,6 +28,9 @@ import { playSendSound } from "./sound.mjs";
 import { VERSION } from "./version.mjs";
 import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, verifyCheckpoint, runCheckpoint, attachArtifacts } from "./checkpoint.mjs";
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
+import { startWork } from "./work-start.mjs";
+import { tellWork } from "./work-tell.mjs";
+import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
 
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code, execution_environment: "cloud" });
 function option(args, name, fallback) {
@@ -86,6 +91,52 @@ export async function mainCloud(argv) {
   const dependencies = desktopCloud ? desktopCloudConnection() : cloudConnection();
   if (desktopCloud && await desktopCloudCommands(command, args, { supervisor, output, bound, dependencies })) return;
 
+  if (command === "project") {
+    const action = args.shift();
+    if (action === "control") {
+      if (supervisor) throw failure("A bound supervisor cannot control project supervision.", "SUPERVISOR_CONTROL_FORBIDDEN");
+      const operation = args.shift(), project = option(args, "--project"), all = flag(args, "--all"), work = option(args, "--work"); exact(args, 0);
+      const data = await controlProject(project, operation, { all, work });
+      console.log(JSON.stringify(json ? { ok: data.complete, command: "project.control", data } : data, null, json ? undefined : 2));
+      if (!data.complete) process.exitCode = 1; return;
+    }
+    if (action === "prune") {
+      if (supervisor) throw failure("A bound supervisor cannot prune project history.", "SUPERVISOR_CONTROL_FORBIDDEN");
+      const project = option(args, "--project"); exact(args, 0); output("project.prune", await pruneProjectHistory(project)); return;
+    }
+    if (action === "sync") {
+      if (supervisor) throw failure("A bound supervisor cannot sync an entire project.", "SUPERVISOR_CONTROL_FORBIDDEN");
+      const project = option(args, "--project"), byteBudget = Number(option(args, "--byte-budget", "16000")), continuation = option(args, "--continue"), offset = Number(option(args, "--offset", "0")), eventOffset = Number(option(args, "--event-offset", "0")); exact(args, 0);
+      output("project.sync", continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget }, { read: (threadId, options) => observeThread(threadId, options, dependencies) })); return;
+    }
+    if (action === "event") { exact(args, 1); output("project.event", await projectEvent(args[0])); return; }
+    throw failure("Expected project sync|event|prune.");
+  }
+  if (command === "work") {
+    const action = args.shift();
+    if (action === "tell") {
+      if (supervisor) throw failure("A bound supervisor cannot invoke work tell recursively.", "SUPERVISOR_CONTROL_FORBIDDEN");
+      const syncToken = option(args, "--sync-token"), newTurn = flag(args, "--new-turn"), id = targetId(args.shift()), body = message(args);
+      output("work.tell", await tellWork(id, body, { syncToken, newTurn }, { read: (threadId, options) => observeThread(threadId, { ...options, limit: 1000 }, dependencies), connectionDependencies: dependencies })); return;
+    }
+    if (!desktopCloud) throw failure("work start requires shared or desktop-cloud; the legacy cloud route is unsupported.", "WORK_START_CONNECTION_UNSUPPORTED");
+    if (action !== "start" || supervisor) throw failure("Expected an unbound work start command.");
+    const project = option(args, "--project"), title = option(args, "--title"), environment = option(args, "--environment"), root = option(args, "--root");
+    const end = args.includes("--") ? args.indexOf("--") : args.length;
+    rejectUnknownOptions(args.slice(0, end), "work start", "Put literal flags after --.", failure);
+    const order = message(args);
+    const data = await startWork({ project, title, order, root, environment, connection: "desktop-cloud" }, {
+      resolveEnvironment: async selector => {
+        const matches = (await desktopCloudEnvironments()).environments.filter(e => e.id === selector || e.name === selector);
+        if (matches.length !== 1) throw failure("Select exactly one accessible Desktop Cloud environment configuration.");
+        return matches[0];
+      },
+      create: ({ environmentConfigId, prompt, title: name, attemptId }) => createDesktopCloudTask(environmentConfigId, prompt, { title: name, attemptId }),
+      reconcile: record => reconcileDesktopCloudCreation(record),
+      read: (threadId, options) => observeThread(threadId, { ...options, limit: 1000 }, dependencies),
+    });
+    output("work.start", data); return;
+  }
   if (["read", "status", "watch"].includes(command)) {
     const options = { supervisor, connection, fullHistory: flag(args, "--full-history"), since: option(args, "--since"),
       limit: Number(option(args, "--limit", "50")), maxChars: Number(option(args, "--max-chars", "2000")), includeOutput: flag(args, "--include-output") };
@@ -173,13 +224,13 @@ export async function mainCloud(argv) {
     const action = args.shift(), includeOutput = flag(args, "--include-output"); let data;
     if (action === "capture") {
       const paths = repeated(args, "--path"), excludes = repeated(args, "--exclude"); exact(args, 2);
-      data = await createCheckpoint(await bound(args[0]), args[1], { paths, excludes });
+      data = await createCheckpoint(await bound(args[0]), args[1], { paths, excludes, supervisor, connection });
     } else if (action === "run") {
       const timeoutMs = Number(option(args, "--timeout-ms", "0"));
       if (args[2] !== "--" || args.length < 4) throw failure("Expected checkpoint run <TASK> <ID> -- <COMMAND> [ARGS...].");
-      data = await runCheckpoint(await bound(args[0]), args[1], args.slice(3), { timeoutMs });
+      data = await runCheckpoint(await bound(args[0]), args[1], args.slice(3), { timeoutMs, supervisor, connection });
       if (!includeOutput) delete data.output_tail; if (!data.valid) process.exitCode = 1;
-    } else if (action === "attach") { const refs = repeated(args, "--artifact"); exact(args, 2); data = await attachArtifacts(await bound(args[0]), args[1], refs); }
+    } else if (action === "attach") { const refs = repeated(args, "--artifact"); exact(args, 2); data = await attachArtifacts(await bound(args[0]), args[1], refs, { supervisor, connection }); }
     else if (action === "list") { exact(args, 1); data = await listCheckpoints(await bound(args[0])); }
     else if (["show", "verify"].includes(action)) { exact(args, 2); const id = await bound(args[0]); data = action === "verify" ? await verifyCheckpoint(id, args[1]) : checkpointSummary(await getCheckpoint(id, args[1]), includeOutput); if (action === "verify" && !data.valid) process.exitCode = 1; }
     else throw failure("Unknown checkpoint operation.");
@@ -191,7 +242,7 @@ export async function mainCloud(argv) {
     if (supervisor && !threadId) throw failure("A supervisor resource command requires its --thread target.", "SUPERVISOR_CONTROL_FORBIDDEN");
     let data;
     if (["acquire", "run"].includes(action)) {
-      const settings = { owner: option(args, "--owner"), ttlMs: Number(option(args, "--ttl-ms", "600000")), reason: option(args, "--reason", ""), condition: option(args, "--condition", ""), threadId };
+      const settings = { owner: option(args, "--owner"), ttlMs: Number(option(args, "--ttl-ms", "600000")), reason: option(args, "--reason", ""), condition: option(args, "--condition", ""), threadId, supervisor, connection };
       if (action === "run") {
         const timeoutMs = Number(option(args, "--timeout-ms", "0")), includeOutput = flag(args, "--include-output");
         if (args[1] !== "--" || args.length < 3) throw failure("Expected resource run <NAME> --owner NAME -- <COMMAND> [ARGS...].");
@@ -199,7 +250,7 @@ export async function mainCloud(argv) {
       } else { exact(args, 1); data = await acquireResource(args[0], settings); }
     } else if (["renew", "release"].includes(action)) {
       const token = option(args, "--token"), ttlMs = Number(option(args, "--ttl-ms", "600000")); exact(args, 1);
-      data = action === "renew" ? await renewResource(args[0], token, { ttlMs }) : await releaseResource(args[0], token);
+      data = action === "renew" ? await renewResource(args[0], token, { ttlMs, threadId, supervisor, connection }) : await releaseResource(args[0], token);
     } else if (action === "status") { exact(args, 1); data = await resourceStatus(args[0]); }
     else if (action === "list") { exact(args, 0); data = await listResources(); }
     else throw failure("Unknown resource operation.");

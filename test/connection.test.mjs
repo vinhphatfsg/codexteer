@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, chmod, symlink, readdir, realpath } from "node:fs/promises";
@@ -17,7 +18,7 @@ const ID = "11111111-1111-4111-8111-111111111111", OTHER = "22222222-2222-4222-8
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url)), exec = promisify(execFile);
 const thread = { id: ID, status: { type: "idle" }, turns: [] };
 async function fixture(t, answer = () => undefined, protectedSocket = false) {
-  const home = await mkdtemp("/private/tmp/ct-native-"), directory = `${home}/app-server-control`, socket = `${directory}/app-server-control.sock`;
+  const home = await mkdtemp(tempPrefix("ct-native-")), directory = `${home}/app-server-control`, socket = `${directory}/app-server-control.sock`;
   await mkdir(directory, { mode: 0o700 });
   const http = createServer(), ws = new WebSocketServer({ server: http }), calls = [];
   ws.on("connection", peer => peer.on("message", async bytes => {
@@ -71,7 +72,7 @@ test("official Desktop aliases support read-only observation and detect physical
   assert.equal(f.calls.length, before);
 });
 
-test("the existing private Unix endpoint supports read/watch/doctor without claiming mutation support", async t => {
+test("the existing private Unix endpoint supports read/watch/doctor without claiming mutation support", { skip: process.platform !== "darwin" && "the private Desktop Unix endpoint is macOS-only" }, async t => {
   const f = await fixture(t);
   const observed = await observeThread(ID, {}, f.dependencies());
   assert.equal(observed.thread_id, ID);
@@ -159,14 +160,14 @@ test("CLI binds copied observation prompts to the selected endpoint and rejects 
   assert.doesNotMatch(data.prompt, /\n.* send /);
   const register = data.prompt.split("\n").find(line => line.includes(` supervise register ${ID} `));
   const recipientEnv = { PATH: "/no-supervisor-cli", HOME: f.home };
-  await exec("/bin/sh", ["-c", register], { cwd: "/private/tmp", env: recipientEnv });
+  await exec("/bin/sh", ["-c", register], { cwd: f.home, env: recipientEnv });
   const read = data.prompt.split("\n").find(line => line.endsWith(` read ${ID} --include-output --json`));
-  const observed = JSON.parse((await exec("/bin/sh", ["-c", read], { cwd: "/private/tmp", env: recipientEnv })).stdout).data;
+  const observed = JSON.parse((await exec("/bin/sh", ["-c", read], { cwd: f.home, env: recipientEnv })).stdout).data;
   assert.equal(observed.connection_mode, "desktop");
   assert.equal((await f.cli(["supervise", "status", ID])).data.observation.connection, "observed");
-  await assert.rejects(exec("/bin/sh", ["-c", `${data.command} --connection shared read ${ID} --json`], { cwd: "/private/tmp", env: recipientEnv }), error => JSON.parse(error.stdout).error.code === "OPTIONS_INVALID");
+  await assert.rejects(exec("/bin/sh", ["-c", `${data.command} --connection shared read ${ID} --json`], { cwd: f.home, env: recipientEnv }), error => JSON.parse(error.stdout).error.code === "OPTIONS_INVALID");
   // Bypassing the launcher with the same supervisor ID on another connection is still refused.
-  const bypass = args => exec(data.node.path, [`${data.deployment.directory}/bin/codexteer.mjs`, "--supervisor", data.supervisor.session_id, "--connection", "shared", ...args], { cwd: "/private/tmp", env: { ...recipientEnv, CODEX_HOME: data.deployment.codex_home } });
+  const bypass = args => exec(data.node.path, [`${data.deployment.directory}/bin/codexteer.mjs`, "--supervisor", data.supervisor.session_id, "--connection", "shared", ...args], { cwd: f.home, env: { ...recipientEnv, CODEX_HOME: data.deployment.codex_home } });
   await assert.rejects(bypass(["read", ID, "--json"]), error => JSON.parse(error.stdout).error.code === "SUPERVISOR_MISMATCH");
   await assert.rejects(bypass(["supervise", "register", ID, "--owner", "codex"]), /another connection/);
   const before = f.calls.length;

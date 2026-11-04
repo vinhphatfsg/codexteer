@@ -85,7 +85,7 @@ export async function createCloudTask(environment, branch, prompt, settings = {}
     || branch.split("/").some(part => part.startsWith(".") || part.endsWith(".lock") || part.endsWith("."))) throw failure("--branch requires an explicit valid Git branch name.");
   if (typeof prompt !== "string" || !prompt.trim() || prompt.includes("\0") || Buffer.byteLength(prompt) > 1024 * 1024) throw failure("A non-empty initial instruction of at most 1 MiB is required.");
   const run = dependencies.run ?? runCloudCli, write = dependencies.write ?? writeRecord;
-  const attemptId = randomUUID();
+  const attemptId = settings.attemptId ?? randomUUID();
   const receipt = { schema: 1, backend: "codex-cli", execution_environment: "cloud", attempt_id: attemptId,
     environment_selector: environment, branch, creation_status: "not_created", submission_status: "not_sent",
     prompt_sha256: createHash("sha256").update(prompt).digest("hex"), message_characters: [...prompt].length, dry_run: !!settings.dryRun };

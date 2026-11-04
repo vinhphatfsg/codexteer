@@ -143,7 +143,7 @@ test("an old long-form command from an earlier prompt still runs against the sam
   const q = value => `'${value.replaceAll("'", "'\\''")}'`;
   const longForm = `CODEX_HOME=${q(data.deployment.codex_home)} ${q(data.node.path)} ${q(path.join(data.deployment.directory, "bin/codexteer.mjs"))} --require-node-version ${q(data.node.version)} --supervisor ${q(data.supervisor.session_id)} --connection shared`;
   const receiving = { ...options, env: { ...options.env, PATH: "/no-cli", CODEX_HOME: path.join(options.cwd, "other-home") } };
-  for (const shell of ["/bin/sh", "/bin/zsh"]) {
+  for (const shell of ["/bin/sh", "/bin/zsh"].filter(existsSync)) {
     const registered = spawnSync(shell, ["-f", "-c", `${longForm} supervise register ${ID} --owner claude`], receiving);
     assert.equal(registered.status, 0, registered.stderr);
   }
@@ -287,7 +287,7 @@ test("generated commands use the saved CLI despite missing or shadowed PATH comm
     assert.ok(result.stdout.includes(`\n${prefix} ${operation}`), `Missing bound command: ${operation}`);
   }
   const expected = spawnSync(process.execPath, [BIN, "--version"], options).stdout;
-  for (const shell of ["/bin/sh", "/bin/zsh", "/bin/bash"]) {
+  for (const shell of ["/bin/sh", "/bin/zsh", "/bin/bash"].filter(existsSync)) {
     for (const PATH of [poison, path.join(options.cwd, "no-bin")]) {
       const executed = spawnSync(shell, ["-f", "-c", command], { ...options, env: { ...options.env, PATH } });
       assert.equal(executed.status, 0, executed.stderr);
@@ -329,7 +329,7 @@ test("pasted commands retain the generating profile when the receiving environme
       const env = { ...options.env, HOME: recipientUser, PATH: "/no-supervisor-cli" };
       if (receivingHome === undefined) delete env.CODEX_HOME;
       else env.CODEX_HOME = receivingHome;
-      for (const shell of ["/bin/sh", "/bin/bash", "/bin/zsh"]) {
+      for (const shell of ["/bin/sh", "/bin/bash", "/bin/zsh"].filter(existsSync)) {
         const executed = spawnSync(shell, ["-f", "-c", command], { ...options, cwd: recipientUser, env });
         assert.equal(executed.status, 0, executed.stderr);
         assert.deepEqual(JSON.parse(executed.stdout).data.map(entry => entry.id), ["original"], `${source} home via ${shell}`);
@@ -351,7 +351,7 @@ test("generated shell arguments preserve spaces, quotes, unicode and command sub
   assert.equal(result.stdout.includes(linked), false);
   const command = versionCommand(result.stdout);
   const expected = spawnSync(process.execPath, [copied, "--version"], options).stdout;
-  for (const shell of ["/bin/zsh", "/bin/bash"]) {
+  for (const shell of ["/bin/zsh", "/bin/bash"].filter(existsSync)) {
     const executed = spawnSync(shell, ["-f", "-c", command], { ...options, env: { ...options.env, PATH: "/usr/bin:/bin" } });
     assert.equal(executed.status, 0, executed.stderr);
     assert.equal(executed.stdout, expected);
@@ -478,7 +478,7 @@ test("supervise prompt composes with a shell launcher without consuming stdin or
   options.env.PATH = `${options.cwd}:${process.env.PATH}`;
   const expected = spawnSync(process.execPath, [BIN, "supervise", "prompt", ID], options).stdout.slice(0, -1);
   const script = 'steer_prompt=$(codexteer supervise prompt "$1") && claude "$steer_prompt"';
-  for (const shell of ["/bin/zsh", "/bin/bash"]) {
+  for (const shell of ["/bin/zsh", "/bin/bash"].filter(existsSync)) {
     const launched = spawnSync(shell, ["-f", "-c", script, "prompt-shortcut-test", ID], { ...options, input: "terminal input remains available\n" });
     assert.equal(launched.status, 0, launched.stderr);
     const captured = JSON.parse(launched.stdout); captured.args = captured.args.map(withoutSession);

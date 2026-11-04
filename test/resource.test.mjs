@@ -1,9 +1,11 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { runCommand } from "../src/runner.mjs";
 import { acquireResource, releaseResource, renewResource, resourceStatus, runWithResource } from "../src/resource.mjs";
 
-async function fixture(t) { const home = await mkdtemp("/private/tmp/cs-resource-"); t.after(() => rm(home, { recursive: true, force: true })); return { home }; }
+async function fixture(t) { const home = await mkdtemp(tempPrefix("cs-resource-")); t.after(() => rm(home, { recursive: true, force: true })); return { home }; }
 
 test("leases exclude another owner and record conditions without interpreting them as permissions", async t => {
   const f = await fixture(t); let now = 100000;
@@ -21,23 +23,45 @@ test("leases exclude another owner and record conditions without interpreting th
 
 test("resource run holds and renews the lease, releases it on command failure", async t => {
   const f = await fixture(t);
-  const running = runWithResource("unity", [process.execPath, "-e", "setTimeout(()=>process.exit(3),1500)"], { ...f, owner: "codex", ttlMs: 1000 });
-  await new Promise(r => setTimeout(r, 100));
+  const release = `${f.home}/complete`;
+  let startedResolve; const started = new Promise(resolve => { startedResolve = resolve; });
+  const script = "const fs=require('fs');const timer=setInterval(()=>{if(fs.existsSync(process.argv[1])){clearInterval(timer);process.exit(3)}},10)";
+  const running = runWithResource("unity", [process.execPath, "-e", script, release], { ...f, owner: "codex", ttlMs: 6000, timeoutMs: 15000 }, {
+    execute: (argv, options) => runCommand(argv, { ...options, onStart: () => startedResolve() }),
+  });
+  await started;
   await assert.rejects(acquireResource("unity", { ...f, owner: "claude-code" }), error => ["RESOURCE_BUSY", "RECORD_BUSY"].includes(error.code));
-  await new Promise(r => setTimeout(r, 1100));
-  assert.equal((await resourceStatus("unity", f)).state, "held");
+  let renewed = false;
+  const deadline = Date.now() + 12000;
+  while (!renewed && Date.now() < deadline) {
+    const status = await resourceStatus("unity", f);
+    renewed = status.state === "held" && Date.parse(status.lease.expires_at) > Date.parse(status.lease.claimed_at) + 6000;
+    if (!renewed) await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  await writeFile(release, "complete after observed renewal");
   const result = await running;
+  assert.ok(renewed, "observe an actual renewal before allowing command completion");
   assert.equal(result.exit_code, 3); assert.equal(result.valid, false); assert.equal(result.released, true);
   assert.equal((await resourceStatus("unity", f)).state, "released");
 });
 
 test("loss of lease stops only the command started by resource run", async t => {
   const f = await fixture(t);
-  const running = runWithResource("git", [process.execPath, "-e", "setTimeout(()=>{},20000)"], { ...f, owner: "codex", ttlMs: 1000 });
-  await new Promise(r => setTimeout(r, 100));
+  let startedResolve; const started = new Promise(resolve => { startedResolve = resolve; });
+  const running = runWithResource("git", [process.execPath, "-e", "setTimeout(()=>{},20000)"], { ...f, owner: "codex", ttlMs: 1000 }, {
+    execute: (argv, options) => runCommand(argv, { ...options, onStart: () => startedResolve() }),
+  });
+  await started;
+  // Renewal legitimately owns this same lock. Busy is not a release/claim
+  // acknowledgement; retry only that transient result until it really succeeds.
+  const retryBusy = async operation => {
+    const deadline = Date.now() + 5000;
+    for (;;) try { return await operation(); }
+    catch (error) { if (error.code !== "RECORD_BUSY" || Date.now() >= deadline) throw error; await new Promise(resolve => setTimeout(resolve, 5)); }
+  };
   const old = (await resourceStatus("git", f)).lease;
-  await releaseResource("git", old.token, f);
-  const replacement = await acquireResource("git", { ...f, owner: "other" });
+  await retryBusy(() => releaseResource("git", old.token, f));
+  const replacement = await retryBusy(() => acquireResource("git", { ...f, owner: "other" }));
   const result = await running;
   assert.equal(result.valid, false); assert.ok(result.lease_error); assert.equal(result.signal, "SIGTERM");
   assert.equal((await resourceStatus("git", f)).lease.token, replacement.token);
@@ -99,4 +123,20 @@ test("a bound supervisor's resource commands require its --thread and the same s
   await controlSupervisor(THREAD, "stop", f);
   for (const [name, command] of Object.entries(commands(held))) assert.equal(as(SESSION, THREAD, command).error?.code, "SUPERVISOR_STOPPED", name);
   assert.equal((await resourceStatus("lock", f)).state, "held");
+});
+
+test("a failed start releases the lease only after the child has exited", async t => {
+  const f = await fixture(t);
+  let pid;
+  const ready = `${f.home}/ready`;
+  const script = "process.on('SIGTERM',()=>{});require('fs').writeFileSync(process.argv[1],'');setInterval(()=>{},1000)";
+  const untilReady = async () => { while (!(await readFile(ready).then(() => true, () => false))) await new Promise(resolve => setTimeout(resolve, 10)); };
+  const busy = Object.assign(new Error("startup bookkeeping is busy"), { code: "STORE_BUSY" });
+  const outcome = await runWithResource("unity", [process.execPath, "-e", script, ready], { ...f, owner: "codex", ttlMs: 6000, timeoutMs: 15000 }, {
+    execute: (argv, options) => runCommand(argv, { ...options, onStart: async started => { pid = started; await untilReady(); throw busy; } }),
+  }).then(result => ({ result }), error => ({ error }));
+  assert.equal((outcome.error ?? outcome.result).code ?? outcome.result?.error_code, "STORE_BUSY");
+  assert.ok(Number.isInteger(pid));
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "child still alive after the lease was released");
+  assert.equal((await resourceStatus("unity", f)).state, "released");
 });

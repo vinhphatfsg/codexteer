@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -5,12 +6,14 @@ import { withTarget } from "../src/target.mjs";
 import { registerSupervisor, assertSupervisor, controlSupervisor, getSupervisor } from "../src/supervision.mjs";
 import { runRemoteShellCommand } from "../src/remote-io.mjs";
 import { runWithResource, resourceStatus } from "../src/resource.mjs";
+import { registerManagedThread } from "../src/project-index.mjs";
 
 const HOST = "remote-control:env_fixture", ID = "11111111-1111-4111-8111-111111111111", SESSION = "22222222-2222-4222-8222-222222222222";
 const scope = fn => withTarget(HOST, undefined, fn, { transport: "paired" });
 async function fixture(t) {
-  const home = await mkdtemp("/private/tmp/ct-supervised-shell-");
+  const home = await mkdtemp(tempPrefix("ct-supervised-shell-"));
   t.after(() => rm(home, { recursive: true, force: true }));
+  await registerManagedThread(ID, { projectId: "project-fixture", connection: "shared", remoteTransport: "paired", backendProjectId: "remote-project" }, { home });
   await registerSupervisor(ID, SESSION, { home, owner: "fixture", connection: "shared" });
   let dispatched = 0, command;
   const client = { close() {}, async request(method, args) {
@@ -99,4 +102,16 @@ test("shell dispatch revalidates session and connection, and cancellation after 
   const f = await fixture(t), controller = new AbortController();
   await assert.rejects(runRemoteShellCommand(["fixture-program"], { ...f.options, signal: controller.signal, onStart: async () => { controller.abort(); } }, f.dependencies), { code: "CANCELLED" });
   assert.equal(f.dispatched, 0);
+}));
+
+test("managed paired command/exec stays unsupported before and after pause/stop", t => scope(async () => {
+  const { runRemoteCommand } = await import("../src/remote-io.mjs");
+  for (const action of ["pause", "stop"]) {
+    const f = await fixture(t); let dispatches = 0;
+    f.client.request = async method => { if (method === "command/exec") { dispatches++; return { exitCode: 0, stdout: "", stderr: "" }; } throw new Error(`unexpected ${method}`); };
+    await assert.rejects(runRemoteCommand(["fixture-program"], { threadId: ID, supervisor: SESSION, connection: "shared",
+      onStart: () => controlSupervisor(ID, action, { home: f.home }) }, f.dependencies),
+    { code: "MANAGED_PAIRED_COMMAND_UNSUPPORTED" });
+    assert.equal(dispatches, 0);
+  }
 }));

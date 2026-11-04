@@ -13,12 +13,12 @@ export async function prepareOrchestrationPrompt(project, goal, { agent, connect
   if (connectionMode(connection) === "desktop") throw desktopReadOnly();
   const { command, ...runtime } = await prepareBoundCommand({ session: null, connection, context: targetContext() ?? process.env.CODEX_THREAD_ID }, usePathCli);
   // Cloud has no Desktop host route. Keep paired orchestration on its selected
-  // host; local orchestration gets a separate, unbound Web Cloud command.
+  // host; local orchestration gets a separate, unbound Desktop Cloud command.
   const cloudCommand = targetHost() === "local"
-    ? (await prepareBoundCommand({ session: null, connection: "cloud" }, usePathCli)).command : null;
+    ? (await prepareBoundCommand({ session: null, connection: "desktop-cloud" }, usePathCli)).command : null;
   const render = usePathCli ? orchestrationPrompt
     : (await import(pathToFileURL(path.join(runtime.deployment.directory, "src/orchestrate-prompt.mjs")).href)).orchestrationPrompt;
-  return { ...render(project, goal, command, { agent, usePathCli, cloudCommand }), command, cloud_command: cloudCommand, connection, ...runtime, ...hostFields() };
+  return { ...render(project, goal, command, { agent, usePathCli, cloudCommand, canStart: targetHost() === "local" }), command, cloud_command: cloudCommand, connection, ...runtime, ...hostFields() };
 }
 
 export async function orchestrateAgent(project, goal, { agent = "claude", agentArgs = [], connection = "shared", usePathCli = false } = {}) {

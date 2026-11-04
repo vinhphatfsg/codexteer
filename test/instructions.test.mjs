@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -5,7 +6,7 @@ import { sendTrackedMessage, listInstructions, getMessage, instructionStates } f
 import { writeRecord } from "../src/store.mjs";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
-async function setup(t) { const home = await mkdtemp("/private/tmp/cs-instructions-"); t.after(() => rm(home, { recursive: true, force: true })); return { home, send: async (threadId, text, o) => ({ sent: true, delivery_status: "accepted", client_message_id: o.clientMessageId, turn_id: "t" }) }; }
+async function setup(t) { const home = await mkdtemp(tempPrefix("cs-instructions-")); t.after(() => rm(home, { recursive: true, force: true })); return { home, send: async (threadId, text, o) => ({ sent: true, delivery_status: "accepted", client_message_id: o.clientMessageId, turn_id: "t" }) }; }
 
 test("replacement and withdrawal preserve history and expose only the effective instruction", async t => {
   const deps = await setup(t);

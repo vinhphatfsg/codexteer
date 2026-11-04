@@ -3,6 +3,7 @@ import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs
 import { targetHost, remoteReadOnly, remoteTransport, isControlTransport } from "./target.mjs";
 import { normalizeTaskId, isCloudTask } from "./task-id.mjs";
 import { isAlive } from "./runtime.mjs";
+import { getManagedThread } from "./project-index.mjs";
 
 const failure = (message, code) => Object.assign(new Error(message), { code });
 const states = new Set(["active", "paused", "stopped"]);
@@ -80,7 +81,7 @@ export async function assertSupervisorRegistration(threadInput, sessionInput, { 
   return current;
 }
 
-export async function registerSupervisor(threadInput, sessionInput, { owner = "external", launcherPid = null, connection = "shared", ...storage } = {}) {
+export async function registerSupervisor(threadInput, sessionInput, { owner = "external", launcherPid = null, connection = "shared", rejectStopped = false, ...storage } = {}) {
   const threadId = normalizeTaskId(threadInput), sessionId = supervisorId(sessionInput);
   if (typeof owner !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(owner)) throw failure("Supervisor owner must be a short agent name.", "SUPERVISOR_INVALID");
   if (launcherPid !== null && (!Number.isSafeInteger(launcherPid) || launcherPid <= 0)) throw failure("Invalid supervisor launcher PID.", "SUPERVISOR_INVALID");
@@ -88,6 +89,7 @@ export async function registerSupervisor(threadInput, sessionInput, { owner = "e
   // Registrations take the namespace-wide lock before the task lock. Stop,
   // pause and sends only take the task lock and never acquire in reverse order.
   return withStoreLock("supervisor-registration", () => withStoreLock(`supervisor-${threadId}`, async () => {
+    if (rejectStopped && (await getSupervisor(threadId, storage))?.state === "stopped") throw failure("A stopped managed task cannot be reactivated by registration.", "MANAGED_SUPERVISOR_STOPPED");
     const current = await assertSupervisorRegistration(threadId, sessionId, { connection, ...storage });
     if (current?.session_id === sessionId) return current;
     const now = new Date().toISOString();
@@ -98,7 +100,7 @@ export async function registerSupervisor(threadInput, sessionInput, { owner = "e
   }, storage), storage);
 }
 
-export async function controlSupervisor(threadInput, action, { expectedSession, ...storage } = {}) {
+export async function controlSupervisor(threadInput, action, { expectedSession, expectedConnection, reportTransition = false, ...storage } = {}) {
   const threadId = normalizeTaskId(threadInput);
   if (!["pause", "resume", "stop"].includes(action)) throw failure("Expected pause, resume or stop.", "SUPERVISOR_INVALID");
   return withStoreLock(`supervisor-${threadId}`, async () => {
@@ -106,12 +108,15 @@ export async function controlSupervisor(threadInput, action, { expectedSession, 
     if (!record) throw failure("No supervisor is registered for this task.", "SUPERVISOR_NOT_REGISTERED");
     if (targetHost() !== "local" && (record.remote_transport ?? "native") !== remoteTransport()) throw failure("Keep the registered remote transport when controlling this supervisor. No state was changed.", "SUPERVISOR_MISMATCH");
     if (expectedSession && record.session_id !== supervisorId(expectedSession)) throw failure("The supervisor session changed.", "SUPERVISOR_MISMATCH");
+    if (expectedConnection && record.connection !== expectedConnection) throw failure("The supervisor connection differs from project membership.", "SUPERVISOR_MISMATCH");
     if (record.state === "stopped" && action !== "stop") throw failure("A stopped supervisor cannot be resumed. Start a new supervisor.", "SUPERVISOR_STOPPED");
     if (action === "resume") await assertSupervisor(threadId, record.session_id, storage);
+    const desired = { pause: "paused", resume: "active", stop: "stopped" }[action];
+    if (record.state === desired) return reportTransition ? { ...record, changed: false } : record;
     const updated = { ...record, state: { pause: "paused", resume: "active", stop: "stopped" }[action], updated_at: new Date().toISOString() };
     updated.stopped_session_ids = stoppedSessionIds(updated);
     await writeRecord(supervisorBucket(threadId), threadId, updated, storage);
-    return updated;
+    return reportTransition ? { ...updated, changed: true } : updated;
   }, storage);
 }
 
@@ -165,10 +170,16 @@ export async function recordSupervisorFailure(threadId, sessionId, error, storag
   catch { /* The original failure is returned to the consumer. */ }
 }
 
+// Mutation lock order is: project-index lookup (no lock) -> supervisor ->
+// message/checkpoint/resource. Project-index writers release their own lock
+// before entering this function; project-wide operations must do the same.
 export async function withSupervisedMutation(threadInput, sessionInput, mutate, { connection, ...storage } = {}) {
   if (targetHost() !== "local" && !isControlTransport()) throw remoteReadOnly();
-  if (sessionInput === undefined) return mutate();
-  const threadId = normalizeTaskId(threadInput), sessionId = supervisorId(sessionInput);
+  const threadId = normalizeTaskId(threadInput), managed = await getManagedThread(threadId, storage);
+  if (sessionInput === undefined && !managed) return mutate();
+  const registered = managed && await getSupervisor(threadId, storage);
+  if (managed && !registered) throw failure("This managed task has no supervisor binding. Repair its project membership before mutating it.", "MANAGED_SUPERVISOR_REQUIRED");
+  const sessionId = supervisorId(sessionInput ?? registered.session_id);
   // Holding this lock through the receipt serializes pause/stop with the actual
   // mutation. A busy pause is an error, never a false acknowledgement of a stop.
   return withStoreLock(`supervisor-${threadId}`, async () => {
@@ -177,8 +188,37 @@ export async function withSupervisedMutation(threadInput, sessionInput, mutate, 
   }, storage);
 }
 
+// The only gate for worker-visible external effects. Backend adapters must call
+// this primitive at their actual dispatch boundary, rather than adding their
+// own supervisor checks. Kinds without a trustworthy acceptance receipt fail
+// closed for managed work.
+export async function dispatchExternalEffect(threadInput, sessionInput, kind, dispatch, { connection, ...storage } = {}) {
+  if (!new Set(["turn", "desktop-ui", "local-spawn", "paired-command", "thread-shell", "resource-acquire", "checkpoint-publish"]).has(kind)) {
+    throw failure("Unknown external-effect kind.", "EXTERNAL_EFFECT_INVALID");
+  }
+  const threadId = normalizeTaskId(threadInput), managed = await getManagedThread(threadId, storage);
+  if (managed && kind === "desktop-ui") throw failure("Desktop UI delivery has no acceptance receipt and is unavailable for managed tasks.", "MANAGED_UI_UNSUPPORTED");
+  if (managed && kind === "paired-command") throw failure("Paired command/exec has no separate acceptance receipt and is unavailable for managed tasks.", "MANAGED_PAIRED_COMMAND_UNSUPPORTED");
+  return withSupervisedMutation(threadId, sessionInput, dispatch, { connection, ...storage });
+}
+
+// Cleanup for an already accepted operation is serialized with control but does
+// not require active state. It may only finish/reconcile existing effects.
+export async function withSupervisedCleanup(threadInput, mutate, { connection, ...storage } = {}) {
+  const threadId = normalizeTaskId(threadInput), managed = await getManagedThread(threadId, storage);
+  if (!managed) return mutate();
+  const before = await getSupervisor(threadId, storage);
+  if (!before) throw failure("This managed task has no supervisor binding. Repair its project membership before cleanup.", "MANAGED_SUPERVISOR_REQUIRED");
+  return withStoreLock(`supervisor-${threadId}`, async () => {
+    const current = await getSupervisor(threadId, storage);
+    if (!current || current.session_id !== before.session_id) throw failure("The supervisor binding changed before cleanup.", "SUPERVISOR_MISMATCH");
+    if (connection !== undefined && current.connection !== connection) throw failure("The supervisor is registered for another connection.", "SUPERVISOR_MISMATCH");
+    return mutate(current);
+  }, storage);
+}
+
 export async function withSupervisedSend(threadInput, sessionInput, send, { connection, ...storage } = {}) {
-  return withSupervisedMutation(threadInput, sessionInput, async record => {
+  return dispatchExternalEffect(threadInput, sessionInput, "turn", async record => {
     if (!record) return send();
     const threadId = record.thread_id;
     try {

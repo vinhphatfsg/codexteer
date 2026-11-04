@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -15,7 +16,7 @@ test("bundled Codex replays repair incrementally and from scratch without changi
 }, async t => {
   const { DatabaseSync } = await import("node:sqlite");
   const version = repairRuntimeVersion();
-  const home = await mkdtemp("/private/tmp/ct-repair-replay-");
+  const home = await mkdtemp(tempPrefix("ct-repair-replay-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const id = "aaaaaaaa-aaaa-4aaa-8aaa-000000000010", old = "aaaaaaaa-aaaa-4aaa-8aaa-000000000011", next = "aaaaaaaa-aaaa-4aaa-8aaa-000000000012";
   const dir = `${home}/sessions/2026/10/11`; await mkdir(dir, { recursive: true });

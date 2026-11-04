@@ -23,7 +23,7 @@ export function taskConnection(value, selected = "shared") {
   return cloud ? "cloud" : selected;
 }
 
-const values = new Set("--environment --connection --supervisor --require-node-version --host --remote-transport --context-thread --thread --backend --source --kind --evidence --based-on --finding --expires-at --supersedes --checkpoint --limit --max-chars --since --poll-ms --timeout-ms --until --notify --settle-ms --max-hold-ms --owner --key --condition --note --rating --reason --root --path --exclude --command --cwd --artifact --status --by --token --ttl-ms --agent --project --env --branch --title --model --thinking --cursor --attempt".split(" "));
+const values = new Set("--environment --connection --supervisor --require-node-version --host --remote-transport --context-thread --thread --backend --source --kind --evidence --based-on --finding --expires-at --supersedes --checkpoint --limit --max-chars --since --poll-ms --timeout-ms --until --notify --settle-ms --max-hold-ms --owner --key --condition --note --rating --reason --root --path --exclude --command --cwd --artifact --status --by --token --ttl-ms --agent --project --env --branch --title --byte-budget --continue --offset --sync-token --model --thinking --cursor --attempt --event-offset --work --wait-ms --search".split(" "));
 
 // "cloud", "desktop-cloud", or false for local. The router and error-usage selection
 // both read this one rule.
@@ -42,7 +42,8 @@ export function selectedCloudInvocation(argv) {
   if (["doctor", "resource"].includes(command) && thread >= 0) return isDesktopCloudTask(own[thread + 1]) ? "desktop-cloud" : isCloudTask(own[thread + 1]) ? "cloud" : false;
   if (command === "thread" && action === "create") return false;
   const nested = ["history", "instructions", "findings", "checkpoint", "thread"].includes(command)
-    || (command === "supervise" && ["prompt", "register", "status", "pause", "resume", "stop", "list"].includes(action));
+    || (command === "supervise" && ["prompt", "register", "status", "pause", "resume", "stop", "list"].includes(action))
+    || (command === "work" && action === "tell");
   const target = isCloudTask(command) || isDesktopCloudTask(command) ? command : positional[nested ? 2 : 1];
   return isDesktopCloudTask(target) ? "desktop-cloud" : isCloudTask(target) ? "cloud" : false;
 }

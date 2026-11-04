@@ -31,7 +31,7 @@ else {
   process.exitCode = Number(process.env.CT_ORCHESTRATE_EXIT ?? 0);
 }
 `, { mode: 0o755 });
-  return { cwd, env: { ...process.env, PATH: bin, CODEX_HOME: path.join(cwd, "unused-home"), CODEX_THREAD_ID: ID, CT_ORCHESTRATE_VALUE: "inherited value" }, encoding: "utf8", timeout: 10000 };
+  return { cwd, env: { ...process.env, PATH: bin, CODEX_HOME: path.join(cwd, "unused-home"), CODEX_THREAD_ID: ID, CT_ORCHESTRATE_VALUE: "inherited value" }, encoding: "utf8", timeout: 30000 };
 }
 
 function run(options, args, input = "interactive input\n") {
@@ -50,7 +50,8 @@ test("direct orchestration starts either CLI in saved and PATH modes with the ex
     const result = run(options, ["--project", PROJECT, GOAL, "--agent", agent, ...(pathMode ? ["--use-path-cli"] : [])]);
     assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, "agent stderr\n");
     assert.deepEqual(JSON.parse(result.stdout), { agent, args: ["--", expected], cwd: options.cwd, input: "interactive input\n", inherited: "inherited value" });
-    assert.ok(expected.includes(`--agent ${agent}${pathMode ? " --use-path-cli" : ""} --json`));
+    assert.doesNotMatch(expected, /--agent|supervise prompt/);
+    for (const operation of ["work start", "project sync", "work tell", "project control"]) assert.ok(expected.includes(operation));
     assert.equal(existsSync(path.join(options.env.CODEX_HOME, "codex-steer", "supervisors")), false, "A project launch cannot fabricate a single-task registration");
     if (pathMode) assert.deepEqual(readdirSync(options.env.CODEX_HOME), []);
     else assert.deepEqual(readdirSync(path.join(options.env.CODEX_HOME, "codex-steer")), ["bin", "runtimes"]);

@@ -1,4 +1,4 @@
-import { digest, project, trimEvent } from "./observe.mjs";
+import { digest, project, trimEvent, turnObservation, observationAttention } from "./observe.mjs";
 import { encodeCursor, parseCursor, resolveTurns, invalidCursor } from "./cursor.mjs";
 
 const PAGE = 100;
@@ -27,8 +27,9 @@ export async function turnMetadata(client, threadId) {
 
 function stateOf(thread, turns) {
   const active = turns.filter(t => t.status === "inProgress");
-  return { thread_id: thread.id, status: thread.status?.type ?? "unknown", active_turn_id: active.length === 1 ? active[0].id : null,
-    attention: Array.isArray(thread.status?.activeFlags) ? thread.status.activeFlags : thread.status?.type === "active" ? null : [], cwd: thread.cwd ?? null, title: thread.name ?? null };
+  return { ...turnObservation(turns), thread_id: thread.id, status: thread.status?.type ?? "unknown", active_turn_id: active.length === 1 ? active[0].id : null,
+    ...(thread.environments !== undefined ? { environment_config_id: Array.isArray(thread.environments) && thread.environments.length === 1 ? thread.environments[0]?.environmentConfigId ?? null : null } : {}),
+    attention: observationAttention(thread.status), cwd: thread.cwd ?? null, title: thread.name ?? null };
 }
 
 async function items(client, threadId, { cursor = null, turnId = null, direction = "asc", limit = PAGE } = {}) {
@@ -73,13 +74,13 @@ function finish(state, cursor, events, commands, old, pending, omitted) {
     has_more: pending, omitted_older_events: omitted, history_scope: "tail-and-tracked-items", running_commands_complete: !pending, observed_at: new Date().toISOString() };
 }
 
-export async function readPaged(client, thread, { since, limit = 50, maxChars = 2000, includeOutput = false } = {}) {
+export async function readPaged(client, thread, { since, limit = 50, maxChars = 2000, includeOutput = false, fullEvents = false } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isInteger(maxChars) || maxChars < 100 || maxChars > 20000) throw Object.assign(new Error("Invalid read limit or max-chars."), { code: "OPTIONS_INVALID" });
   const claim = since ? parseCursor(since, thread.id) : null;
   if (claim && claim.v !== 2) throw invalidCursor();
   const turns = await turnMetadata(client, thread.id), state = stateOf(thread, turns), commands = new Map();
   const old = claim && resolveTurns(claim, turns, thread.id);
-  const clip = e => trimEvent(e, maxChars, includeOutput);
+  const clip = e => fullEvents ? e : trimEvent(e, maxChars, includeOutput);
   const command = e => { if (e?.type === "commandExecution" && running.has(e.status)) commands.set(eventKey(e), clip(e)); };
   if (!old) {
     const rows = [], pages = []; let position = null, publicCount = 0, head = { cursor: null, id: null, turn_id: null, hash: null };

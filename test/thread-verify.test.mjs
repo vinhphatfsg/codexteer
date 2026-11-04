@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -39,7 +40,7 @@ test("missing, ambiguous, different-project, remote and ChatGPT membership never
 });
 
 async function fixture(t) {
-  const home = await mkdtemp("/private/tmp/ct-verify-"); t.after(() => rm(home, { recursive: true, force: true }));
+  const home = await mkdtemp(tempPrefix("ct-verify-")); t.after(() => rm(home, { recursive: true, force: true }));
   const root = path.join(home, "workspace"); await mkdir(root);
   const receipt = { schema: 3, attempt_id: ATTEMPT, creation_mode: "standalone", thread_id: ID, turn_id: "first-turn", project_id: "canonical", desktop_project_id: "desktop",
     title: "検証", cwd: root, runtime_workspace_roots: [root], creation_status: "created", sent: true, delivery_status: "accepted", verification_status: "failed",

@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import { VERSION, PACKAGE_NAME } from "../src/version.mjs";
 import { RUNTIME_PROTOCOL, RUNTIME_CAPABILITIES } from "../src/compatibility.mjs";
@@ -116,7 +117,7 @@ test("dry run requires no connection and reveals no message", async () => {
 });
 
 test("lost acknowledgement is unknown, never automatically retried", async () => {
-  const root = await mkdtemp("/private/tmp/cs-send-test-");
+  const root = await mkdtemp(tempPrefix("cs-send-test-"));
   let sends = 0;
   let closed = false;
   try {
@@ -134,7 +135,7 @@ test("lost acknowledgement is unknown, never automatically retried", async () =>
 });
 
 test("concurrent sends for one task cannot bypass its lock", async () => {
-  const root = await mkdtemp("/private/tmp/cs-lock-test-");
+  const root = await mkdtemp(tempPrefix("cs-lock-test-"));
   let unlock;
   const blocked = new Promise(resolve => { unlock = resolve; });
   let connected;
@@ -158,7 +159,7 @@ test("concurrent sends for one task cannot bypass its lock", async () => {
 });
 
 test("cleanup errors cannot replace an accepted receipt with a send error", async () => {
-  const root = await mkdtemp("/private/tmp/cs-cleanup-test-");
+  const root = await mkdtemp(tempPrefix("cs-cleanup-test-"));
   try {
     const result = await sendAppServerMessage(ID, "test", {
       discover: async () => ({ state: steerState, paths: { lease: root, socket: "unused" } }),
@@ -182,7 +183,7 @@ test("unknown mutation contracts and incompatible protocols never connect or sen
 });
 
 test("different and unknown product versions send using the compatible v1 contract", async t => {
-  const root = await mkdtemp("/private/tmp/cs-mixed-send-"); t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await mkdtemp(tempPrefix("cs-mixed-send-")); t.after(() => rm(root, { recursive: true, force: true }));
   for (const codex_steer_version of [undefined, "0.1.0", "999.0.0"]) {
     let writes = 0;
     const receipt = await sendAppServerMessage(ID, "test", {
@@ -198,7 +199,7 @@ test("different and unknown product versions send using the compatible v1 contra
 });
 
 test("unsupported new-turn contracts never subscribe, and do not block normal steering", async t => {
-  const root = await mkdtemp("/private/tmp/cs-feature-send-"); t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await mkdtemp(tempPrefix("cs-feature-send-")); t.after(() => rm(root, { recursive: true, force: true }));
   for (const feature of ["turn_start", "desktop_subscribe"]) {
     let writes = 0;
     const options = {
@@ -217,7 +218,7 @@ test("unsupported new-turn contracts never subscribe, and do not block normal st
 });
 
 test("compatible new-turn rechecks its endpoint before subscription and sending", async t => {
-  const root = await mkdtemp("/private/tmp/cs-newturn-compat-"); t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await mkdtemp(tempPrefix("cs-newturn-compat-")); t.after(() => rm(root, { recursive: true, force: true }));
   const calls = [];
   const options = {
     newTurn: true,
@@ -237,7 +238,7 @@ test("compatible new-turn rechecks its endpoint before subscription and sending"
 });
 
 test("an unsupported optional freshness API prevents both sending and Desktop resume", async t => {
-  const root = await mkdtemp("/private/tmp/cs-optional-check-"); t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await mkdtemp(tempPrefix("cs-optional-check-")); t.after(() => rm(root, { recursive: true, force: true }));
   for (const newTurn of [false, true]) {
     const calls = [];
     await assert.rejects(sendAppServerMessage(ID, "test", {
@@ -255,7 +256,7 @@ test("an unsupported optional freshness API prevents both sending and Desktop re
 });
 
 test("capabilities changing during the send are rechecked before mutation", async t => {
-  const root = await mkdtemp("/private/tmp/cs-cap-race-"); t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await mkdtemp(tempPrefix("cs-cap-race-")); t.after(() => rm(root, { recursive: true, force: true }));
   let discoveries = 0;
   await assert.rejects(sendAppServerMessage(ID, "test", {
     discover: async () => ({ paths: { lease: root, socket: "unused" }, state: { ...steerState, instance: "same", codex_steer_capabilities: {
@@ -266,7 +267,7 @@ test("capabilities changing during the send are rechecked before mutation", asyn
 });
 
 test("a runtime replaced after observation cannot receive the send", async t => {
-  const root = await mkdtemp("/private/tmp/cs-send-replaced-"); t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await mkdtemp(tempPrefix("cs-send-replaced-")); t.after(() => rm(root, { recursive: true, force: true }));
   let discoveries = 0, writes = 0;
   await assert.rejects(sendAppServerMessage(ID, "test", {
     discover: async () => ({ paths: { lease: root, socket: "unused" }, state: { ...steerState, instance: String(++discoveries) } }),
@@ -350,7 +351,7 @@ test("legacy ambiguity still fails before mutation", async () => {
 });
 
 test("orphan workaround never retries, falls back, or starts after rejection or unknown acknowledgement", async t => {
-  const root = await mkdtemp("/private/tmp/cs-orphan-send-"); t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await mkdtemp(tempPrefix("cs-orphan-send-")); t.after(() => rm(root, { recursive: true, force: true }));
   for (const outcome of ["mismatch", "lost", "wrong-receipt"]) {
     const turns = [{ id: "old", status: "inProgress" }, { id: TURN, status: "inProgress" }];
     const server = pagedServer({ turns }); let writes = 0;
@@ -420,7 +421,7 @@ test("paged new-turn validates both sides of Desktop subscription without full h
 });
 
 test("paged sends require pagination capability and stop on rejected page reads", async t => {
-  const root = await mkdtemp("/private/tmp/cs-paged-compat-"); t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await mkdtemp(tempPrefix("cs-paged-compat-")); t.after(() => rm(root, { recursive: true, force: true }));
   for (const newTurn of [false, true]) {
     for (const failure of ["CAPABILITY_UNSUPPORTED", "RPC_REJECTED"]) {
       const { client, calls } = pagedServer({ status: newTurn ? "idle" : "active", beforeRequest(method) {

@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -7,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
 const entrypoint = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 async function fixture(t) {
-  const home = await mkdtemp("/private/tmp/cs-assistance-cli-");
+  const home = await mkdtemp(tempPrefix("cs-assistance-cli-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const cwd = `${home}/project`; await mkdir(cwd); await mkdir(`${cwd}/src`); await writeFile(`${cwd}/src/input.txt`, "original");
   return { cwd, cli(args, expectedStatus = 0) {

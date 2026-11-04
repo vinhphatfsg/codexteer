@@ -1,5 +1,8 @@
+import { pruneProjectHistory } from "./project-history.mjs";
+import { controlProject } from "./project-control.mjs";
 import { readFileSync } from "node:fs";
-import { desktopDoctor, inspectDesktopUi, openDesktopThread, sendDesktopMessage } from "./desktop.mjs";
+import { desktopDoctor, inspectDesktopUi, openDesktopThread } from "./desktop.mjs";
+import { sendDesktopUiMessage } from "./desktop-ui-send.mjs";
 import { normalizeThreadId, threadDeepLink, parseThreadTarget } from "./thread-id.mjs";
 import { targetHost, targetContext, withTarget, validateHostId, hostFields, remoteReadOnly, remoteTransport, validateRemoteTransport, isControlTransport } from "./target.mjs";
 import { listLocalThreads } from "./thread-store.mjs";
@@ -23,6 +26,10 @@ import { connectionMode, observationConnection, desktopReadOnly } from "./connec
 import { repairTurns } from "./turn-repair.mjs";
 import { listProjects, registeredRemoteProjects } from "./projects.mjs";
 import { createProjectThread } from "./thread-create.mjs";
+import { startWork } from "./work-start.mjs";
+import { tellWork } from "./work-tell.mjs";
+import { readRecord } from "./store.mjs";
+import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
 import { verifyProjectThread } from "./thread-verify.mjs";
 import { withDeviceAccount, prepareDevice, recoverDeviceKey, enrollDevice, pairDevice, verifyDevice, deviceStatus, deviceIdentityInfo, readPairingCode } from "./remote-device.mjs";
 import { readDevice } from "./remote-device-store.mjs";
@@ -55,7 +62,7 @@ export function fail(error, json, argv = []) {
     existing_attempt_id: error.existing_attempt_id, existing_receipt_path: error.existing_receipt_path,
     supervision_update_required: error.supervision_update_required,
     history_changed: error.history_changed, backup_path: error.backup_path, receipt_path: error.receipt_path,
-    repair_stat: error.repair_stat,
+    repair_stat: error.repair_stat, stage: error.stage, observed: error.observed, observation: error.observation, history_gap: error.history_gap, environment_config_id: error.environment_config_id,
     creation_status: error.creation_status, attempt_id: error.attempt_id, receipt_update_required: error.receipt_update_required,
     reservation_cleanup_required: error.reservation_cleanup_required,
     native_call_id: error.native_call_id,
@@ -71,9 +78,11 @@ export function fail(error, json, argv = []) {
     if (error.execution_environment === "cloud" || (typeof error.code === "string" && error.code.startsWith("DESKTOP_CLOUD_"))) {
       // Recovery metadata must survive an uncertain submission or a stale
       // on-disk receipt. Never print the child error, prompt, or diagnostics.
-      for (const key of ["creation_status", "submission_status", "delivery_status", "attempt_id", "receipt_path", "existing_message_id", "existing_attempt_id", "existing_receipt_path", "task_id", "thread_id", "url"]) {
+      for (const key of ["creation_status", "submission_status", "delivery_status", "stage", "observation", "environment_config_id", "attempt_id", "receipt_path", "existing_message_id", "existing_attempt_id", "existing_receipt_path", "task_id", "thread_id", "url"]) {
         if (typeof error[key] === "string") console.error(`${key}: ${JSON.stringify(error[key])}`);
       }
+      if (typeof error.observed === "boolean") console.error(`observed: ${error.observed}`);
+      if (typeof error.history_gap === "boolean") console.error(`history_gap: ${error.history_gap}`);
       if (error.receipt_update_required) console.error("receipt_update_required: true");
       if (error.reservation_cleanup_required) console.error("reservation_cleanup_required: true");
       if (Number.isSafeInteger(error.retry_after_ms)) console.error(`retry_after_ms: ${error.retry_after_ms}`);
@@ -222,6 +231,60 @@ async function mainOnTarget(argv) {
     }
 
     let command = args.shift();
+    if (command === "project") {
+      const action = args.shift();
+      if (action === "control") {
+        if (supervisor) throw Object.assign(new Error("A bound supervisor cannot control project supervision."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        const operation = args.shift(), project = takeOption(args, "--project", undefined), all = takeFlag(args, "--all"), work = takeOption(args, "--work", undefined);
+        if (args.length) throw usage("Unexpected project control arguments.");
+        const data = await controlProject(project, operation, { all, work });
+        if (json) console.log(JSON.stringify({ ok: data.complete, command: "project.control", data }));
+        else console.log(JSON.stringify(data, null, 2));
+        if (!data.complete) process.exitCode = 1; return;
+      }
+      if (action === "prune") {
+        if (supervisor) throw Object.assign(new Error("A bound supervisor cannot prune project history."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        const project = takeOption(args, "--project", undefined);
+        if (args.length) throw usage("Expected: project prune --project ID.");
+        const data = await pruneProjectHistory(project); success("project.prune", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
+      }
+      if (action === "sync") {
+        if (supervisor) throw Object.assign(new Error("A bound supervisor cannot sync an entire project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        const project = takeOption(args, "--project", undefined), byteBudget = Number(takeOption(args, "--byte-budget", "16000"));
+        const continuation = takeOption(args, "--continue", undefined), offset = Number(takeOption(args, "--offset", "0")), eventOffset = Number(takeOption(args, "--event-offset", "0"));
+        if (args.length || (!project && !continuation)) throw usage("Expected: project sync --project ID, or project sync --continue TOKEN --offset N.");
+        const data = continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) });
+        success("project.sync", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
+      }
+      if (action === "event") {
+        if (args.length !== 1) throw usage("Expected: project event TOKEN.");
+        const data = await projectEvent(args[0]); success("project.event", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
+      }
+      throw usage("Expected: project sync|event|prune.");
+    }
+    if (command === "work") {
+      const action = args.shift();
+      if (action === "tell") {
+        if (supervisor) throw Object.assign(new Error("A bound supervisor cannot invoke work tell recursively."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        if (connection === "desktop") throw desktopReadOnly();
+        const syncToken = takeOption(args, "--sync-token", undefined), newTurn = takeFlag(args, "--new-turn"), threadId = normalizeThreadId(args.shift());
+        const body = readMessage(args), data = await tellWork(threadId, body, { syncToken, newTurn }, {
+          read: (id, options) => observeThread(id, { ...options, limit: 1000 }, observationConnection(options.connection)), connectionDependencies,
+        });
+        success("work.tell", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
+      }
+      if (action !== "start") throw usage("Expected: work start|tell.");
+      if (supervisor) throw Object.assign(new Error("A bound supervisor cannot create another managed task."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+      if (connection !== "shared" || targetHost() !== "local") throw usage("Local work start requires --connection shared and a local Desktop project.");
+      const project = takeOption(args, "--project", undefined), title = takeOption(args, "--title", undefined), root = takeOption(args, "--root", process.cwd());
+      const order = readMessage(args);
+      const data = await startWork({ project, title, order, root, connection }, {
+        create: async ({ project: selector, title: name, prompt, attemptId }) => { const created = await createProjectThread(selector, prompt, { title: name, attemptId }); return { ...created, thread_id: created.thread_id, backend_project_id: created.project_id }; },
+        reconcile: async record => { const receipt = await readRecord("creations", record.attempt_id); return receipt?.thread_id ? { thread_id: receipt.thread_id, backend_project_id: receipt.project_id, project_selector: receipt.project_name ?? receipt.project_id, attempt_id: receipt.attempt_id, prompt_sha256: receipt.prompt_sha256 } : null; },
+        read: (threadId, options) => observeThread(threadId, { ...options, limit: 1000 }, connectionDependencies),
+      });
+      success("work.start", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
+    }
     if (command === "diff") throw usage("diff reads a Web Cloud task's recorded patch and is not available for local or remote Desktop tasks. Use read --include-output to inspect file changes.");
     const control = isControlTransport();
     if (targetHost() !== "local" && ["desktop", "debug-ui"].includes(command)) throw Object.assign(new Error("Desktop process/update and Accessibility diagnostics cannot target the remote host. No local operation was run."), { code: "REMOTE_HOST_OPERATION_UNSUPPORTED" });
@@ -355,12 +418,12 @@ async function mainOnTarget(argv) {
           if (!data.valid) process.exitCode = 1;
         } else {
           if (args.length !== 1) throw usage("Expected: resource acquire <NAME> --owner NAME.");
-          data = await acquireResource(args[0], options);
+          data = await acquireResource(args[0], { ...options, supervisor, connection });
         }
       } else if (["renew", "release"].includes(action)) {
         const token = takeOption(args, "--token", undefined), ttlMs = action === "renew" ? Number(takeOption(args, "--ttl-ms", "600000")) : undefined;
         if (args.length !== 1) throw usage(`Expected: resource ${action} <NAME> --token TOKEN.`);
-        data = action === "renew" ? await renewResource(args[0], token, { ttlMs }) : await releaseResource(args[0], token);
+        data = action === "renew" ? await renewResource(args[0], token, { ttlMs, threadId, supervisor, connection }) : await releaseResource(args[0], token);
       } else if (action === "status" && args.length === 1) data = await resourceStatus(args[0]);
       else if (action === "list" && args.length === 0) data = await listResources();
       else throw usage("See codexteer help resource.");
@@ -375,7 +438,7 @@ async function mainOnTarget(argv) {
       if (action === "capture") {
         const paths = takeOptions(args, "--path"), excludes = takeOptions(args, "--exclude");
         if (args.length !== 2) throw usage("Expected: checkpoint capture <THREAD> <NAME> --path PATH ...");
-        data = await createCheckpoint(args[0], args[1], { paths, excludes });
+        data = await createCheckpoint(args[0], args[1], { paths, excludes, supervisor, connection });
       } else if (action === "run") {
         const timeoutMs = Number(takeOption(args, "--timeout-ms", "0")), execBackend = takeOption(args, "--exec-backend", "app-server"), remoteShell = takeOption(args, "--shell", undefined);
         if (supervisor && execBackend === "thread-shell") await assertSupervisor(args[0], supervisor, { connection, sending: true });
@@ -386,7 +449,7 @@ async function mainOnTarget(argv) {
       } else if (action === "attach") {
         const refs = takeOptions(args, "--artifact");
         if (args.length !== 2) throw usage("Expected: checkpoint attach <THREAD> <ID> --artifact FILE ...");
-        data = await attachArtifacts(args[0], args[1], refs);
+        data = await attachArtifacts(args[0], args[1], refs, { supervisor, connection });
       } else if (action === "list") {
         if (args.length !== 1) throw usage("Expected: checkpoint list <THREAD>.");
         data = await listCheckpoints(args[0]);
@@ -658,7 +721,7 @@ async function mainOnTarget(argv) {
     const threadId = normalizeThreadId(threadInput);
     const data = backend === "app-server"
       ? await sendTrackedMessage(threadId, message, { dryRun, newTurn, ...directive, supervisor, connection })
-      : sendDesktopMessage(threadId, message, { dryRun, waitMs, newTurn, keepFocus });
+      : await sendDesktopUiMessage(threadId, message, { dryRun, waitMs, newTurn, keepFocus, supervisor, connection });
     data.sound = noSound ? { played: false, reason: "disabled" } : playSendSound(data);
     success("send", data, json);
     if (!json) {

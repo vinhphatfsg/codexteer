@@ -22,7 +22,7 @@ export function creationOptions(options = {}) {
   if (options.thinking !== undefined && !["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(options.thinking)) throw failure("Invalid --thinking.", "INVALID_CREATION_OPTIONS");
   const timeoutMs = options.timeoutMs ?? 120000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 600000) throw failure("--timeout-ms must be 1000..600000.", "INVALID_CREATION_OPTIONS");
-  return { timeoutMs, ...Object.fromEntries(["title", "model", "thinking"].filter(key => options[key] !== undefined).map(key => [key, options[key]])) };
+  return { timeoutMs, ...(options.attemptId === undefined ? {} : { attemptId: options.attemptId }), ...Object.fromEntries(["title", "model", "thinking"].filter(key => options[key] !== undefined).map(key => [key, options[key]])) };
 }
 
 export function validateNativeCreationCatalog(catalog) {
@@ -48,7 +48,7 @@ export async function createProjectThread(selector, prompt, options = {}, depend
   membership = desktopMembership, write = writeRecord, sleep = delay,
   } = dependencies;
   const sourceId = options.contextThread;
-  const contextId = normalizeThreadId(sourceId), attemptId = randomUUID();
+  const contextId = normalizeThreadId(sourceId), attemptId = settings.attemptId ?? randomUUID();
   let client, receipt, storage, dispatched = false, accepted = false;
   try {
     const { paths, state } = await discover(); storage = { home: paths.home };

@@ -108,8 +108,8 @@ export async function streamThread(threadInput, options, onChange, { discover = 
           buffer.baseline(data);
           notifiedCursor = data.cursor;
         } else {
-          const { thread_id, status, active_turn_id, attention, cwd, title } = data;
-          const initialStateChanged = !buffer.previous && initialStateHash !== digest({ thread_id, status, active_turn_id, attention, cwd, title });
+          const { latest_turn_id, latest_turn_status, active_turn_count, thread_id, status, active_turn_id, attention, cwd, title, environment_config_id } = data;
+          const initialStateChanged = !buffer.previous && initialStateHash !== digest({ latest_turn_id, latest_turn_status, active_turn_count, thread_id, status, active_turn_id, attention, cwd, title, ...(environment_config_id !== undefined ? { environment_config_id } : {}) });
           buffer.add(data, cursor, now(), initialStateChanged);
           const reason = buffer.reason(now());
           if (reason) await flush(reason);

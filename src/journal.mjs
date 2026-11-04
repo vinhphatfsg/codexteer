@@ -14,6 +14,7 @@ import { prepareDirective } from "./directive.mjs";
 import { releasedDelivery } from "./findings.mjs";
 import { withCursorReference } from "./cursor.mjs";
 import { assertSupervisor, withSupervisedSend } from "./supervision.mjs";
+import { getManagedThread } from "./project-index.mjs";
 
 export async function getMessage(threadInput, id, options = {}) {
   const threadId = normalizeTaskId(threadInput);
@@ -63,8 +64,16 @@ async function validateReplacement(threadId, options, storage) {
   if (!["active", "expired"].includes(target.instruction_status) || target.pending_change_ids?.length) throw Object.assign(new Error("Target instruction is inactive or has an unresolved delivery. Check history before replacing it."), { code: "INSTRUCTION_NOT_REPLACEABLE" });
 }
 
+// Only the work tell entry point can attach this capability; CLI flags cannot.
+const workTellCapability = Symbol("work tell delivery");
+
+export function sendWorkTellMessage(threadInput, body, options, dependencies) {
+  return sendTrackedMessage(threadInput, body, { ...options, [workTellCapability]: true }, dependencies);
+}
+
 export async function sendTrackedMessage(threadInput, body, options = {}, { send = sendAppServerMessage, ...storage } = {}) {
   const threadId = normalizeTaskId(threadInput);
+  if (!options[workTellCapability] && await getManagedThread(threadId, storage)) throw Object.assign(new Error("Managed tasks require work tell so freshness and intervention tracking cannot be bypassed."), { code: "MANAGED_INTERVENTION_REQUIRED" });
   if (options.supervisor && !options.basedOn) throw Object.assign(new Error("Supervised sends require --based-on from a completed read."), { code: "SUPERVISOR_OBSERVATION_REQUIRED" });
   if (options.supervisor && !options.finding && !options.retracts) throw Object.assign(new Error("Supervised sends require --finding so pending interventions can be tracked and deduplicated."), { code: "SUPERVISOR_FINDING_REQUIRED" });
   if (options.dryRun) {
@@ -79,6 +88,7 @@ export async function sendTrackedMessage(threadInput, body, options = {}, { send
     const prepared = await prepareDirective(threadId, body, options, id, storage);
     const beforeSend = async (...args) => {
       await prepared.beforeSend?.(...args);
+      await options.guardBeforeSend?.(...args);
       if (options.supervisor) await assertSupervisor(threadId, options.supervisor, { ...storage, sending: true, connection: options.connection });
     };
     let entry = { schema: 1, id, client_message_id: id, thread_id: threadId, created_at: created, updated_at: created, body, wire_text: prepared.wireText, metadata: prepared.metadata,

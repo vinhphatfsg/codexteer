@@ -12,6 +12,19 @@ const desktopReadOnlyError = {
   action: "接続は自動で切り替わらない。必要なら既定sharedで別に実行する。監督中に--connectionを外して送信を回避しない。",
 };
 
+const managedStoppedErrors = [
+  {
+    code: "SUPERVISOR_STOPPED",
+    when: "project control stopで停止済みの担当へwork tellした。",
+    action: "送信しない。停止済みの担当は再開も別担当への置換もしない。続けるのはユーザーが明示的に指示したときだけで、そのときは新しい題名か発注でwork startを実行し、別の担当として立ち上げる。",
+  },
+  {
+    code: "MANAGED_SUPERVISOR_STOPPED",
+    when: "停止済みの担当と同じ題名・発注・方針でwork startを再実行した。",
+    action: "停止済みの担当は再開しない。続けるのはユーザーが明示的に指示したときだけで、そのときは新しい題名か発注でwork startを実行し、別の担当として立ち上げる。",
+  },
+];
+
 const supervisorForbiddenError = {
   code: "SUPERVISOR_CONTROL_FORBIDDEN",
   when: "監督本文の--supervisor付きで、担当タスクの外に及ぶ操作（作成・照合・修復・Desktop更新など）を実行した",
@@ -47,6 +60,8 @@ export const topics = {
       { need: "監督役（オーケストレーター）へ渡す本文だけを取得する（起動しない）", command: "help supervise prompt" },
       { need: "監督の観測→介入→結果確認の手順、Claude CodeのMonitorから使う", command: "help monitor" },
       { need: "指摘・解決条件・評価を追跡し、同じ指摘の重複介入を防ぐ", command: "help findings" },
+      { need: "方針付きの担当を作成から監督・初回観測まで一度に開始する", command: "help work" },
+      { need: "全担当の前回からの変化と人間待ちをまとめて確認する", command: "help project" },
       { need: "作成先プロジェクトのIDとソースフォルダを調べる", command: "help projects" },
       { need: "送信先タスクのIDを探す", command: "help threads" },
       { need: "初回指示付きでタスクを作る・作成結果を照合する・URLをIDにする・残留ターンを修復する", command: "help thread" },
@@ -141,7 +156,7 @@ export const topics = {
       { name: "--connection shared|desktop|cloud|desktop-cloud", default: "shared", text: "全コマンド共通の接続指定。-- より前ならどこに置いてもよい。省略時だけ、task_/公式URLはcloud、durable_/hostId=durableはdesktop-cloudを自動で選ぶ。" },
       { name: "--connection shared", text: "desktop startで起動したwrapper経由。観測・送信・作成のすべてに使う既定の接続。" },
       { name: "--connection desktop", text: "通常起動Desktopの既存制御ソケットを読むだけの観測専用接続。" },
-      { name: "--connection cloud", text: "Web Cloud（task_ ID・chatgpt.com/codex/tasksのURL）。宛先のない一覧・作成ではこの明示が必要。" },
+      { name: "--connection cloud", text: "既存Web Cloudタスク（task_ ID・chatgpt.com/codex/tasksのURL）向け。宛先のない一覧ではこの明示が必要。新規作成はdesktop-cloudを使う。" },
       { name: "--connection desktop-cloud", text: "Desktop Cloud（durable_ ID・hostId=durableリンク）。" },
     ],
     returns: "--connection desktopのdoctorはconnection.mode=desktop・observation_only=trueを返し、runtime_compatibility.operationsのsend・send_new_turnはunsupported。read/status/watchのJSONは使った接続をconnection_modeで返す。不一致の拒否ではerror.expected_connection（修正候補）とerror.connection（指定値）を返す。",
@@ -365,13 +380,12 @@ export const topics = {
 
   thread: {
     title: "タスクを作成・作成結果を照合し、IDの解決と残留ターンの修復を行う",
-    when: "プロジェクトに初回指示付きの新しいタスクを作るとき、作成済みreceiptを照合し直すとき、URLをIDへ変換するとき、古いターンが実行中のまま残ったとき。Web Cloudの作成はhelp cloud、Desktop Cloudはhelp desktop-cloud。",
+    when: "プロジェクトに初回指示付きの新しいタスクを作るとき、作成済みreceiptを照合し直すとき、URLをIDへ変換するとき、古いターンが実行中のまま残ったとき。新規Cloud担当はhelp desktop-cloud。Web Cloudの既存タスクはhelp cloud。",
     usage: [
       "thread create --project ID|NAME [--context-thread THREAD-ID] [--timeout-ms N] [--title TEXT] [--model MODEL] [--thinking EFFORT] [--dry-run] <MESSAGE...>|-",
       "thread verify <ATTEMPT-ID> [--timeout-ms N]",
       "thread resolve <THREAD>",
       "thread repair <THREAD> [--dry-run | --apply]",
-      "--connection cloud thread create --project ENV_ID_OR_NAME [--branch BRANCH] [--dry-run] <MESSAGE...>|-",
       "--connection cloud thread receipt <ATTEMPT_ID>",
       "--connection cloud|desktop-cloud thread resolve <THREAD>",
       "--connection desktop-cloud thread create --environment ID|NAME [--title TEXT] [--dry-run] <MESSAGE...>|-",
@@ -379,7 +393,7 @@ export const topics = {
       "--connection desktop-cloud thread receipt <ATTEMPT_ID> [--resolve-unknown --note TEXT]",
     ],
     options: [
-      { name: "--project ID|NAME", text: "作成先。projects listのproject_id、desktop_project_idsのID、または完全一致の名前。cloudでは環境IDか名前。" },
+      { name: "--project ID|NAME", text: "作成先。projects listのproject_id、desktop_project_idsのID、または完全一致の名前。Desktop Cloudの環境は--environmentで指定する。" },
       { name: "<MESSAGE...>|-", text: "初回指示。複数の語は空白でつなぐ。- は標準入力。--で始まる本文は -- の後に置く。" },
       { name: "--context-thread THREAD-ID", text: "ローカルで指定したときだけ、そのチャットを呼出し元にDesktopのnative create_threadで作る。省略するとstandalone作成。" },
       { name: "--title TEXT", text: "タスク名（空は不可）。standaloneで省略すると、初回指示の空白をまとめた先頭80文字。" },
@@ -388,7 +402,6 @@ export const topics = {
       { name: "--timeout-ms N", default: "120000", text: "create・verifyの各RPCの待機上限（ms）。1000〜600000。" },
       { name: "--dry-run", text: "createは接続・プロジェクト・native schemaを読んで確かめるだけで、タスク・指示・記録を作らない。repairは既定でこのモード。" },
       { name: "--apply", text: "repairで候補へ終了記録を追記する。全Codexを終了してから外部ターミナルで実行する。" },
-      { name: "--branch BRANCH", text: "cloud作成のブランチ。省略時は環境のリポジトリが1つならその既定ブランチ。" },
       { name: "--environment ID|NAME", text: "desktop-cloud作成のCloud環境（help desktop-cloud）。" },
     ],
     returns: "createはthread_id・deep_link、project_id・desktop_project_id・project_name、cwdと全フォルダ、title、creation_status・delivery_status・verification_status、attempt_id・receipt_path。verifyは更新したreceiptとverification_history。resolveはthread_idとdeep_link。repairはmode・status・candidates・source_sha256、--apply成功時はbackup_path・receipt_path・repaired_sha256。",
@@ -420,7 +433,7 @@ export const topics = {
       "codexteer thread repair <THREAD> --apply --json",
     ],
     notes: [
-      "以下はローカルDesktopとpairedの説明。Web Cloudの作成はhelp cloud、Desktop Cloudの環境指定・作成・所属割当はhelp desktop-cloud。",
+      "以下はローカルDesktopとpairedの説明。新規Cloud担当の環境指定・作成・所属割当はhelp desktop-cloud。既存Web Cloudの互換操作はhelp cloud。",
       "standalone作成（--context-threadなし）はプロジェクトと初回指示だけで作れる。既存チャット・CODEX_THREAD_ID・中継AIは使わない。ローカル専用。",
       "standaloneはApp Serverで全フォルダ付きのタスクを作り、Desktop購読を確立して初回指示を送り、その新タスク自身のthread/turn IDでDesktopの所属登録をする。",
       "--context-thread指定時は、保存済みターンのある実在ローカルチャットを呼出し元にnative create_threadを使う。そのチャットへの送信や追加のAIターンはない。",
@@ -481,6 +494,55 @@ export const topics = {
     see: ["thread", "debug-ui", "cloud", "remote"],
   },
 
+  project: {
+    title: "managed projectの全担当を差分同期・制御する",
+    when: "オーケストレーターの再起動後や定期確認時に、全担当の進行・失敗・質問・承認待ちを一度に把握するとき。",
+    usage: ["project control pause|stop|resume --project ID --all", "project control pause|stop|resume --project ID --work THREAD", "project sync --project ID [--byte-budget N]", "project sync --continue TOKEN [--offset N] [--event-offset N] [--byte-budget N]", "project event TOKEN", "project prune --project ID"],
+    options: [
+      { name: "--project", text: "work startで登録したproject ID。" },
+      { name: "--all / --work THREAD", text: "project controlの対象。project全体か個別担当のどちらか一方を必ず指定する。" },
+      { name: "--byte-budget", default: "16000", text: "構文的に完全なJSON出力へ使うUTF-8 byte予算（4096〜1048576）。" },
+      { name: "--continue / --offset", text: "省略された担当を同じsync snapshotから取り出すtokenと開始位置。" },
+    ],
+    returns: "controlはrequested・changed・already・failedとcode、対象membership_digest。syncはcomplete、4群表示、3軸状態、history_gap、retry_after_ms、省略数、continuation_token。event tokenは長文をproject eventで全文取得できる。",
+    examples: ["codexteer project sync --project sample --json", "codexteer project event <TOKEN> --json", "codexteer --connection desktop-cloud project sync --project sample --json"],
+    notes: [
+      "controlは既存の担当別bindingを使い、部分失敗時も全結果を返す（終了値1・ok:false）。busyとbinding不在はfailed、同じ状態への再実行はalready。stop済みをresumeしない。受付済みプロセス自体は終了しない。",
+      "常駐監視は開始しない。全担当を一巡してからbacklogをdrainし、completeな担当だけcursorを進める。",
+      "未解決の質問・承認・失敗は解消を完全な観測で確認するまで再掲する。429は再試行せず、取得済み結果とretry_after_msを返す。",
+      "project prune --project IDで過去のsync履歴を整理する。最新sync・未提示初回結果・参照中の根拠は保持する。保存総量はCODEX_HOMEのhost namespaceごとに256 MiB、全文観測は1担当1回16 MiBまで。容量不足では省略保存せず拒否する。",
+      "idleかつ最新turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ち。開始前idleや情報不足は未確認。検収待ちは全体の完了認定ではない。",
+      "未確認・history_gap・complete:falseを変化なしとして扱わない。既存read/watchは引き続き利用できる。",
+    ],
+    errors: [OPTIONS_INVALID, supervisorForbiddenError],
+    see: ["work", "read", "watch", "cloud"],
+  },
+
+  work: {
+    title: "managed担当を開始し、complete syncを基点に安全に指示する",
+    when: "方針付き担当を立ち上げるとき、またはproject syncで確認済みの担当へcursor・finding・監督IDを手渡さず指示するとき。",
+    usage: ["work start --project ID|NAME --title TITLE [--root PATH] <WORK-ORDER>|-", "work tell THREAD [--sync-token TOKEN] [--new-turn] <INSTRUCTION>|-", "--connection desktop-cloud work start --project NAME --environment ID|NAME --title TITLE --root PATH <WORK-ORDER>|-"],
+    options: [
+      { name: "--project", text: "sharedではDesktopのproject ID/完全一致名。Desktop Cloudではcodexteer側の調整用namespace。" },
+      { name: "--title", text: "担当を識別する短い題名。役割の種類ではない。" },
+      { name: "--root", default: "現在のディレクトリ", text: "CODEXTEER.mdを読むローカルcheckout。Desktop Cloudでは明示必須。" },
+      { name: "--environment", text: "Desktop Cloudの公開済みenvironment configurationのIDまたは完全一致名。" },
+      { name: "--sync-token", text: "通常は省略する。並行syncの競合時だけ確認済みの最新tokenを指定する。" },
+      { name: "--new-turn", text: "検収待ちでもidleなら必要。同じ委任の未完了作業を続けるidle/terminal担当だけで新しいturnを開始する。" },
+    ],
+    returns: "attempt_id、段階、thread_id、監督・index・初回観測の完了状態。途中失敗後も同じ発注はcreateを再送せず、保存済み段階から読み取り照合だけを行う。",
+    examples: ["codexteer work start --project sample --title tests 'テストを追加する' --json", "codexteer work tell <THREAD> '確認済みの失敗を修正する' --json", "codexteer --connection desktop-cloud work start --project sample --environment codexteer --root /path/to/checkout --title docs - --json < order.txt"],
+    notes: [
+      "CODEXTEER.mdはroot直下の通常ファイルだけを読み、64 KiB以下・BOMなしのUTF-8を改行も含め原文のまま一度だけ初回指示へ入れる。ない場合はその事実を初回指示へ書く。",
+      "方針は権限拡張や承認・質問への代理回答を許可しない。既存担当へ方針変更を自動送信しない。",
+      "Desktop Cloudのprojectはローカルの調整用namespaceで、Desktop DBのproject所属を要求しない。ローカルcheckoutとCloud側の一致は自動保証しない。",
+      "work tellは最新のcomplete project syncを要求し、送信直前に差分をdrainする。新event、質問・承認待ち、attention不明、不完全syncでは送らない。",
+      "finding・source・kind・監督IDは内部化する。質問・承認への回答を代理生成するflagは提供しない。",
+    ],
+    errors: [OPTIONS_INVALID, supervisorForbiddenError, ...managedStoppedErrors],
+    see: ["thread", "supervise", "cloud"],
+  },
+
   "debug-ui": {
     title: "UI送信（--backend ui）のためにDesktopの画面構造を調べる",
     when: "明示的なUI送信方式（send --backend ui）の不具合を診断するとき。通常のバックグラウンド送信（app-server）には不要。",
@@ -507,4 +569,24 @@ export const topics = {
     ],
     see: ["doctor", "send", "open"],
   },
+};
+
+// Keep every existing low-level topic available behind the detailed entry.
+topics.details = { ...topics.overview, title: "詳細・低水準の操作", when: "単一スレッドの互換操作、配送照合、診断、実行環境や共有資源の詳細を調べるとき。" };
+topics.overview = {
+  title: "担当に頼む・見る・言う・止める",
+  when: "オーケストレーターは4操作を使う。再起動・要約後はproject syncから再開する。",
+  use_cases: [
+    { need: "頼む＝work start", command: "help work" },
+    { need: "見る＝project sync", command: "help project" },
+    { need: "言う＝work tell", command: "help work" },
+    { need: "止める＝project control", command: "help project" },
+    { need: "再開する＝project sync（pause解除は明示したresumeのみ）", command: "help project" },
+    { need: "詳細・低水準", command: "help details" },
+  ],
+  usage: ["help [TOPIC] [--errors]"],
+  examples: ["codexteer help work", "codexteer help project", "codexteer help orchestrate", "codexteer help details"],
+  returns: "発注、差分の確認、介入、制御の入口。担当範囲はCODEXTEER.mdと発注から決める。",
+  notes: ["Cloudの新規担当はDesktop Cloud。実行先の道具を確認して振り分け、unknownを再送しない。", "単一スレッドのsuperviseを含む既存topicはhelp detailsから使える。"],
+  see: ["work", "project", "orchestrate", "details"],
 };

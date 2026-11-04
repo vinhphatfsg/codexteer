@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 // Real bundled CLI + wrapper + simulated Desktop + local fake model.
 // Does not launch Desktop, read account credentials, or invoke a paid model.
 import assert from "node:assert/strict";
@@ -60,7 +61,7 @@ async function until(check, label) {
   throw new Error(`Timed out: ${label}`);
 }
 
-const root = await mkdtemp("/private/tmp/cs-probe-");
+const root = await mkdtemp(tempPrefix("cs-probe-"));
 const paths = await runtimePaths(root);
 let child;
 let monitor;

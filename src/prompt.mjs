@@ -100,7 +100,7 @@ ${command}
     steps[5] = "7. 結果の確認と記録\n既存の実行結果・差分を参照し、確認できた結果と未確認事項を区別して報告してください。";
   }
   if (cloud) {
-    steps[0] += "\n- 対象はCodex Cloudです。Desktopや別アカウントへ切り替えず、同じCODEX_HOMEの公式CLI認証を使います。クラウド作業コピーはローカルにマウントされていません。checkpoint等のローカルコマンドの成功を、クラウド側のファイル検証と取り違えないでください。";
+    steps[0] += "\n- 対象は既存のcloud接続です。新規担当にはDesktop Cloudを使い、この既存対象の接続は切り替えません。Desktopや別アカウントへ切り替えず、同じCODEX_HOMEの公式CLI認証を使います。クラウド作業コピーはローカルにマウントされていません。checkpoint等のローカルコマンドの成功を、クラウド側のファイル検証と取り違えないでください。";
     steps[3] += `\nCloudの照会間隔は既定5000msを使い、watchと手動readを密に重ねません。429ではretry_after_msとCLIの復帰待ち・停止結果を尊重し、待機を短縮してwatchを再起動しません。本文を失った場合は、help monitorと併せて次も読み直します。\n${command} help cloud`;
     steps[4] += "\nCloudの通常sendは、実行中の指定ターンを中断して同じタスクの後続ターンを開始する方式です。ローカルと同じターンIDのまま進むとは仮定せず、delivery_action、親ターン、history checkと新しいreadで結果を照合してください。サーバー側で読取りと送信を原子的に固定する契約はなく、送信直前に再確認します。idleの継続には、方針で再開が許可された場合だけ--new-turnを付けます。";
     steps[5] += `\nCloud成果物の検収には次で記録済みpatchを確認します。試行を選ぶ場合だけ--attempt 1〜4を指定します。\n${command} diff ${thread} --json\ndiff_available:falseやdiff:nullは変更ゼロの証明ではありません。read --include-outputの変更・コマンド・終了コードと照合し、切り詰めた出力を完全な差分と扱いません。Cloud内の基点と検証結果を確認し、取得した完全なpatch/commitは委任された範囲で基点を照合して統合し、統合後に検証します。diff取得は適用ではなく、ローカルcheckpoint/resourceは明示したローカル入力・成果物・コマンドだけを検証します。Cloud成果物を確認できなければ未検証とし、ローカルtest成功で補いません。`;

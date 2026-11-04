@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, readdir, symlink, link, stat, open } from "node:fs/promises";
@@ -19,7 +20,7 @@ function records() {
 }
 const encode = rows => rows.map((r, ordinal) => JSON.stringify({ timestamp: "2026-10-11T00:00:00Z", ordinal, ...r })).join("\n") + "\n";
 async function fixture(t, rows = records()) {
-  const home = await mkdtemp("/private/tmp/ct-turn-repair-test-"); t.after(() => rm(home, { recursive: true, force: true }));
+  const home = await mkdtemp(tempPrefix("ct-turn-repair-test-")); t.after(() => rm(home, { recursive: true, force: true }));
   const dir = `${home}/sessions/2026/10/11`; await mkdir(dir, { recursive: true });
   const file = `${dir}/rollout-2026-10-11T00-00-00-${ID}.jsonl`; await writeFile(file, encode(rows));
   return { home, dir, file };

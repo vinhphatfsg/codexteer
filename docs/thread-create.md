@@ -47,7 +47,7 @@ CLI終了後の承認はDesktopが担当します。codexteerは承認を自動�
 - standaloneで`--title`を省略すると、初回指示の空白をまとめた先頭80文字を名前にします。タイトル生成用のAIは起動しません。対象サーバーでは未使用の空チャットをDesktopが購読するために、先に名前を保存して履歴を永続化する必要があります。
 - cwd・permissions・sandbox・approval policy・approvals reviewerの上書きはnative schemaにないため、指定すると作成前に拒否します。
 - `--via-thread`のAI中継経路は削除しました。自動fallbackもありません。
-- 本書のstandalone方式は登録済みローカルプロジェクト向けです。worktreeやクラウド実行はこの方式では扱いません。Codex Cloudには`--connection cloud thread create --project <ENV_ID>`で同じ作成操作を使えます。環境一覧・監督を含む[Cloud操作](cloud.md)を参照してください。
+- 本書のstandalone方式は登録済みローカルプロジェクト向けです。worktreeやクラウド実行はこの方式では扱いません。新規Cloud担当は`--connection desktop-cloud environments list`で環境を選び、`--connection desktop-cloud thread create --environment <ID_OR_EXACT_NAME>`で作成します。複数担当の管理には[work startとproject sync](orchestration.md)、環境の要件には[Desktop Cloud操作](desktop-cloud.md)を参照してください。
 - `--timeout-ms`は各RPCの待機期限で、既定120000、1000〜600000です。
 - `--dry-run`は接続・プロジェクト・native schemaを読み、チャット・指示・receiptを作りません。
 
@@ -86,3 +86,16 @@ native一覧はDesktopの実schemaに従い最新50件と全pinnedです。対�
 未知の応答、別プロジェクト、追加root、初回指示の不一致では停止し、作成や配送を繰り返しません。実環境で使う前に、その環境のDesktopとCLIでschema・所属・購読・承認動作を確認してください。
 
 DesktopのCloud環境構成で作成する場合は[Desktop Cloud](desktop-cloud.md)を参照してください。環境選択とローカルDesktopプロジェクト所属は別で、通常のリモートCloud環境への初回所属登録は未対応です。Desktop自身の実行環境に限定した署名付きAPIの対応範囲は、Desktop Cloudの説明を参照してください。
+
+## 方針付きの担当を一度に開始する
+
+`work start` は repository root 直下の `CODEXTEER.md` を読み、発注書と出典を分けて初回指示へ入れ、タスク作成、managed project index への登録、監督登録、初回観測までを行います。
+
+```sh
+codexteer work start --project 'サンプル' --title 'テスト担当' '失敗しているテストを直す' --json
+codexteer --connection desktop-cloud work start --project sample --environment codexteer --root /path/to/checkout --title '調査担当' - --json < order.txt
+```
+
+方針ファイルは `--root`（既定は現在のディレクトリ）直下の通常ファイルに限り、64 KiB以下、BOMなしのUTF-8で保存してください。symlinkを辿らず同じfile descriptorから上限付きで読み、読み取り中にpath・inode・size・mtime・ctimeが変われば開始しません。改行や `${...}` などを展開せず原文のまま一度だけ入れます。ファイルがなければ正常に開始し、その旨を初回指示へ入れます。Desktop Cloudではサーバー側のcheckoutから方針を推測せず、`--root`を明示します。`--project`はcodexteer側の調整用namespaceで、Desktop DBへのproject割当を要求しません。environment configuration IDをrouteとして保存し、ローカルcheckoutとCloud checkoutの一致は未検証と明示します。work startのWeb Cloud経路は提供しません。
+
+開始段階はローカルに保存されます。同じ発注を同時または再度開始してもcreateを繰り返しません。作成結果が不明な場合は読み取り照合だけを行い、自動で作り直しません。`thread create`と`supervise`は互換用の個別操作として引き続き利用できます。

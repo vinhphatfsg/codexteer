@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, stat, symlink, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -7,7 +8,7 @@ import { sendTrackedMessage, getMessage, listMessages, messageSummary, reconcile
 import { readRecord, writeRecord, withStoreLock, storePath } from "../src/store.mjs";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
-async function fixture(t) { const home = await mkdtemp("/private/tmp/cs-journal-"); t.after(() => rm(home, { recursive: true, force: true })); return { home }; }
+async function fixture(t) { const home = await mkdtemp(tempPrefix("cs-journal-")); t.after(() => rm(home, { recursive: true, force: true })); return { home }; }
 const accepted = async (threadId, text, options) => ({ thread_id: threadId, turn_id: "turn", client_message_id: options.clientMessageId, sent: true, delivery_status: "accepted" });
 
 test("codexteer reads pre-rename history from its original namespace without rewriting it", async t => {

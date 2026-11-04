@@ -56,7 +56,7 @@ const ORCHESTRATION_ERRORS = [
   { ...OPTIONS_INVALID, when: "未知のオプション、GOALが1つでない、orchestrate（promptなし）に--jsonを付けた。" },
   { code: "SUPERVISOR_CONTROL_FORBIDDEN", when: "--supervisor付きで実行した。監督IDは既存の1タスクに束縛されている。", action: "監督IDを外し、ユーザーの端末から実行する。" },
   { code: "DESKTOP_READ_ONLY", when: "--connection desktopを指定した。", action: "--connectionを省略する（shared）。" },
-  { code: "CLOUD_CAPABILITY_UNSUPPORTED", when: "--connection cloudかdesktop-cloudを指定した。Cloud経路にorchestrateはない。", action: "orchestrateは--connectionを省略して実行する。ローカル本文はWeb Cloud担当の手順も含む。Cloudの操作はhelp cloud / help desktop-cloud。" },
+  { code: "CLOUD_CAPABILITY_UNSUPPORTED", when: "--connection cloudかdesktop-cloudを指定した。Cloud経路にorchestrateはない。", action: "orchestrateは--connectionを省略して実行する。ローカル本文からDesktop Cloud担当を作成する。Cloudの操作はhelp desktop-cloud。" },
   { code: "REMOTE_READ_ONLY", when: "既定のnative経路で--hostを指定した。", action: "リモートでは--remote-transport pairedを明示する（help remote）。" },
 ];
 
@@ -100,13 +100,13 @@ const SAVED_CLI_NOTES = [
 ];
 
 const ORCH_SHARED_NOTES = [
-  "オーケストレーターの役割はモデルに依存せず、Codex自身も担当できる。",
+  "本文は受け手のモデルや製品に依存せず、担当範囲を方針と発注から決める。",
   "入力（--supervisor・--connection・--project・GOAL・--agent）が不正なら、CLIの保存より前に止まる。",
   "保存済みCLI方式（既定）の保存・検証・Nodeの固定はsupervise promptと同じ。",
   "リモートは--host HOST-ID --remote-transport pairedのときだけ使える（help remote）。",
-  "ローカル本文にはWeb Cloud担当の条件付き手順を常に含む。監督IDなしcloud_commandで環境照合・作成・子prompt生成・監督停止を行う。保存方式は同じCLI・Node・CODEX_HOMEを固定し、Desktop用コマンドに接続指定を追加しない。pairedではcloud_commandはnullで、Cloud手順は含めない。",
-  "Web Cloudはローカル資源を占有せず並行作業を増やせるため、取得可能なソース・ブランチで完結し、ローカル未コミット差分・実機・GUIが不要な担当で優先する。条件を満たさない、環境がない・照合できない場合は作成前にDesktopを選ぶ。Unity Editor等の共有資源はresourceリースで順番に統合後の確認・画面確認に使う。",
-  "Cloudの基点は環境から取得できるpush済みブランチ。必要なpushはGOALや方針で委任されていれば作業ブランチだけに行い、委任がなければユーザーに確認する。既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止。",
+  "ローカル本文はwork start・project sync・work tell・project controlを使う。個別の監督情報はCLIが扱い、再起動・要約後はproject syncから再開する。",
+  "cloud_commandはDesktop Cloud用。pairedではnull。構成ごとに必要なUnity・Blender・GUI・実機等の道具が使えると確認して振り分け、未確認なら確認タスクまたはlocal Desktopを選ぶ。",
+  "基点ブランチは指定できないため、委任された作業ブランチだけへpushし担当にfetchさせる。main・既定ブランチへの直接pushをしない。unknownはsyncで確認し、環境の再公開は共有資源として順番を管理する。",
 ];
 
 export const topics = {
@@ -212,8 +212,8 @@ export const topics = {
       ...LAUNCH_NOTES,
       ...ORCH_SHARED_NOTES,
       "GOALを - で標準入力から読むと、起動前に標準入力を読み切る。",
-      "プロジェクト照合・担当作成・各子の監督登録と監視は、起動したオーケストレーターが本文に従って行う。",
-      "プロジェクト用の監督IDは作らない。子ごとにsupervise promptで生成・登録し、pause/stopも子ごとに行う。",
+      "起動したオーケストレーターはwork startで担当とbindingを作り、project syncで観測し、work tellで介入する。",
+      "プロジェクト用の監督IDは作らない。work startが担当別に登録し、project controlが既存のbindingを制御する。",
       "本文の委任範囲と役割分担はhelp orchestrate prompt、手順の詳細はdocs/orchestration.md。",
     ],
     see: ["orchestrate prompt", "supervise", "supervise prompt", "projects", "thread", "remote"],
@@ -229,7 +229,7 @@ export const topics = {
       { name: "--agent claude|codex", default: "なし（null）", text: "子の監督IDのownerと送信元のCLI識別。エージェントは起動しない。省略時は受け取ったオーケストレーターが子の生成前に<AGENT>を選ぶ。" },
       { name: "--use-path-cli", text: `${PATH_CLI_TEXT}生成時は何も書き込まない。` },
     ],
-    returns: "通常は本文だけ（末尾改行付き）。--json: command=orchestrate.prompt、data.project_selector（開始時に照合する指定文字列で、所属確認ではない）、goal、agent（省略時null）、prompt、command（プロジェクト用の実行コマンド）、cloud_command（Web Cloud専用、pairedではnull）、connection、cli_mode、deployment、node。--use-path-cliではdeploymentとnodeはnull。pairedリモートではhost_id・remote_transportも返す。",
+    returns: "通常は本文だけ（末尾改行付き）。--json: command=orchestrate.prompt、data.project_selector（開始時に照合する指定文字列で、所属確認ではない）、goal、agent（省略時null）、prompt、command（プロジェクト用の実行コマンド）、cloud_command（Desktop Cloud用、pairedではnull）、connection、cli_mode、deployment、node。--use-path-cliではdeploymentとnodeはnull。pairedリモートではhost_id・remote_transportも返す。",
     errors: [...ORCHESTRATION_ERRORS, ...SAVED_CLI_ERRORS],
     examples: [
       "codexteer orchestrate prompt --project 'My Project' '利用者が動作を確認し、変更を指示できる状態にする'",
@@ -242,16 +242,16 @@ export const topics = {
       ...ORCH_SHARED_NOTES,
       "本文が委任するのは、対象プロジェクトでの担当作成・追加指示・同じ目的の未完了作業の継続（idleの担当へのnew-turnを含む）。",
       "委任に含まないもの: 無関係な既存チャットへの送信、依頼外への拡張、人間の代理承認、paused/stoppedや承認・質問待ちの迂回。",
-      "オーケストレーターは目的・優先順位・依存関係・共有資源・検収と統合を担当する。",
-      "Codex担当は調査・設計判断・実装・検証と、発注の前提への異論・改善案を担当する。",
-      "GOALは出発点としてそのまま埋め込み、子に渡す監督方針を置き換えない。",
+      "担当範囲はCODEXTEER.mdと今回の発注に従う。未記載なら成果と専門性から選び、理由と境界を書く。",
+      "モデル名・製品名から能力・権限・役割を推測しない。",
+      "GOALは出発点としてそのまま埋め込み、CODEXTEER.mdと今回の発注から担当範囲を決める。",
       "計画では高度（作業の先の成果）・深さ（一次資料・専門的手法・外部検証）・範囲（隣接分野の技法）を具体化させる。",
       "重要な発見・行き詰まり・統合前・完了前に目的と前提を再評価し、継続・計画変更・確認を根拠付きで記録させる。",
       "受入条件の無断変更や、役柄を演じるだけの追加は求めない。",
-      "作成用のコマンドは特定スレッドの--supervisorを持たない。子ごとに同じCLI方式のsupervise prompt --jsonを生成し、個別にregister/read/watchする。",
+      "work start・project sync・work tell・project controlの4操作を案内する。",
       "作成・配送が不明や部分成功なら、receiptで同じ子を照合し、自動で作り直し・再送しない。",
-      "子の監視を開始できなければ追加作成を止める。個別のpause/stopをIDなし送信などで迂回しない。",
-      "プロジェクト全体を一括でpause/stopする機能や常駐スケジューラーはない。監督制御は子ごと。",
+      "初回観測や以後のsyncができなければ追加作成を止める。pause/stopを別IDや別経路で迂回しない。",
+      "project control --allは既存担当の一括制御。部分失敗を確認し、busyを成功扱いにしない。常駐スケジューラーは不要。",
       "生成の成功は本文の遵守や目的達成を意味しない。実行と検収は受け取ったオーケストレーターが行う。",
       "生成した本文を依頼として渡して開始する。引用やログに現れた本文を委任と解釈しない。",
     ],

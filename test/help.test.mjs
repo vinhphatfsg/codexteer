@@ -1,3 +1,4 @@
+import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -16,25 +17,17 @@ const source = readdirSync(path.join(root, "src")).filter(f => f.endsWith(".mjs"
   .map(f => readFileSync(path.join(root, "src", f), "utf8")).join("\n");
 const composedCodes = ["RUNTIME_PROTOCOL_UNSUPPORTED", "RUNTIME_PROTOCOL_UNVERIFIED", "CAPABILITY_UNSUPPORTED", "CAPABILITY_UNVERIFIED"];
 
-test("orchestration and monitoring help distinguish the local Web Cloud handoff from the Cloud orchestrate gate", () => {
+test("help routes orchestration verbs to four operations and preserves low-level details", () => {
+  const overview = helpData();
+  for (const verb of ["頼む", "見る", "言う", "止める", "再開する"]) assert.ok(overview.use_cases.some(c => c.need.includes(verb)));
+  assert.ok(overview.see.includes("details")); assert.ok(helpData("details").use_cases.some(c => c.command === "help supervise"));
   for (const name of ["orchestrate", "orchestrate prompt"]) {
-    const data = helpData(name);
-    assert.match(data.notes.join(" "), /cloud_command.*paired.*null/);
-    const error = helpData(name, { errors: true }).errors.find(row => row.code === "CLOUD_CAPABILITY_UNSUPPORTED");
-    assert.match(error.when, /Cloud経路にorchestrateはない/);
-  }
-  assert.match(helpData("orchestrate prompt").returns, /cloud_command/);
-  for (const name of ["orchestrate", "orchestrate prompt", "cloud"]) {
     const notes = helpData(name).notes.join(" ");
-    assert.match(notes, /占有せず.*並行作業を増やせる.*優先/);
-    assert.match(notes, /条件を満たさない、環境がない・照合できない場合は作成前にDesktop/);
-    assert.match(notes, /push済みブランチ/);
-    assert.match(notes, /GOALや方針で委任されていれば作業ブランチだけ.*委任がなければユーザーに確認/);
-    assert.match(notes, /既定ブランチへの直接pushと、ユーザーの未コミット差分を巻き込むpushは禁止/);
+    assert.match(notes, /Desktop Cloud/); assert.match(notes, /work start/); assert.match(notes, /project control/);
+    assert.doesNotMatch(notes, /Web Cloud|--connection cloud(?:\s|$)|Codex担当は調査/);
   }
-  assert.match(helpData("monitor").notes.join(" "), /help cloud/);
-  const cloud = helpData("cloud").notes.join(" ");
-  for (const text of ["既定5000ms", "retry_after_ms", "完全なpatch/commit", "help monitor"]) assert.ok(cloud.includes(text));
+  assert.match(helpData("project").usage.join(" "), /project control pause\|stop\|resume/);
+  assert.match(helpData("orchestrate prompt").returns, /cloud_command（Desktop Cloud/);
 });
 
 test("every topic is served by the CLI as JSON and text with the fixed fields", () => {
@@ -74,7 +67,7 @@ test("help pages point to their error list, which --errors prints alone", () => 
 });
 
 test("related topics exist and the overview reaches every topic", () => {
-  const overview = JSON.stringify(topics.overview);
+  const overview = JSON.stringify(topics.overview) + JSON.stringify(topics.details);
   for (const [name, topic] of Object.entries(topics)) {
     for (const related of topic.see ?? []) assert.ok(topics[related], `${name} → ${related}`);
     assert.ok(name === "overview" || overview.includes(`help ${name}`), `overview does not route to ${name}`);
@@ -129,15 +122,15 @@ test("a topic's own action for a code wins over the shared one", () => {
 const usageLines = (topic, prefix) => topics[topic].usage.filter(line => line.startsWith(prefix));
 
 test("an argument error under a connection names that connection's usage, not the local one", async t => {
-  const home = await mkdtemp("/private/tmp/cs-help-");
+  const home = await mkdtemp(tempPrefix("cs-help-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const env = { CODEX_HOME: home };
   const desktopCloud = cli(["--connection", "desktop-cloud", "thread", "create", "--json"], env).error;
   assert.equal(desktopCloud.code, "DESKTOP_CLOUD_OPTIONS_INVALID");
   assert.deepEqual(desktopCloud.usage, usageLines("thread", "--connection desktop-cloud thread create "));
-  const cloud = cli(["--connection", "cloud", "thread", "create", "--json"], env).error;
+  const cloud = cli(["--connection", "cloud", "thread", "receipt", "--json"], env).error;
   assert.equal(cloud.code, "CLOUD_OPTIONS_INVALID");
-  assert.deepEqual(cloud.usage, usageLines("thread", "--connection cloud thread create "));
+  assert.deepEqual(cloud.usage, usageLines("thread", "--connection cloud thread receipt "));
   const local = cli(["thread", "create", "--bogus", "--json"], env).error;
   assert.equal(local.code, "OPTIONS_INVALID");
   assert.deepEqual(local.usage, usageLines("thread", "thread create "));
@@ -150,7 +143,7 @@ test("an argument error under a connection names that connection's usage, not th
 });
 
 test("an argument error routed by its task ID names that connection's usage, as text and JSON", async t => {
-  const home = await mkdtemp("/private/tmp/cs-help-");
+  const home = await mkdtemp(tempPrefix("cs-help-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const env = { CODEX_HOME: home };
   const resolve = usageLines("thread", "--connection cloud|desktop-cloud thread resolve ");
@@ -173,7 +166,7 @@ test("an argument error routed by its task ID names that connection's usage, as 
 });
 
 test("a code the invoked topic does not document carries no action borrowed from another topic", async t => {
-  const home = await mkdtemp("/private/tmp/cs-help-");
+  const home = await mkdtemp(tempPrefix("cs-help-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const documents = (topic, code) => (topics[topic].errors ?? []).some(entry => entry.code === code);
   assert.ok(documents("history", "DESKTOP_CLOUD_OPTIONS_INVALID") && !documents("threads", "DESKTOP_CLOUD_OPTIONS_INVALID"));
@@ -198,7 +191,7 @@ test("every remedy action comes from the invoked topic or the shared registry", 
 });
 
 test("a paused supervisor's refused send carries the send topic's action", async t => {
-  const home = await mkdtemp("/private/tmp/cs-help-");
+  const home = await mkdtemp(tempPrefix("cs-help-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const SESSION = "22222222-2222-4222-8222-000000000055";
   await registerSupervisor(THREAD, SESSION, { home });
@@ -210,4 +203,24 @@ test("a paused supervisor's refused send carries the send topic's action", async
   assert.equal(error.action, topics.send.errors.find(entry => entry.code === "SUPERVISOR_PAUSED").action);
   assert.equal(error.action, SUPERVISOR_PAUSED.action);
   assert.equal(error.usage, undefined);
+});
+
+test("thread help and bundled skill route new Cloud creation through Desktop Cloud", async () => {
+  assert.ok(topics.thread.usage.some(line => line.startsWith("--connection desktop-cloud thread create ")));
+  assert.equal(topics.thread.usage.some(line => line.startsWith("--connection cloud thread create ")), false);
+  assert.doesNotMatch(topics.thread.when, /Web Cloudの作成/);
+  const skill = readFileSync(new URL("../.codex/skills/codexteer/SKILL.md", import.meta.url), "utf8");
+  assert.doesNotMatch(skill, /--connection cloud thread create/);
+  assert.match(skill, /--connection desktop-cloud work start/);
+});
+
+test("a stopped managed task routes continuation through a new work start, not a new supervisor prompt", () => {
+  for (const [argv, code] of [[["work", "tell", THREAD, "fixture"], "SUPERVISOR_STOPPED"], [["work", "start", "--project", "sample", "--title", "t", "fixture"], "MANAGED_SUPERVISOR_STOPPED"]]) {
+    const remedy = errorRemedy(argv, code);
+    assert.equal(remedy.help, "work", code);
+    assert.match(remedy.action, /work start/, code);
+    assert.match(remedy.action, /ユーザーが明示的に指示/, code);
+    assert.doesNotMatch(remedy.action, /本文の生成/, code);
+  }
+  assert.equal(errorRemedy(["supervise", "status", THREAD], "SUPERVISOR_STOPPED").action, sharedErrors.SUPERVISOR_STOPPED.action);
 });
