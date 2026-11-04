@@ -14,6 +14,7 @@ const sinks = {
 };
 const processOwners = {
   "repository-source.mjs": "read-only local Git provenance; fixed argv without a shell",
+  "project-wait.mjs": "read-only OS process identity; fixed ps argv for one PID without a shell",
   "runner.mjs": "local-spawn gate",
   "wrapper.mjs": "explicit App Server bootstrap",
   "update.mjs": "explicit Desktop update lifecycle",

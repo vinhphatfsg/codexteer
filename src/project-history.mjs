@@ -65,13 +65,15 @@ export async function pruneProjectHistory(projectId, storage = {}) {
     const memberIds = new Set(members.map(member => member.thread_id));
     const latest = head?.sync_token ? await readRecord("project-sync-results", head.sync_token, storage) : null;
     references(latest, protectedTokens);
+    // Keep the latest wait notification recoverable after a stdout/process loss.
+    if (head?.wait_sync_token) references(await readRecord("project-sync-results", head.wait_sync_token, storage), protectedTokens);
     // Publication may have been interrupted before a result was saved. Pin all
     // records in its generation too, including durable pre-CAS evidence.
     const events = [];
     for (const row of before.stats[0]) {
       const record = await readRecord("project-sync-events", row.id, storage);
       events.push({ ...row, project_id: record.project_id, sync_token: record.sync_token, thread_id: record.thread_id });
-      if (record.sync_token === head?.sync_token) protectedTokens.add(row.id);
+      if (record.sync_token === head?.sync_token || record.sync_token === head?.wait_sync_token) protectedTokens.add(row.id);
     }
     let changed = true;
     while (changed) {
@@ -82,7 +84,7 @@ export async function pruneProjectHistory(projectId, storage = {}) {
     const removedResults = new Set(), deleted = { events: 0, results: 0, initial_payloads: 0 };
     for (const row of before.stats[1]) {
       const result = await readRecord("project-sync-results", row.id, storage);
-      if (result.project_id === projectId && row.id !== head?.sync_token) {
+      if (result.project_id === projectId && row.id !== head?.sync_token && row.id !== head?.wait_sync_token) {
         // Remove continuation first: a crash cannot leave it pointing to deleted events.
         await removeRecord("project-sync-results", row.id, storage); removedResults.add(row.id); deleted.results++;
       }
