@@ -2,7 +2,6 @@ import { open } from "node:fs/promises";
 import { constants } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import path from "node:path";
-import { inspectPermissionProtocol } from "./native-command.mjs";
 
 const failure = () => Object.assign(new Error("Desktop's saved local permission selection could not be verified. Select a permission mode in Desktop and retry; no instruction was sent."), { code: "DESKTOP_PERMISSION_UNVERIFIED" });
 const modes = {
@@ -60,9 +59,10 @@ export function permissionParams(selection, config, { operation = "turn/start", 
   return { ...common, sandboxPolicy };
 }
 
-export async function desktopPermissionMode(client, { home, state, cwd, operation = "turn/start", roots = [] }, { readSelection = readDesktopPermissionSelection, inspect = inspectPermissionProtocol } = {}) {
+// The standalone creation preflight verifies the matching bundled permission
+// schemas once, before either fresh selection is read. No subprocess is needed here.
+export async function desktopPermissionMode(client, { home, cwd, operation = "turn/start", roots = [] }, { readSelection = readDesktopPermissionSelection } = {}) {
   const selection = await readSelection(home);
-  await inspect(state);
   const config = ["custom", "server-default"].includes(selection.kind)
     ? (await client.request("config/read", { cwd, includeLayers: false })).config : undefined;
   const params = permissionParams(selection, config, { operation, roots });

@@ -1,9 +1,10 @@
 import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, symlink, readFile, readdir } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, readFile, readdir, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { desktopPermissionMode } from "../src/desktop-permissions.mjs";
 import { createProjectThread, creationOptions } from "../src/thread-create.mjs";
 import { projectsOnClient, projectWorkspace, resolveProject } from "../src/projects.mjs";
 import { initialInstructionMatches } from "../src/creation-verification.mjs";
@@ -300,4 +301,21 @@ test("explicit native creation distinguishes definitive rejections from unknown 
   f.deps.permissionMode = async () => { throw Object.assign(new Error("unverified"), { code: "DESKTOP_PERMISSION_UNVERIFIED" }); };
   await assert.rejects(createProjectThread("サンプル", "first", f.options, f.deps), { code: "DESKTOP_PERMISSION_UNVERIFIED", creation_status: "not_created", sent: false });
   assert(!f.calls.includes("thread/start"));
+});
+
+test("standalone shares one schema preflight across both fresh permission selections", async t => {
+  const f = await standaloneFixture(t);
+  let inspections = 0;
+  f.deps.inspectCommand = async (state, options) => { inspections++; assert.equal(options.standalone, true); return { status: "verified" }; };
+  await writeFile(path.join(f.home, ".codex-global-state.json"), JSON.stringify({ "electron-persisted-atom-state": {
+    "permission-selection-by-host-id:local": { kind: "agent-mode", agentMode: "guardian-approvals" },
+  } }), { mode: 0o600 });
+  f.deps.permissionMode = desktopPermissionMode;
+  const request = f.client.request;
+  f.client.request = async (method, params, ...rest) => {
+    if (["thread/start", "turn/start"].includes(method)) assert.equal(params.approvalsReviewer, "auto_review");
+    return request(method, params, ...rest);
+  };
+  const receipt = await createProjectThread("サンプル", "日本語\nfirst instruction", f.options, f.deps);
+  assert.equal(receipt.verification_status, "verified"); assert.equal(inspections, 1);
 });

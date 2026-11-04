@@ -52,11 +52,13 @@ export async function inspectNativeCommandProtocol(state, { run = spawnSync, exe
     if (standalone) {
       const names = ["ThreadStartParams", "ThreadStartResponse", "TurnStartParams", "TurnStartResponse", "ThreadSetNameParams", "ThreadMetadataUpdateParams"];
       const creation = Object.fromEntries(await Promise.all(names.map(async name => [name, JSON.parse(await readFile(path.join(directory, "v2", `${name}.json`), "utf8"))])));
-      validateStandaloneCreationSchemas(creation); schemas.push(creation);
+      validateStandaloneCreationSchemas(creation);
+      validatePermissionSchemas(creation);
+      schemas.push(creation);
     }
     return { status: "verified", source: "matching-bundled-command-schema", cli_version: installed, schema_sha256: createHash("sha256").update(JSON.stringify(schemas)).digest("hex"),
       ...(standalone ? { standalone_creation: "verified" } : {}), ...(remoteControl ? { remote_control_methods: remoteMethods } : {}) };
-  } catch (error) { if (error.code === "NATIVE_COMMAND_UNVERIFIED") throw error; throw failure("Cannot read native helper command schemas.", "NATIVE_COMMAND_UNVERIFIED"); }
+  } catch (error) { if (["NATIVE_COMMAND_UNVERIFIED", "DESKTOP_PERMISSION_UNVERIFIED"].includes(error.code)) throw error; throw failure("Cannot read native helper command schemas.", "NATIVE_COMMAND_UNVERIFIED"); }
   finally { await rm(directory, { recursive: true, force: true }); }
 }
 
@@ -107,18 +109,4 @@ export function validatePermissionSchemas(schemas) {
       || !schema.properties[name === "ThreadStartParams" ? "sandbox" : "sandboxPolicy"]
       || !schema.definitions?.ApprovalsReviewer?.enum?.includes("auto_review")) throw Object.assign(new Error("Bundled and running App Server permission schemas must match."), { code: "DESKTOP_PERMISSION_UNVERIFIED" });
   }
-}
-
-// Match the live server to its bundled schema; older servers must not silently
-// ignore permission fields and accept a turn under a different mode.
-export async function inspectPermissionProtocol(state, { run = spawnSync, executable = BUNDLED_CLI } = {}) {
-  const version = run(executable, ["--version"], { encoding: "utf8", timeout: 5000 });
-  if (version.status !== 0 || version.stdout?.match(/codex-cli ([\w.+-]+)/)?.[1] !== state.cli_version) throw Object.assign(new Error("Bundled and running App Server permission schemas must match."), { code: "DESKTOP_PERMISSION_UNVERIFIED" });
-  const directory = await mkdtemp(path.join(os.tmpdir(), "codexteer-permission-schema-"));
-  try {
-    const generated = run(executable, ["app-server", "generate-json-schema", "--experimental", "--out", directory], { encoding: "utf8", timeout: 15000, maxBuffer: 8 * 1024 * 1024 });
-    if (generated.status !== 0) throw Object.assign(new Error("Bundled and running App Server permission schemas must match."), { code: "DESKTOP_PERMISSION_UNVERIFIED" });
-    const names = ["ThreadStartParams", "TurnStartParams"];
-    validatePermissionSchemas(Object.fromEntries(await Promise.all(names.map(async name => [name, JSON.parse(await readFile(path.join(directory, "v2", `${name}.json`), "utf8"))]))));
-  } finally { await rm(directory, { recursive: true, force: true }); }
 }
