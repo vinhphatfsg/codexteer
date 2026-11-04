@@ -7,6 +7,7 @@ import { startWork, readRepositoryPolicy, composeWorkOrder } from "../src/work-s
 import { getManagedThread } from "../src/project-index.mjs";
 import { getSupervisor } from "../src/supervision.mjs";
 import { acquireResource, resourceStatus } from "../src/resource.mjs";
+import { listRecords } from "../src/store.mjs";
 
 const THREAD = "11111111-1111-4111-8111-555555555555";
 async function fixture(t, policy = "方針 ${notExpanded} $(also_not_expanded)\r\n末尾\n") {
@@ -75,6 +76,60 @@ test("a lost create response is reconciled read-only and never dispatched twice"
   await assert.rejects(startWork(input, f.deps), { code: "CONNECTION_FAILED" });
   const result = await startWork(input, f.deps); assert.equal(result.stage, "observed");
   assert.equal(f.counts.create, 1); assert.equal(reconciles, 1);
+});
+
+test("successful reconciliation clears failure metadata before persisting the known child", async t => {
+  for (const knownThread of [false, true]) {
+    const f = await fixture(t), original = f.deps.create, input = { project: "project-one", title: "recovered", order: "implement", root: f.root };
+    f.deps.create = async value => {
+      await original(value);
+      throw Object.assign(new Error("response lost"), { code: "CONNECTION_FAILED", creation_dispatched: true,
+        creation_status: knownThread ? "created" : "unknown", sent: false, ...(knownThread ? { thread_id: THREAD } : {}) });
+    };
+    await assert.rejects(startWork(input, f.deps), { code: "CONNECTION_FAILED", stage: "create_unknown" });
+    const [failed] = await listRecords("work-starts", f.deps.storage);
+    for (const key of ["create_error", "create_failure", "known_thread_id"]) assert.equal(Object.hasOwn(failed, key), true);
+    const reconcile = f.deps.reconcile;
+    f.deps.reconcile = async () => null;
+    await assert.rejects(startWork(input, f.deps), { code: "WORK_CREATE_UNKNOWN" });
+    assert.deepEqual((await listRecords("work-starts", f.deps.storage))[0], failed);
+    f.deps.reconcile = reconcile;
+    f.deps.hook = async name => { if (name === "membership_registered") throw Object.assign(new Error("interrupted"), { code: "INJECTED_CRASH" }); };
+    await assert.rejects(startWork(input, f.deps), { code: "INJECTED_CRASH" });
+    const [recovered] = await listRecords("work-starts", f.deps.storage);
+    assert.equal(recovered.stage, "child_known"); assert.equal(recovered.thread_id, THREAD);
+    for (const key of ["create_error", "create_failure", "known_thread_id"]) assert.equal(Object.hasOwn(recovered, key), false);
+    delete f.deps.hook;
+    const result = await startWork(input, f.deps);
+    assert.equal(result.stage, "observed"); assert.equal(result.attempt_id, failed.attempt_id);
+    assert.equal(f.counts.create, 1);
+  }
+});
+
+test("only explicit and consistent pre-dispatch proof permits another creation call", async t => {
+  const proof = { creation_status: "not_created", creation_dispatched: false, sent: false };
+  for (const fields of [proof, { ...proof, creation_dispatched: undefined }, { ...proof, creation_status: undefined },
+    { ...proof, sent: undefined }, { ...proof, creation_dispatched: true }, { ...proof, creation_status: "unknown" },
+    { ...proof, creation_status: "created" }, { ...proof, sent: true }, { ...proof, thread_id: THREAD }, {}]) {
+    const f = await fixture(t), input = { project: "project-one", title: "proof", order: "implement", root: f.root }, original = f.deps.create;
+    const code = fields === proof ? "ARBITRARY_PREFLIGHT_FAILURE" : "DESKTOP_PERMISSION_UNVERIFIED";
+    f.deps.create = async () => { throw Object.assign(new Error("blocked"), { code, ...fields }); };
+    f.deps.reconcile = async () => null;
+    await assert.rejects(startWork(input, f.deps), { code });
+    const [before] = await listRecords("work-starts", f.deps.storage);
+    f.deps.create = original;
+    if (fields === proof) {
+      assert.equal(before.stage, "create_not_dispatched");
+      const result = await startWork(input, f.deps);
+      assert.equal(result.attempt_id, before.attempt_id); assert.equal(result.stage, "observed");
+      const [after] = await listRecords("work-starts", f.deps.storage);
+      for (const key of ["create_error", "create_failure", "known_thread_id"]) assert.equal(Object.hasOwn(after, key), false);
+    } else {
+      assert.equal(before.stage, "create_unknown");
+      await assert.rejects(startWork(input, f.deps), { code: "WORK_CREATE_UNKNOWN" });
+      assert.equal(f.counts.create, 0);
+    }
+  }
 });
 
 test("reconciliation rejects ambiguous, mismatched, and malformed candidates", async t => {

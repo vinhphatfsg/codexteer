@@ -99,4 +99,4 @@ codexteer --connection desktop-cloud work start --project sample --environment c
 
 方針ファイルは `--root`（既定は現在のディレクトリ）直下の通常ファイルに限り、64 KiB以下、BOMなしのUTF-8で保存してください。symlinkを辿らず同じfile descriptorから上限付きで読み、読み取り中にpath・inode・size・mtime・ctimeが変われば開始しません。改行や `${...}` などを展開せず原文のまま一度だけ入れます。ファイルがなければ正常に開始し、その旨を初回指示へ入れます。Desktop Cloudではサーバー側のcheckoutから方針を推測せず、`--root`を明示します。`--project`はcodexteer側の調整用namespaceで、Desktop DBへのproject割当を要求しません。environment configuration IDをrouteとして保存し、ローカルcheckoutとCloud checkoutの一致は未検証と明示します。work startのWeb Cloud経路は提供しません。
 
-開始段階はローカルに保存されます。同じ発注を同時または再度開始してもcreateを繰り返しません。作成結果が不明な場合は読み取り照合だけを行い、自動で作り直しません。`thread create`と`supervise`は互換用の個別操作として引き続き利用できます。
+開始段階はローカルに保存されます。作成側が`creation_status: not_created`・`creation_dispatched: false`・`sent: false`を返し、thread_idがない場合は`create_not_dispatched`として保存します。原因を直し、同じproject・title・発注・開始オプションで`work start`を再実行すると、同じattempt_idで作成をやり直せます。作成が送られた可能性がある場合は読み取り照合だけを行い、自動で作り直しません。`thread create`と`supervise`は互換用の個別操作として引き続き利用できます。

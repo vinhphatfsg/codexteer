@@ -100,13 +100,23 @@ export async function startWork(input, dependencies = {}) {
       if (record.stage === "create_dispatching" || record.stage === "create_unknown") {
         const found = reconciledChild(await dependencies.reconcile?.(record), record);
         if (!found) throw Object.assign(fail("Creation may have been dispatched. Read-only reconciliation did not find one child; creation was not repeated.", "WORK_CREATE_UNKNOWN"), summary(record));
+        delete record.create_error; delete record.create_failure; delete record.known_thread_id;
         Object.assign(record, found, { stage: "child_known" }); await writeHistoryRecord("work-starts", key, record, storage);
       } else {
         await hook("before_create_rpc", record);
+        delete record.create_error; delete record.create_failure; delete record.known_thread_id;
         record.stage = "create_dispatching"; await writeHistoryRecord("work-starts", key, record, storage);
         let created;
         try { created = await dependencies.create({ project, title, prompt, branch, attemptId: record.attempt_id, environmentConfigId: record.environment_config_id, connection }); }
-        catch (error) { record.stage = "create_unknown"; record.create_error = error.code ?? "CREATE_FAILED"; record.known_thread_id = error.thread_id ?? null; await writeHistoryRecord("work-starts", key, record, storage); throw Object.assign(error, summary(record)); }
+        catch (error) {
+          // not_created can also describe a rejected RPC after dispatch. Only
+          // the creator's explicit pre-dispatch proof permits the same attempt again.
+          const notDispatched = error.creation_status === "not_created" && error.creation_dispatched === false && error.sent === false && error.thread_id == null;
+          record.stage = notDispatched ? "create_not_dispatched" : "create_unknown";
+          record.create_error = error.code ?? "CREATE_FAILED"; record.known_thread_id = error.thread_id ?? null;
+          record.create_failure = { creation_status: error.creation_status, creation_dispatched: error.creation_dispatched, sent: error.sent, thread_id: error.thread_id ?? null };
+          await writeHistoryRecord("work-starts", key, record, storage); throw Object.assign(error, summary(record));
+        }
         await hook("create_returned", { ...record, created });
         if (!created?.thread_id) { record.stage = "create_unknown"; await writeHistoryRecord("work-starts", key, record, storage); throw Object.assign(fail("Creation returned no child ID; creation was not repeated.", "WORK_CREATE_UNKNOWN"), summary(record)); }
         if (connection === "desktop-cloud") reconciledChild(created, record);

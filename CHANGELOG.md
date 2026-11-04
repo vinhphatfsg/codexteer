@@ -4,6 +4,7 @@
 
 ## 未リリース
 
+- `work start`は、作成RPCの送信前に停止したことを確認できる場合、原因を直して同じ発注を再実行すると同じattempt_idで作成をやり直せます。送信済みの可能性がある場合は引き続き作成を繰り返しません。
 - `project guard`が自分のオーケストレーターを特定できない場合は、監視未確認の警告を返して停止を許します。Claude native installerの版番号付き実行パスを識別し、macOSのwait・所有者の起動識別はcommand全文の代わりにSHA-256を保存します。
 - オーケストレーターは受信セッションで`project guard --project ID --status --json`を使い、直接Claude起動のStop hook設定印を照合できます。本文だけの生成や手動起動など有効性が未確認の経路では、最初の報告で監視漏れとhookの設定方法を案内します。単一タスクの監督本文にも、質問・承認・URLの伝達後にwatchを再開する案内を追加しました。
 - `project guard`は自分のClaude/Codex CLIセッションに属する生存waitだけを認めます。同じCODEX_HOME・host・projectは1オーケストレーターで扱い、別セッションのwaitでは停止を許可せず、重複waitの`RECORD_BUSY`は所有セッションとの引継ぎを案内します。

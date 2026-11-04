@@ -540,7 +540,7 @@ export const topics = {
       { name: "--sync-token", text: "通常は省略する。並行syncの競合時だけ確認済みの最新tokenを指定する。" },
       { name: "--new-turn", text: "検収待ちでもidleなら必要。同じ委任の未完了作業を続けるidle/terminal担当だけで新しいturnを開始する。" },
     ],
-    returns: "attempt_id、段階、thread_id、監督・index・初回観測の完了状態。途中失敗後も同じ発注はcreateを再送せず、保存済み段階から読み取り照合だけを行う。",
+    returns: "attempt_id、段階、thread_id、監督・index・初回観測の完了状態。creation_status:not_created・creation_dispatched:false・sent:falseでthread_idがない失敗はcreate_not_dispatchedとして保存し、原因を直して同じ発注を再実行すると同じattempt_idで作成をやり直す。作成が送られた可能性があれば読み取り照合だけを行う。",
     examples: ["codexteer work start --project sample --title tests 'テストを追加する' --json", "codexteer work tell <THREAD> '確認済みの失敗を修正する' --json", "codexteer --connection desktop-cloud work start --project sample --environment codexteer --root /path/to/checkout --title docs - --json < order.txt"],
     notes: [
       "CODEXTEER.mdはroot直下の通常ファイルだけを読み、64 KiB以下・BOMなしのUTF-8を改行も含め原文のまま一度だけ初回指示へ入れる。ない場合はその事実を初回指示へ書く。",
@@ -550,7 +550,10 @@ export const topics = {
       "work tellは最新のcomplete project syncを要求し、送信直前に差分をdrainする。新event、質問・承認待ち、attention不明、不完全syncでは送らない。",
       "finding・source・kind・監督IDは内部化する。質問・承認への回答を代理生成するflagは提供しない。",
     ],
-    errors: [OPTIONS_INVALID, supervisorForbiddenError, ...managedStoppedErrors],
+    errors: [OPTIONS_INVALID, supervisorForbiddenError, ...managedStoppedErrors,
+      { code: "DESKTOP_PERMISSION_UNVERIFIED", when: "Desktopの保存済み権限選択を確認できない", action: "create_not_dispatchedならDesktopで権限モードを選び直し、同じproject・title・発注・開始オプションでwork startを再実行する。create_unknownなら作成を繰り返さずreceiptを確認する。" },
+      { code: "WORK_CREATE_UNKNOWN", when: "作成が送られた可能性があり、担当を一意に照合できない", action: "receiptと既存担当を確認する。題名や発注を変えて作成し直さない。" },
+    ],
     see: ["thread", "supervise", "cloud"],
   },
 
