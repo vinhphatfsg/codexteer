@@ -10,6 +10,8 @@ import { projectsOnClient, projectWorkspace, resolveProject } from "../src/proje
 import { initialInstructionMatches } from "../src/creation-verification.mjs";
 import { RUNTIME_CAPABILITIES } from "../src/compatibility.mjs";
 import { RpcFailure } from "../src/rpc.mjs";
+import { startWork } from "../src/work-start.mjs";
+import { listRecords } from "../src/store.mjs";
 
 const CHILD = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001", CONTEXT = "aaaaaaaa-aaaa-4aaa-8aaa-000000000002";
 export const catalog = { tools: [
@@ -122,7 +124,7 @@ test("standalone preflight rejects missing assignment schemas, changed mapping a
     if (mode === "mapping") f.deps.aliases = async () => ({});
     if (mode === "changed") { let n = 0; f.deps.aliases = async () => ++n === 1 ? { desktop: f.project.id } : {}; }
     if (mode === "subscription") f.deps.inspectControl = async () => { throw new Error("unavailable"); };
-    await assert.rejects(createProjectThread("サンプル", "first", f.options, f.deps), error => error.creation_status === "not_created" && error.sent === false);
+    await assert.rejects(createProjectThread("サンプル", "first", f.options, f.deps), error => error.creation_status === "not_created" && error.creation_dispatched === false && error.sent === false);
     assert(!f.calls.includes("thread/start"));
   }
 });
@@ -271,6 +273,7 @@ test("internal RPC errors after creation or delivery stay unknown, while invalid
     const delivery = !creating && unknown ? "unknown" : "not_sent";
     await assert.rejects(createProjectThread("サンプル", "日本語\nfirst instruction", f.options, f.deps), error => {
       assert.equal(error.creation_status, creation); assert.equal(error.delivery_status, delivery);
+      assert.equal(error.creation_dispatched, true);
       assert.equal(error.sent, !creating && unknown ? null : false);
       return true;
     });
@@ -299,8 +302,43 @@ test("explicit native creation distinguishes definitive rejections from unknown 
  test("standalone refuses an unverified Desktop selection before creating a chat", async t => {
   const f = await standaloneFixture(t);
   f.deps.permissionMode = async () => { throw Object.assign(new Error("unverified"), { code: "DESKTOP_PERMISSION_UNVERIFIED" }); };
-  await assert.rejects(createProjectThread("サンプル", "first", f.options, f.deps), { code: "DESKTOP_PERMISSION_UNVERIFIED", creation_status: "not_created", sent: false });
+  await assert.rejects(createProjectThread("サンプル", "first", f.options, f.deps), { code: "DESKTOP_PERMISSION_UNVERIFIED", creation_status: "not_created", creation_dispatched: false, sent: false });
   assert(!f.calls.includes("thread/start"));
+});
+
+test("work start retries the same order and attempt after fixing an unreadable Desktop permission selection", async t => {
+  const f = await standaloneFixture(t), input = { project: "サンプル", title: "検証", order: "first instruction", root: f.roots[0] };
+  f.deps.permissionMode = desktopPermissionMode;
+  let prompt;
+  f.deps.history = async () => ({ turns: f.calls.includes("turn/start") ? [{ items: [{ type: "userMessage", content: [{ type: "text", text: prompt }] }] }] : [] });
+  const deps = { storage: { home: f.home },
+    create: async value => { prompt = value.prompt; return createProjectThread(value.project, value.prompt, { title: value.title, attemptId: value.attemptId }, f.deps); },
+    reconcile: () => assert.fail("A proven pre-dispatch failure needs no reconciliation"),
+    read: async () => ({ cursor: "initial", status: "active", has_more: false, omitted_older_events: 0 }) };
+  await assert.rejects(startWork(input, deps), { code: "DESKTOP_PERMISSION_UNVERIFIED", stage: "create_not_dispatched", creation_dispatched: false, sent: false });
+  assert(!f.calls.includes("thread/start"));
+  const [before] = await listRecords("work-starts", deps.storage);
+  await writeFile(path.join(f.home, ".codex-global-state.json"), JSON.stringify({ "electron-persisted-atom-state": { "permission-selection-by-host-id:local": { kind: "agent-mode", agentMode: "auto" } } }), { mode: 0o600 });
+  const result = await startWork(input, deps);
+  assert.equal(result.stage, "observed"); assert.equal(result.attempt_id, before.attempt_id); assert.equal(result.thread_id, CHILD);
+  assert.equal(f.calls.filter(call => call === "thread/start").length, 1);
+  assert.equal(f.calls.filter(call => call === "turn/start").length, 1);
+  assert.equal((await listRecords("work-starts", deps.storage)).length, 1);
+});
+
+test("work start never repeats thread/start after dispatch, including explicit RPC rejection", async t => {
+  for (const rpcCode of [-32602, -32603]) {
+    const f = await standaloneFixture(t), input = { project: "サンプル", title: "検証", order: "first instruction", root: f.roots[0] }, request = f.client.request;
+    f.client.request = async (method, ...args) => {
+      if (method !== "thread/start") return request(method, ...args);
+      f.calls.push(method); throw new RpcFailure("dispatched", { code: "RPC_REJECTED", rpcCode });
+    };
+    const deps = { storage: { home: f.home }, create: value => createProjectThread(value.project, value.prompt, { title: value.title, attemptId: value.attemptId }, f.deps) };
+    await assert.rejects(startWork(input, deps), { code: "RPC_REJECTED", stage: "create_unknown", creation_dispatched: true });
+    await assert.rejects(startWork(input, deps), { code: "WORK_CREATE_UNKNOWN" });
+    assert.equal(f.calls.filter(call => call === "thread/start").length, 1);
+    assert(!f.calls.includes("turn/start"));
+  }
 });
 
 test("standalone shares one schema preflight across both fresh permission selections", async t => {

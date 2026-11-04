@@ -4,6 +4,7 @@
 
 ## 未リリース
 
+- `work start`は、作成RPCの送信前に停止したことを確認できる場合、原因を直して同じ発注を再実行すると同じattempt_idで作成をやり直せます。送信済みの可能性がある場合は引き続き作成を繰り返しません。
 - `project wait --project ID [--timeout-ms N] [--json]`を追加しました。最後の完全なproject syncを基準に、新しいターン終了・質問・承認待ち・失敗、またはmembership変更を待ち、syncと同じsnapshotを返します。idleだけでは通知せず、timeoutと観測失敗を区別します。最新のwait結果はsyncの`wait_sync_token`で復元できます。
 - `project guard --project ID`を追加しました。未停止の担当（pausedを含む）がいて生存するwaitがなければ、Stop hookの停止拒否JSONを返します。プロセスの起動識別を確認し、異常終了したwaitを監視中と扱いません。Claude向け`orchestrate`はhookを起動設定へ追加し、生成本文は質問・承認・URLの伝達後もバックグラウンドwaitを続けるよう案内します。手動のClaude・Codex hook設定例と制約をオーケストレーション文書へ追加しました。
 

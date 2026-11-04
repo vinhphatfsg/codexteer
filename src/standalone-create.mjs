@@ -131,9 +131,9 @@ export async function createStandaloneProjectThread(selector, prompt, settings, 
     const created = !!receipt?.thread_id, unknownCreation = creating && !created && mutationOutcomeUnknown(error);
     const unknownDelivery = sending && !accepted && mutationOutcomeUnknown(error);
     Object.assign(error, { attempt_id: attemptId, native_call_id: attemptId, thread_id: receipt?.thread_id, receipt_path: receipt?.receipt_path,
-      creation_status: created ? "created" : unknownCreation ? "unknown" : "not_created", sent: accepted ? true : unknownDelivery ? null : false,
+      creation_status: created ? "created" : unknownCreation ? "unknown" : "not_created", creation_dispatched: creating, sent: accepted ? true : unknownDelivery ? null : false,
       delivery_status: accepted ? "accepted" : unknownDelivery ? "unknown" : "not_sent" });
-    if (receipt?.receipt_path) try { await write("creations", attemptId, { ...receipt, creation_status: error.creation_status, sent: error.sent, delivery_status: error.delivery_status, verification_status: "failed", error_code: error.code ?? "CREATION_FAILED" }, storage); } catch { error.receipt_update_required = true; }
+    if (receipt?.receipt_path) try { await write("creations", attemptId, { ...receipt, creation_status: error.creation_status, creation_dispatched: error.creation_dispatched, sent: error.sent, delivery_status: error.delivery_status, verification_status: "failed", error_code: error.code ?? "CREATION_FAILED" }, storage); } catch { error.receipt_update_required = true; }
     throw error;
   } finally { try { client?.close(); } catch { if (accepted && receipt) receipt.runtime_cleanup_required = true; } }
 }

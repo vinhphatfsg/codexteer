@@ -64,7 +64,7 @@ export function fail(error, json, argv = []) {
     supervision_update_required: error.supervision_update_required,
     history_changed: error.history_changed, backup_path: error.backup_path, receipt_path: error.receipt_path,
     repair_stat: error.repair_stat, stage: error.stage, observed: error.observed, observation: error.observation, history_gap: error.history_gap, environment_config_id: error.environment_config_id,
-    creation_status: error.creation_status, attempt_id: error.attempt_id, receipt_update_required: error.receipt_update_required,
+    creation_status: error.creation_status, creation_dispatched: error.creation_dispatched, attempt_id: error.attempt_id, receipt_update_required: error.receipt_update_required,
     reservation_cleanup_required: error.reservation_cleanup_required,
     native_call_id: error.native_call_id,
     uncertain: error.uncertain, resource: error.resource, lease_retained: error.lease_retained, remote_execution_status: error.remote_execution_status,
