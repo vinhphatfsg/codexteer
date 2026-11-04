@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { once } from "node:events";
-import { spawn, execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { mkdtemp, chmod, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -13,8 +11,9 @@ import { claimRuntime } from "../src/runtime.mjs";
 import { registerManagedThread } from "../src/project-index.mjs";
 import { registerSupervisor } from "../src/supervision.mjs";
 import { listRecords } from "../src/store.mjs";
+import { startAgentSession } from "../test-support/agent-session.mjs";
 
-const exec = promisify(execFile), BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
+const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 const ID = "11111111-1111-4111-8111-000000000001", SESSION = "22222222-2222-4222-8222-000000000001";
 
 async function fixture(t) {
@@ -30,31 +29,55 @@ async function fixture(t) {
     peer.send(JSON.stringify(result === null ? { id: request.id, error: { code: -32601, message: "Unavailable" } } : { id: request.id, result }));
   }));
   http.listen(lease.paths.socket); await once(http, "listening"); await chmod(lease.paths.socket, 0o600);
-  const children = [];
+  const sessions = [];
   t.after(async () => {
-    for (const child of children) if (child.exitCode === null && child.signalCode === null) { const closed = once(child, "close"); child.kill("SIGKILL"); await closed; }
+    for (const session of sessions) await session.close();
     for (const peer of ws.clients) peer.terminate();
     await new Promise(resolve => ws.close(resolve)); await new Promise(resolve => http.close(resolve));
     await lease.release(); await rm(home, { recursive: true, force: true });
   });
   await registerManagedThread(ID, { projectId: "P", connection: "shared" }, { home });
   await registerSupervisor(ID, SESSION, { home });
-  const cli = async args => JSON.parse((await exec(process.execPath, [BIN, ...args], { env, timeout: 10000 })).stdout);
-  const guard = () => cli(["project", "guard", "--project", "P"]);
+  const session = await startAgentSession({ home, env, bin: BIN, direct: true }); sessions.push(session);
+  const other = await startAgentSession({ home, env, bin: BIN }); sessions.push(other);
+  const run = (agent, args) => agent.request("run", { args });
+  const cli = async args => {
+    const result = await run(session, args); assert.equal(result.code, 0, result.stderr || result.stdout);
+    return JSON.parse(result.stdout);
+  };
+  const guard = async () => JSON.parse((await session.request("hook")).stdout);
   await cli(["project", "sync", "--project", "P", "--json"]);
-  async function launchWait() {
-    const child = spawn(process.execPath, [BIN, "project", "wait", "--project", "P", "--json"], { env, stdio: ["ignore", "pipe", "pipe"] });
-    children.push(child); let stdout = "", stderr = "";
-    child.stdout.on("data", chunk => { stdout += chunk; }); child.stderr.on("data", chunk => { stderr += chunk; });
-    const closed = once(child, "close");
-    for (let n = 0; n < 300 && !(await listRecords("project-waits", { home })).some(record => record.pid === child.pid); n++) {
-      assert.equal(child.exitCode, null, stderr); await delay(10);
+  async function launchWait(agent = session) {
+    const pid = await agent.request("wait", { args: ["project", "wait", "--project", "P", "--json"] });
+    for (let n = 0; n < 300 && !(await listRecords("project-waits", { home })).some(record => record.pid === pid); n++) {
+      await delay(10);
     }
-    assert.deepEqual(await guard(), {}, stderr);
-    return { child, closed, output: () => stdout };
+    assert.deepEqual(JSON.parse((await run(agent, ["project", "guard", "--project", "P"])).stdout), {});
+    let result;
+    const closed = agent.request("result", { pid }).then(value => { result = value; return [value.code, value.signal]; });
+    return { child: { pid, kill: () => agent.request("kill", { pid }) }, closed, output: () => result.stdout };
   }
-  return { home, cli, guard, launchWait, thread, calls };
+  return { home, cli, guard, launchWait, thread, calls, other, session, run };
 }
+
+test("real orchestrate launch: only its own wait permits Stop; another session is blocked and cannot start a second wait", { timeout: 20000 }, async t => {
+  const f = await fixture(t);
+  const status = await f.cli(["project", "guard", "--project", "P", "--status", "--json"]);
+  assert.equal(status.data.stop_hook, "configured");
+  const waiting = await f.launchWait();
+  const foreign = await f.run(f.other, ["project", "guard", "--project", "P"]);
+  assert.equal(foreign.code, 0); assert.equal(JSON.parse(foreign.stdout).decision, "block");
+  const busy = await f.run(f.other, ["project", "wait", "--project", "P", "--timeout-ms", "0", "--json"]);
+  assert.equal(busy.code, 1); assert.equal(JSON.parse(busy.stdout).error.code, "RECORD_BUSY");
+  assert.match(JSON.parse(busy.stdout).error.message, /one orchestrator.*hand off/);
+  assert.deepEqual(await f.guard(), {});
+  await waiting.child.kill(); await waiting.closed;
+  assert.equal((await f.guard()).decision, "block");
+  const handedOff = await f.launchWait(f.other);
+  assert.equal((await f.guard()).decision, "block", "handoff never makes the new wait belong to the old session");
+  await handedOff.child.kill(); await handedOff.closed;
+  t.diagnostic("checkout bin/codexteer.mjs: direct-launch own wait=allow; foreign session=block; competing wait=RECORD_BUSY; killed wait=block");
+});
 
 test("real CLI wait: unchanged idle attention times out without changing the sync basis", { timeout: 20000 }, async t => {
   const f = await fixture(t);

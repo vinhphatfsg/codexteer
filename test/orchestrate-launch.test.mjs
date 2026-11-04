@@ -20,6 +20,11 @@ function fixture(t) {
   for (const agent of ["claude", "codex"]) writeFileSync(path.join(bin, agent), `#!/usr/bin/env node
 const fs = require("node:fs");
 fs.writeFileSync("started", String(process.pid));
+if (process.env.CT_GUARD_PROBE) {
+  const cp = require("node:child_process");
+  const result = cp.spawnSync(process.execPath, [process.env.CT_BIN, "project", "guard", "--project", "Example Project", "--status", "--json"], { encoding: "utf8" });
+  console.log(result.stdout); process.exit(result.status);
+}
 if (process.env.CT_ORCHESTRATE_WAIT) {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => { process.stdout.write(signal + "\\n"); process.exit(37); });
   setInterval(() => {}, 1000);
@@ -83,6 +88,23 @@ test("direct orchestration defaults to Claude and preserves the launched CLI's e
     assert.equal(result.status, code); assert.equal(JSON.parse(result.stdout).agent, "claude");
     assert.deepEqual(withoutGuard(JSON.parse(result.stdout).args, "claude"), ["--", expected]);
   }
+});
+
+test("Stop hook status belongs to the receiving launch, never to prompt generation", t => {
+  const options = fixture(t);
+  options.env = { ...options.env, CT_GUARD_PROBE: "1", CT_BIN: BIN, CODEXTEER_STOP_GUARD: "stale inherited value" };
+  for (const agent of ["claude", "codex"]) for (const pathMode of [false, true]) {
+    const result = run(options, ["--project", PROJECT, "goal", "--agent", agent, ...(pathMode ? ["--use-path-cli"] : [])]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).data.stop_hook, agent === "claude" ? "configured" : "unverified");
+  }
+  const manual = spawnSync(path.join(options.cwd, "bin", "claude"), [], options);
+  assert.equal(manual.status, 0, manual.stderr);
+  assert.equal(JSON.parse(manual.stdout).data.stop_hook, "unverified");
+  const generated = run(options, ["prompt", "--project", PROJECT, "goal", "--use-path-cli", "--json"]);
+  assert.equal(generated.status, 0, generated.stderr);
+  assert.match(JSON.parse(generated.stdout).data.prompt, /guard --project .*--status --json/);
+  assert.match(JSON.parse(generated.stdout).data.prompt, /最初の報告.*監視漏れを止める仕組みがない/);
 });
 
 test("Claude settings preserve existing hooks/options and quote literal project selectors", async t => {

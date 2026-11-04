@@ -30,7 +30,7 @@ import { startWork } from "./work-start.mjs";
 import { tellWork } from "./work-tell.mjs";
 import { readRecord } from "./store.mjs";
 import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
-import { waitProject, guardProject } from "./project-wait.mjs";
+import { waitProject, guardProject, projectGuardStatus } from "./project-wait.mjs";
 import { verifyProjectThread } from "./thread-verify.mjs";
 import { withDeviceAccount, prepareDevice, recoverDeviceKey, enrollDevice, pairDevice, verifyDevice, deviceStatus, deviceIdentityInfo, readPairingCode } from "./remote-device.mjs";
 import { readDevice } from "./remote-device-store.mjs";
@@ -238,7 +238,13 @@ async function mainOnTarget(argv) {
         if (supervisor) throw Object.assign(new Error("A bound supervisor cannot wait for or guard an entire project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         const project = takeOption(args, "--project", undefined);
         const timeout = action === "wait" ? takeOption(args, "--timeout-ms", undefined) : undefined;
+        const status = action === "guard" && takeFlag(args, "--status");
         if (args.length) throw usage(`Unexpected project ${action} arguments.`);
+        if (status) {
+          const data = await projectGuardStatus(project);
+          success("project.guard.status", data, json); if (!json) console.log(JSON.stringify(data, null, 2));
+          return;
+        }
         if (action === "guard") { console.log(JSON.stringify(await guardProject(project))); return; }
         const data = await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
           read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),

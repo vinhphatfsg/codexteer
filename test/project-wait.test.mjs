@@ -8,7 +8,7 @@ import { observeThread } from "../src/observe.mjs";
 import { registerManagedThread, getManagedThread } from "../src/project-index.mjs";
 import { registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
 import { syncProject, continueProjectSync, projectEvent, projectWaitSignal } from "../src/project-sync.mjs";
-import { waitProject, guardProject } from "../src/project-wait.mjs";
+import { waitProject, guardProject, orchestratorIdentity, projectGuardStatus } from "../src/project-wait.mjs";
 import { listRecords, writeRecord } from "../src/store.mjs";
 import { pruneProjectHistory } from "../src/project-history.mjs";
 import { createHash } from "node:crypto";
@@ -26,7 +26,8 @@ async function fixture(t, mode = "aggregate") {
   const storage = { home }, connection = cloud ? "desktop-cloud" : "shared";
   await registerManagedThread(id, { projectId: "P", connection, ...(cloud ? { environmentConfigId: "config" } : {}) }, storage);
   await registerSupervisor(id, SESSION, { ...storage, connection });
-  const dependencies = { storage, read, pollMs: 5, processIdentity: async () => "same-start" };
+  const dependencies = { storage, read, pollMs: 5, processIdentity: async () => "same-start",
+    orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) };
   await syncProject("P", {}, dependencies);
   return { home, id, thread, server, storage, dependencies };
 }
@@ -178,23 +179,63 @@ test("guard counts paused and missing bindings, checks start identity, and allow
   assert.equal((await guard()).decision, "block");
   await writeRecord("project-waits", "dead", { schema: 1, project_id: "P", pid: process.pid, process_start: "different-start" }, f.storage);
   assert.equal((await guard()).decision, "block", "PID alone does not prove wait liveness");
-  let enter; const entered = new Promise(resolve => { enter = resolve; });
-  const waiting = waitProject("P", { timeoutMs: 60 }, { ...f.dependencies, read: async (...args) => { enter(); return f.dependencies.read(...args); } });
+  await writeRecord("project-waits", "legacy", { schema: 1, project_id: "P", pid: process.pid, process_start: "same-start" }, f.storage);
+  assert.equal((await guard()).decision, "block", "a live legacy wait without an owner cannot permit stop");
+  let enter, release;
+  const entered = new Promise(resolve => { enter = resolve; }), hold = new Promise(resolve => { release = resolve; });
+  const waiting = waitProject("P", { timeoutMs: 0 }, { ...f.dependencies, read: async (...args) => { enter(); await hold; return f.dependencies.read(...args); } });
   await entered;
+  try {
+  const foreign = await guardProject("P", { ...f.dependencies,
+    orchestratorIdentity: async () => ({ pid: 456, process_start: "other-owner" }) });
+  assert.equal(foreign.decision, "block", "another session's wait cannot notify this orchestrator");
+  assert.match(foreign.reason, /one orchestrator|another session/i);
+  assert.equal((await guardProject("P", { ...f.dependencies,
+    orchestratorIdentity: async () => ({ pid: 123, process_start: "reused-pid" }) })).decision, "block");
+  assert.equal((await guardProject("P", { ...f.dependencies, orchestratorIdentity: async () => null })).decision, "block");
   assert.deepEqual(await guard(), {});
   await assert.rejects(waitProject("P", { timeoutMs: 0 }, f.dependencies), { code: "RECORD_BUSY" });
-  await waiting; assert.equal((await guard()).decision, "block");
+  } finally { release(); await waiting; }
+  assert.equal((await guard()).decision, "block");
   await controlSupervisor(f.id, "stop", f.storage); assert.deepEqual(await guard(), {});
   assert.deepEqual(await guardProject("empty", f.dependencies), {});
   await registerManagedThread("11111111-1111-4111-8111-000000000002", { projectId: "P", connection: "shared" }, f.storage);
   assert.equal((await guard()).decision, "block");
 });
 
+test("owner resolution uses the nearest CLI, excludes shared servers and never treats a shell as a session", async () => {
+  const shell = { pid: 10, executable: "/bin/zsh", command: "zsh" };
+  const claude = { pid: 20, executable: "/usr/bin/node", command: "node /opt/bin/claude" };
+  const codex = { pid: 30, executable: "/opt/bin/codex", command: "codex" };
+  const resolve = entries => orchestratorIdentity({ processAncestors: async () => entries, processIdentity: async pid => `start-${pid}` });
+  assert.deepEqual(await resolve([shell, claude, codex]), { pid: 20, process_start: "start-20" });
+  assert.deepEqual(await resolve([shell, codex]), { pid: 30, process_start: "start-30" });
+  assert.equal(await resolve([shell, { ...codex, command: "codex app-server --listen socket" }]), null);
+  assert.equal(await resolve([shell]), null);
+  assert.deepEqual(await resolve([{ ...claude, command: '"/path with spaces/node" "/path with spaces/claude"' }]), { pid: 20, process_start: "start-20" });
+});
+
+test("hook markers require this project's live launcher and cannot cross nested CLI sessions", async () => {
+  const launcher = { pid: 30, executable: "/usr/bin/node", command: "node codexteer.mjs orchestrate" };
+  const agent = { pid: 20, executable: "/bin/claude", command: "claude" };
+  const marker = { project_id: "P", pid: 30, process_start: "launcher-start" };
+  const deps = { processAncestors: async () => [agent, launcher], processIdentity: async () => "launcher-start",
+    env: { CODEXTEER_STOP_GUARD: JSON.stringify(marker) } };
+  assert.equal((await projectGuardStatus("P", deps)).stop_hook, "configured");
+  assert.equal((await projectGuardStatus("Q", deps)).stop_hook, "unverified");
+  assert.equal((await projectGuardStatus("P", { ...deps, processIdentity: async () => "reused-pid" })).stop_hook, "unverified");
+  assert.equal((await projectGuardStatus("P", { ...deps, processAncestors: async () => [{ ...agent, pid: 19 }, agent, launcher] })).stop_hook, "unverified");
+  assert.equal((await projectGuardStatus("P", { ...deps, processAncestors: async () => [agent] })).stop_hook, "unverified");
+  assert.equal((await projectGuardStatus("P", { ...deps, processAncestors: async () => { throw Object.assign(new Error(), { code: "EPERM" }); } })).stop_hook, "unverified");
+});
+
 test("invalid wait options and inspection failures do not masquerade as monitoring", async t => {
   const f = await fixture(t);
   for (const timeoutMs of [-1, NaN, Infinity, 0.5]) await assert.rejects(waitProject("P", { timeoutMs }, f.dependencies), { code: "PROJECT_WAIT_INVALID" });
   await assert.rejects(waitProject("P", {}, { ...f.dependencies, processIdentity: async () => null }), { code: "PROJECT_WAIT_IDENTITY_UNAVAILABLE" });
-  await writeRecord("project-waits", "uninspectable", { schema: 1, project_id: "P", pid: process.pid, process_start: "start" }, f.storage);
+  assert.equal((await guardProject("P", { ...f.dependencies, orchestratorIdentity: async () => { throw new Error("not needed without waits"); } })).decision, "block");
+  await writeRecord("project-waits", "uninspectable", { schema: 1, project_id: "P", pid: process.pid, process_start: "start",
+    owner: await f.dependencies.orchestratorIdentity() }, f.storage);
   const guard = await guardProject("P", { ...f.dependencies, processIdentity: async () => { throw Object.assign(new Error(), { code: "EPERM" }); } });
   assert.equal(guard.decision, undefined); assert.match(guard.systemMessage, /could not verify.*EPERM/);
 });
