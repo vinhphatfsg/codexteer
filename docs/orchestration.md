@@ -73,6 +73,8 @@ waitは最後に完全に公開されたproject syncを基準に、新しいタ�
 
 返り値の`changed:true`と`sync`に、syncと同じsnapshot・詳細token・continuationを返します。完全な結果の永続化を基準更新点とし、同じ変化を繰り返し通知しません。基準が未作成（旧版のsnapshotを含む）なら`reason:initial_sync`として最初のsyncを返します。timeoutは`changed:false, timed_out:true, reason:timeout, sync:null`です。観測失敗は`reason:observation_failed, timed_out:false`と不完全なsyncを返し、終了値1になります。最後の完全な基準は保持します。通常のsyncでも全体が不完全なら、waitの完全な基準は進めません。projectごとにwaitは1つで、重複起動は`RECORD_BUSY`です。送信や担当制御は行いません。
 
+承認・質問のフラグは、読了済みcursorとは別に、現在の基準に対応する直近の観測を保存します。同じフラグが立ち続ける間は通知せず、消えたことを観測した後の再出現は同じ実行turnでも通知します。この観測はtimeout後のwait再起動にも引き継ぎ、新しい完全なsyncでは基準に合わせて初期化します。`attention:null`など現在のフラグが不明な場合は空配列と区別し、`PROJECT_WAIT_ATTENTION_UNKNOWN`の不完全観測として返します。担当cursorと最後の完全な基準は進めません。
+
 wait終了後に出力を失った場合、次の`project sync`が返す`wait_sync_token`を`project sync --continue TOKEN`へ渡すと、最新のwait結果を復元できます。最新のwait snapshotとその全文参照はpruneでも保持します。プロセス終了や出力配送は読了の証明にはならないため、オーケストレーター自身がsnapshotを読み切って検収します。
 
 同じCODEX_HOMEで0.22.0など旧版のsyncを併用すると、旧版がheadの`wait_baseline`など未対応フィールドを保存せず、次のwaitが`initial_sync`を返す場合があります。基準不明を変化なしと扱わず、完全なsyncで再初期化する動作です。結果を読んでwaitを再開してください。以後は新しい基準で待機しますが、旧syncを再び使うと再初期化が必要になります。基準と復元tokenを維持する運用では、生成した同じ保存済みCLIを一貫して使います。

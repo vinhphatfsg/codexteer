@@ -102,6 +102,17 @@ test("Claude settings preserve existing hooks/options and quote literal project 
   }
 });
 
+test("invalid Claude settings return actionable OPTIONS_INVALID without exposing their contents", async t => {
+  const options = fixture(t), file = path.join(options.cwd, "broken-settings.json");
+  writeFileSync(file, '{"private-setting": PRIVATE_VALUE');
+  for (const value of ['{"private-setting": PRIVATE_VALUE', file, path.join(options.cwd, "missing-settings.json")]) {
+    await assert.rejects(claudeGuardArguments(["--settings", value], "saved-cli", "P"), error => {
+      assert.equal(error.code, "OPTIONS_INVALID"); assert.match(error.message, /--settings.*JSON.*file/);
+      assert.equal(error.message.includes("PRIVATE_VALUE"), false); return true;
+    });
+  }
+});
+
 test("agent arguments after -- retain order, empty values and CLI-looking flags without shell expansion", t => {
   const options = fixture(t), expected = expectedPrompt(options, GOAL, "codex", true);
   const forwarded = ["--model", "model with spaces", "", "line 1\nline 2", "$(touch ARGV_INJECTED)", "`touch ARGV_TOO`", "*", 'quote"and\'slash\\', "--help", "--version", "--json", "--require-node-version", "v0.0.0", "--use-path-cli", "--agent", "unchanged", "--", "tail"];

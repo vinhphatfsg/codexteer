@@ -511,6 +511,7 @@ export const topics = {
       "controlは既存の担当別bindingを使い、部分失敗時も全結果を返す（終了値1・ok:false）。busyとbinding不在はfailed、同じ状態への再実行はalready。stop済みをresumeしない。受付済みプロセス自体は終了しない。",
       "syncは一巡してからbacklogをdrainし、completeな担当だけcursorを進める。waitは最後のcomplete project syncを基準に新しいturn終了・質問・承認待ち・失敗、またはmembership変更を待つ。idleだけでは返らず、通常進捗では基準も進めない。",
       "waitの基準は完全なsync結果の永続化時に更新する。最初の基準がなければinitial_syncを返す。waitはprojectごとに1つ。同じ変化を再通知せず、最新waitの結果は次のsyncのwait_sync_tokenからsync --continueで復元できる。",
+      "フラグの解除・再出現は読了済みcursorと別に保存し、timeout後も再要求を検知する。attention:nullなど現在のフラグ不明はPROJECT_WAIT_ATTENTION_UNKNOWNとして返し、担当cursorと完全な基準を進めない。",
       "未完了の担当（paused・binding不在も含む）がいる間、waitを終了通知のあるバックグラウンドタスクとして動かし、終了後は結果を読んで再開する。質問・承認・URLの伝達後も続け、検収後にcontrol stopする。guardはpidと起動の同一性を照合し、異常終了記録を許可に使わない。macOS/Linux対応。",
       "guardは接続・sync・送信を行わず、stop_hook_activeでも条件を再確認する。ローカル状態の読取りやプロセス検査が不能ならsystemMessageで警告して停止を許す。ユーザーの中断・hook無効化・CLI側の継続上限は阻止できない。",
       "未解決の質問・承認・失敗は解消を完全な観測で確認するまで再掲する。429は再試行せず、取得済み結果とretry_after_msを返す。",

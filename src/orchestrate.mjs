@@ -17,13 +17,14 @@ export async function claudeGuardArguments(agentArgs, command, project) {
   if (settingsArgs.length) {
     const index = settingsArgs[0], inline = args[index].startsWith("--settings="), value = inline ? args[index].slice("--settings=".length) : args[index + 1];
     if (!value || value.startsWith("--")) throw Object.assign(new Error("Claude --settings requires JSON or a file path."), { code: "OPTIONS_INVALID" });
-    settings = JSON.parse(value.trimStart().startsWith("{") ? value : await readFile(value, "utf8"));
+    try { settings = JSON.parse(value.trimStart().startsWith("{") ? value : await readFile(value, "utf8")); }
+    catch { throw Object.assign(new Error("Claude --settings requires valid JSON or a readable JSON settings file."), { code: "OPTIONS_INVALID" }); }
     args.splice(index, inline ? 1 : 2);
   }
   if (!settings || typeof settings !== "object" || Array.isArray(settings) || settings.disableAllHooks === true
     || (settings.hooks != null && (typeof settings.hooks !== "object" || Array.isArray(settings.hooks)))
     || (settings.hooks?.Stop !== undefined && !Array.isArray(settings.hooks.Stop))) {
-    throw Object.assign(new Error("Claude settings must allow the project Stop hook and contain an object with a Stop array."), { code: "OPTIONS_INVALID" });
+    throw Object.assign(new Error("Claude settings must be an object allowing hooks; hooks.Stop must be an array when present."), { code: "OPTIONS_INVALID" });
   }
   const hooks = { ...settings.hooks, Stop: [...settings.hooks?.Stop ?? [], { hooks: [{ type: "command", command: `${command} project guard --project ${shellArgument(project)}`, timeout: 10 }] }] };
   return [...args, "--settings", JSON.stringify({ ...settings, hooks })];

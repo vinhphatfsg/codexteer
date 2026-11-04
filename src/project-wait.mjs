@@ -7,7 +7,7 @@ import { performance } from "node:perf_hooks";
 import { syncProject, projectWaitSignal } from "./project-sync.mjs";
 import { listManagedThreads } from "./project-index.mjs";
 import { getSupervisor } from "./supervision.mjs";
-import { listRecords, writeRecord, removeRecord, withStoreLock } from "./store.mjs";
+import { readRecord, listRecords, writeRecord, removeRecord, withStoreLock } from "./store.mjs";
 import { shellArgument } from "./prompt-command.mjs";
 
 const exec = promisify(execFile);
@@ -38,11 +38,15 @@ export async function processIdentity(pid) {
   }
 }
 
-function probeReason({ previous, membershipDigest, states, complete }) {
+function probeReason({ previous, membershipDigest, states, complete }, observedAttention) {
   if (!complete) return "observation_failed";
   const baseline = previous?.wait_baseline;
   if (!baseline) return "initial_sync";
   if (baseline.membership_digest !== membershipDigest) return "membership_changed";
+  const generation = baseline.sync_token ?? createHash("sha256").update(JSON.stringify(baseline)).digest("hex");
+  if (observedAttention.baseline !== generation) {
+    observedAttention.baseline = generation; observedAttention.flags = {};
+  }
   for (const [id, state] of states) {
     const before = baseline.works[id]?.signal, after = projectWaitSignal(state.latest);
     if (!before) return "membership_changed";
@@ -55,7 +59,8 @@ function probeReason({ previous, membershipDigest, states, complete }) {
       || (event.questions?.length && !["answered", "resolved"].includes(event.status)))) return "work_changed";
     if ((executionTurn(after.turn_id) && ended.has(after.turn_status) && (after.turn_id !== before.turn_id || after.turn_status !== before.turn_status))
       || (failed.has(after.status) && after.status !== before.status)
-      || after.attention.some(flag => !before.attention.includes(flag))) return "work_changed";
+      || after.attention.some(flag => !(observedAttention.flags[id] ?? before.attention ?? []).includes(flag))) return "work_changed";
+    observedAttention.flags[id] = after.attention;
   }
   return null;
 }
@@ -76,16 +81,31 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
       const record = { schema: 1, project_id: projectId, pid: process.pid, process_start: start, created_at: new Date().toISOString() };
       await writeRecord("project-waits", key, record, storage);
       try {
+        // Separate from reviewed cursors: retain observed clear/reappearance
+        // edges across bounded waits, keyed to the exact complete baseline.
+        const observedAttention = await readRecord("project-wait-attention", key, storage)
+          ?? { schema: 1, project_id: projectId, baseline: null, flags: {} };
+        if (observedAttention.schema !== 1 || observedAttention.project_id !== projectId
+          || !(observedAttention.baseline === null || typeof observedAttention.baseline === "string")
+          || !observedAttention.flags || typeof observedAttention.flags !== "object" || Array.isArray(observedAttention.flags)
+          || Object.values(observedAttention.flags).some(flags => !Array.isArray(flags) || flags.some(flag => typeof flag !== "string"))) {
+          throw failure("Invalid project wait attention observations. Inspect local state before restarting wait.");
+        }
+        let savedAttention = JSON.stringify(observedAttention);
         const deadline = timeoutMs === undefined ? Infinity : performance.now() + timeoutMs;
         const members = await listManagedThreads(projectId, storage);
         const pollMs = dependencies.pollMs ?? (members.some(m => ["cloud", "desktop-cloud"].includes(m.connection)) ? 15000 : 1000);
         for (;;) {
           let reason;
-          const sync = await syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => !!(reason = probeReason(snapshot)) });
+          const sync = await syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => !!(reason = probeReason(snapshot, observedAttention)) });
           if (sync) return { project_id: projectId, changed: reason !== "observation_failed" && sync.complete, timed_out: false,
             reason: sync.complete ? reason : "observation_failed", sync };
+          const observed = JSON.stringify(observedAttention);
+          if (observed !== savedAttention) {
+            await writeRecord("project-wait-attention", key, observedAttention, storage); savedAttention = observed;
+          }
           if (performance.now() >= deadline) return { project_id: projectId, changed: false, timed_out: true, reason: "timeout", sync: null };
-          await delay(Math.min(pollMs, deadline - performance.now()));
+          await delay(Math.max(0, Math.min(pollMs, deadline - performance.now())));
         }
       } finally { await removeRecord("project-waits", key, storage); }
     } finally { process.title = originalTitle; }

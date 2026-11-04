@@ -23,7 +23,8 @@ const commandOnlyFailure = entry => entry?.attention === "failure" && entry.reas
 
 export function projectWaitSignal(page) {
   return { turn_id: page?.latest_turn_id ?? page?.current_turn_id ?? page?.turn_id ?? page?.active_turn_id ?? null,
-    turn_status: page?.latest_turn_status ?? null, status: page?.status ?? null, attention: [...page?.attention ?? []].sort() };
+    turn_status: page?.latest_turn_status ?? null, status: page?.status ?? null,
+    attention: Array.isArray(page?.attention) ? [...page.attention].sort() : null };
 }
 
 function classify(observation, complete, connection) {
@@ -239,6 +240,11 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     if (await readPage(state)) { state.complete = false; state.error = "SYNC_HEAD_ADVANCED"; }
   }
 
+  // Wait cannot certify "no change" or move its reviewed baseline when the
+  // backend has not established the current approval/question flag state.
+  if (dependencies.waitProbe) for (const state of states.values()) if (state.complete && !Array.isArray(state.latest?.attention)) {
+    state.complete = false; state.error = "PROJECT_WAIT_ATTENTION_UNKNOWN";
+  }
   const works = [], unresolved = {}, historical = { ...previous?.historical_attention };
   for (const state of states.values()) {
     const priorAttention = previous?.unresolved_attention?.[state.member.thread_id] ?? null;
@@ -303,7 +309,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       head.complete = works.every(w => w.complete);
       head.complete_work_ids = works.filter(w => w.complete).map(w => w.thread_id);
       if (head.complete) {
-        head.wait_baseline = { membership_digest: membershipDigest, works: Object.fromEntries([...states].map(([id, state]) => [id, {
+        head.wait_baseline = { sync_token: syncToken, membership_digest: membershipDigest, works: Object.fromEntries([...states].map(([id, state]) => [id, {
           cursor: state.cursor, signal: projectWaitSignal(state.latest),
         }])) };
         if (dependencies.waitProbe) head.wait_sync_token = syncToken;

@@ -7,7 +7,7 @@ import { observationServer } from "../test-support/observation-server.mjs";
 import { observeThread } from "../src/observe.mjs";
 import { registerManagedThread, getManagedThread } from "../src/project-index.mjs";
 import { registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
-import { syncProject, continueProjectSync, projectEvent } from "../src/project-sync.mjs";
+import { syncProject, continueProjectSync, projectEvent, projectWaitSignal } from "../src/project-sync.mjs";
 import { waitProject, guardProject } from "../src/project-wait.mjs";
 import { listRecords, writeRecord } from "../src/store.mjs";
 import { pruneProjectHistory } from "../src/project-history.mjs";
@@ -83,6 +83,48 @@ test("failed observations are explicit, preserve the complete baseline and do no
   assert.equal(failed.sync.complete, false);
   f.thread.turns.push({ id: "t2", status: "completed", items: [{ id: "late", type: "agentMessage", text: "late report" }] });
   assert.equal((await waitProject("P", { timeoutMs: 0 }, f.dependencies)).changed, true);
+});
+
+for (const restart of [false, true]) test(`renewed approval in one running turn wakes wait after a flag clears (${restart ? "across timeouts" : "same process"})`, async t => {
+  const f = await fixture(t);
+  f.thread.turns.push({ id: "running-approval", status: "inProgress", items: [] });
+  f.thread.status = { type: "active", activeFlags: ["waitingOnApproval"] };
+  await syncProject("P", {}, f.dependencies);
+  const basis = await getManagedThread(f.id, f.storage);
+  assert.equal((await waitProject("P", { timeoutMs: 0 }, f.dependencies)).timed_out, true, "persistent approval stays quiet");
+  if (restart) {
+    f.thread.status.activeFlags = [];
+    assert.equal((await waitProject("P", { timeoutMs: 0 }, f.dependencies)).timed_out, true);
+    assert.deepEqual(await getManagedThread(f.id, f.storage), basis, "observed clear must not consume the reviewed cursor");
+    f.thread.status.activeFlags = ["waitingOnApproval"];
+  }
+  let reads = 0;
+  const dependencies = restart ? f.dependencies : { ...f.dependencies, read: (...args) => {
+    f.thread.status.activeFlags = reads++ < 2 ? [] : ["waitingOnApproval"];
+    return f.dependencies.read(...args);
+  } };
+  const renewed = await waitProject("P", { timeoutMs: 1000 }, dependencies);
+  assert.equal(renewed.changed, true); assert.equal(renewed.reason, "work_changed");
+  assert.equal(renewed.sync.works[0].turn_identity, "running-approval");
+  assert.equal((await waitProject("P", { timeoutMs: 0 }, f.dependencies)).timed_out, true);
+});
+
+test("unknown attention stays distinct and fails observation without advancing wait's reviewed baseline", async t => {
+  const f = await fixture(t), before = await getManagedThread(f.id, f.storage);
+  const [head] = await listRecords("project-sync-heads", f.storage);
+  assert.equal(projectWaitSignal({ attention: null }).attention, null);
+  assert.equal(projectWaitSignal({}).attention, null);
+  assert.deepEqual(projectWaitSignal({ attention: [] }).attention, []);
+  f.thread.status = { type: "active", activeFlags: null };
+  const unknown = await waitProject("P", { timeoutMs: 0 }, f.dependencies);
+  assert.equal(unknown.changed, false); assert.equal(unknown.timed_out, false); assert.equal(unknown.reason, "observation_failed");
+  assert.equal(unknown.sync.complete, false); assert.equal(unknown.sync.works[0].error, "PROJECT_WAIT_ATTENTION_UNKNOWN");
+  assert.deepEqual(await getManagedThread(f.id, f.storage), before);
+  assert.deepEqual((await listRecords("project-sync-heads", f.storage))[0].wait_baseline, head.wait_baseline);
+  await syncProject("P", {}, f.dependencies);
+  assert.equal((await listRecords("project-sync-heads", f.storage))[0].wait_baseline.works[f.id].signal.attention, null);
+  f.thread.status.activeFlags = ["waitingOnApproval"];
+  assert.equal((await waitProject("P", { timeoutMs: 0 }, f.dependencies)).changed, true, "known approval after an unknown baseline cannot be missed");
 });
 
 test("a partial project sync cannot consume changes against wait's last complete project baseline", async t => {
