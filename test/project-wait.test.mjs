@@ -11,6 +11,7 @@ import { syncProject, continueProjectSync, projectEvent } from "../src/project-s
 import { waitProject, guardProject } from "../src/project-wait.mjs";
 import { listRecords, writeRecord } from "../src/store.mjs";
 import { pruneProjectHistory } from "../src/project-history.mjs";
+import { createHash } from "node:crypto";
 
 const ID = "11111111-1111-4111-8111-000000000001", SESSION = "22222222-2222-4222-8222-000000000001";
 async function fixture(t, mode = "aggregate") {
@@ -109,6 +110,23 @@ test("latest wait snapshot remains recoverable through a new sync and explicit p
   const snapshot = await continueProjectSync(token, {}, f.storage);
   const report = snapshot.works[0].events.find(e => e.event_id === "report");
   assert.equal((await projectEvent(report.token, f.storage)).event.text, "Recoverable report");
+});
+
+test("legacy sync head replacement safely reinitializes wait once and subsequent completion stays observable", async t => {
+  const f = await fixture(t), key = createHash("sha256").update("P").digest("hex").slice(0, 40);
+  const [head] = await listRecords("project-sync-heads", f.storage);
+  assert.ok(head.wait_baseline);
+  // Older sync writers publish their known head fields rather than preserving
+  // extensions. Reproduce that persisted shape without a second CLI install.
+  const { wait_baseline, wait_sync_token, ...legacyHead } = head;
+  await writeRecord("project-sync-heads", key, legacyHead, f.storage);
+  const initial = await waitProject("P", { timeoutMs: 0 }, f.dependencies);
+  assert.equal(initial.reason, "initial_sync"); assert.equal(initial.changed, true); assert.equal(initial.sync.complete, true);
+  assert.equal((await waitProject("P", { timeoutMs: 0 }, f.dependencies)).timed_out, true);
+  f.thread.turns.push({ id: "after-legacy", status: "completed", items: [{ id: "report", type: "agentMessage", text: "After legacy sync" }] });
+  const changed = await waitProject("P", { timeoutMs: 0 }, f.dependencies);
+  assert.equal(changed.reason, "work_changed");
+  assert.ok(changed.sync.works[0].events.some(event => event.event_id === "report"));
 });
 
 test("guard counts paused and missing bindings, checks start identity, and allows empty or all-stopped projects", async t => {

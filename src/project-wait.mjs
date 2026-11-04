@@ -46,9 +46,14 @@ function probeReason({ previous, membershipDigest, states, complete }) {
   for (const [id, state] of states) {
     const before = baseline.works[id]?.signal, after = projectWaitSignal(state.latest);
     if (!before) return "membership_changed";
-    if (state.events.some(event => (event.type === "turn" && ended.has(event.status))
+    // Web Cloud adapts each user-history node into a completed turn too. Its
+    // typed backend IDs distinguish input from assistant execution without
+    // changing public events/hashes and invalidating existing read cursors.
+    const executionTurn = turnId => state.member.connection !== "cloud"
+      || (typeof turnId === "string" && turnId.startsWith(`${id}~assttrn_`));
+    if (state.events.some(event => (event.type === "turn" && executionTurn(event.id) && ended.has(event.status))
       || (event.questions?.length && !["answered", "resolved"].includes(event.status)))) return "work_changed";
-    if ((ended.has(after.turn_status) && (after.turn_id !== before.turn_id || after.turn_status !== before.turn_status))
+    if ((executionTurn(after.turn_id) && ended.has(after.turn_status) && (after.turn_id !== before.turn_id || after.turn_status !== before.turn_status))
       || (failed.has(after.status) && after.status !== before.status)
       || after.attention.some(flag => !before.attention.includes(flag))) return "work_changed";
   }

@@ -75,6 +75,8 @@ waitは最後に完全に公開されたproject syncを基準に、新しいタ�
 
 wait終了後に出力を失った場合、次の`project sync`が返す`wait_sync_token`を`project sync --continue TOKEN`へ渡すと、最新のwait結果を復元できます。最新のwait snapshotとその全文参照はpruneでも保持します。プロセス終了や出力配送は読了の証明にはならないため、オーケストレーター自身がsnapshotを読み切って検収します。
 
+同じCODEX_HOMEで0.22.0など旧版のsyncを併用すると、旧版がheadの`wait_baseline`など未対応フィールドを保存せず、次のwaitが`initial_sync`を返す場合があります。基準不明を変化なしと扱わず、完全なsyncで再初期化する動作です。結果を読んでwaitを再開してください。以後は新しい基準で待機しますが、旧syncを再び使うと再初期化が必要になります。基準と復元tokenを維持する運用では、生成した同じ保存済みCLIを一貫して使います。
+
 guardはClaude CodeのStop hook用の生JSONを返します（通常の`ok/data` envelopeは使いません）。停止済み以外の担当がいて生存するwaitがなければ、終了値0で`{"decision":"block","reason":"…"}`を返します。条件を満たす場合とmanaged workがない場合は`{}`です。pausedは介入を一時停止するだけで未完了であり、Desktopからの実行も止めないため監視対象に数えます。binding不在も未完了として扱います。waitは本人専用のlocal storeへpidと起動識別を保存し、guardはOSの起動情報を照合します。macOSでは起動日時に加えprocess titleのwait固有nonce、Linuxではboot IDと起動tickを照合し、死んだ・停止した・zombieのプロセスを認めません。対応OSはmacOSとLinuxです。
 
 `orchestrate`はClaude Code起動時に、生成した同じCLIコマンド・project・接続経路のguardを`--settings`へ追加します。checkoutの設定ファイルは編集しません。自分で起動したClaude Codeでは`.claude/settings.json`の既存設定へ次を追加してください。`sample`はwork startと同じ調整用project IDへ、commandは同じCODEX_HOME・接続・hostを選ぶ保存済みコマンドまたはPATHコマンドへ置き換えます。
