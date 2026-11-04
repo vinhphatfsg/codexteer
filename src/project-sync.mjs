@@ -21,6 +21,11 @@ const commandOnlyFailure = entry => entry?.attention === "failure" && entry.reas
   && !entry.reason.question_event && !entry.reason.backend_status && Array.isArray(entry.events) && entry.events.length > 0
   && entry.events.every(event => event.type === "commandExecution");
 
+export function projectWaitSignal(page) {
+  return { turn_id: page?.latest_turn_id ?? page?.current_turn_id ?? page?.turn_id ?? page?.active_turn_id ?? null,
+    turn_status: page?.latest_turn_status ?? null, status: page?.status ?? null, attention: [...page?.attention ?? []].sort() };
+}
+
 function classify(observation, complete, connection) {
   const status = observation?.status ?? "unknown", flags = observation?.attention;
   const events = observation?.events ?? [], questions = events.some(event => Array.isArray(event.questions) && event.questions.length);
@@ -77,7 +82,7 @@ function compactWork(work) {
 function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0) {
   if (!Number.isInteger(offset) || offset < 0 || offset > saved.works.length || !Number.isInteger(eventOffset) || eventOffset < 0
     || (offset === saved.works.length ? eventOffset !== 0 : eventOffset > saved.works[offset].events.length)) throw failure("Invalid continuation offset.");
-  const result = { project_id: saved.project_id, sync_token: token, membership_digest: saved.membership_digest,
+  const result = { project_id: saved.project_id, sync_token: token, wait_sync_token: saved.wait_sync_token ?? null, membership_digest: saved.membership_digest,
     membership_count: saved.works.length, complete: saved.complete, works: [], omitted_works: 0, omitted_events: 0,
     continuation_token: null, continuation_offset: offset, continuation_event_offset: eventOffset,
     created_at: saved.created_at, output_bytes: 0, byte_budget: byteBudget };
@@ -187,7 +192,12 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   if (typeof read !== "function") throw failure("Project sync reader is unavailable.");
   const members = await listManagedThreads(projectId, storage), membershipDigest = managedMembershipDigest(members);
   const previous = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage), eventRecords = [], states = new Map();
-  for (const member of members) states.set(member.thread_id, { member, cursor: member.sync_cursor, events: [], observations: [], seen: new Set([member.sync_cursor]), pages: 0, complete: false, history_gap: false, retry_after_ms: null, error: null });
+  for (const member of members) {
+    // Wait probes start at the last complete project snapshot, even if a later
+    // partial sync advanced some individual membership cursors.
+    const cursor = dependencies.waitProbe ? previous?.wait_baseline?.works?.[member.thread_id]?.cursor ?? member.sync_cursor : member.sync_cursor;
+    states.set(member.thread_id, { member, cursor, events: [], observations: [], seen: new Set([cursor]), pages: 0, complete: false, history_gap: false, retry_after_ms: null, error: null });
+  }
   // A successful start observed these events but has not presented them yet.
   // Keep them until membership publication commits the first sync cursor.
   const starts = members.some(member => !member.sync_cursor) ? await listRecords("work-starts", storage) : [];
@@ -255,7 +265,12 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   const syncToken = randomUUID(), createdAt = new Date().toISOString();
   const head = { schema: 1, project_id: projectId, sync_token: syncToken, membership_digest: membershipDigest,
     complete: works.every(w => w.complete), complete_work_ids: works.filter(w => w.complete).map(w => w.thread_id),
-    unresolved_attention: unresolved, historical_attention: historical, created_at: createdAt };
+    unresolved_attention: unresolved, historical_attention: historical, created_at: createdAt,
+    ...(previous?.wait_baseline ? { wait_baseline: previous.wait_baseline } : {}) };
+  // A probe that sees only ordinary progress must not publish, consume events,
+  // or replace the orchestrator's reviewed baseline.
+  if (dependencies.waitProbe && !dependencies.waitProbe({ previous, members, membershipDigest, states, complete: head.complete })) return null;
+  head.wait_sync_token = previous?.wait_sync_token ?? null;
   for (const work of works) work.detail_token = randomUUID();
   // The existing project head lock protects only publication, never network I/O.
   // A stale reader must not replace a newer attention head, even after a CAS miss.
@@ -287,12 +302,18 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       }
       head.complete = works.every(w => w.complete);
       head.complete_work_ids = works.filter(w => w.complete).map(w => w.thread_id);
+      if (head.complete) {
+        head.wait_baseline = { membership_digest: membershipDigest, works: Object.fromEntries([...states].map(([id, state]) => [id, {
+          cursor: state.cursor, signal: projectWaitSignal(state.latest),
+        }])) };
+        if (dependencies.waitProbe) head.wait_sync_token = syncToken;
+      }
       // Save detail records before publishing a head that work tell may consume.
       const detailStart = eventRecords.length;
       for (const work of works) {
         eventRecords.push({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...work } } });
       }
-      await historyWrite("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, complete: head.complete, works, created_at: createdAt }, storage);
+      await historyWrite("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, storage);
       for (const record of eventRecords.slice(detailStart)) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
       await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), head, storage);
     }, storage), storage);
@@ -306,5 +327,5 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       for (const record of eventRecords) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
     }, storage);
   }
-  return pageResult({ project_id: projectId, membership_digest: membershipDigest, complete: head.complete, works, created_at: createdAt }, syncToken, byteBudget);
+  return pageResult({ project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, syncToken, byteBudget);
 }

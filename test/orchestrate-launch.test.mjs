@@ -6,6 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { claudeGuardArguments } from "../src/orchestrate.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
@@ -44,12 +45,28 @@ function expectedPrompt(options, goal, agent, pathMode) {
   return result.stdout.slice(0, -1);
 }
 
+function withoutGuard(args, agent, options) {
+  if (agent !== "claude") return args;
+  const index = args.lastIndexOf("--settings");
+  assert.ok(index >= 0, "Claude launch injects Stop settings");
+  const settings = JSON.parse(args[index + 1]), handler = settings.hooks.Stop[0].hooks[0];
+  assert.equal(handler.type, "command"); assert.equal(handler.timeout, 10);
+  assert.match(handler.command, /project guard --project 'Example Project'$/);
+  if (options) {
+    const probe = spawnSync("/bin/sh", ["-c", handler.command], { ...options, input: JSON.stringify({ hook_event_name: "Stop", stop_hook_active: true }) });
+    assert.equal(probe.status, 0, probe.stderr); assert.deepEqual(JSON.parse(probe.stdout), {});
+  }
+  return [...args.slice(0, index), ...args.slice(index + 2)];
+}
+
 test("direct orchestration starts either CLI in saved and PATH modes with the exact generated prompt", t => {
   for (const agent of ["claude", "codex"]) for (const pathMode of [false, true]) {
     const options = fixture(t), expected = expectedPrompt(options, GOAL, agent, pathMode);
     const result = run(options, ["--project", PROJECT, GOAL, "--agent", agent, ...(pathMode ? ["--use-path-cli"] : [])]);
     assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, "agent stderr\n");
-    assert.deepEqual(JSON.parse(result.stdout), { agent, args: ["--", expected], cwd: options.cwd, input: "interactive input\n", inherited: "inherited value" });
+    const launched = JSON.parse(result.stdout);
+    launched.args = withoutGuard(launched.args, agent, pathMode ? undefined : options);
+    assert.deepEqual(launched, { agent, args: ["--", expected], cwd: options.cwd, input: "interactive input\n", inherited: "inherited value" });
     assert.doesNotMatch(expected, /--agent|supervise prompt/);
     for (const operation of ["work start", "project sync", "work tell", "project control"]) assert.ok(expected.includes(operation));
     assert.equal(existsSync(path.join(options.env.CODEX_HOME, "codex-steer", "supervisors")), false, "A project launch cannot fabricate a single-task registration");
@@ -64,7 +81,24 @@ test("direct orchestration defaults to Claude and preserves the launched CLI's e
   for (const code of [0, 23]) {
     const result = run({ ...options, env: { ...options.env, CT_ORCHESTRATE_EXIT: String(code) } }, ["--project", PROJECT, GOAL, "--use-path-cli"]);
     assert.equal(result.status, code); assert.equal(JSON.parse(result.stdout).agent, "claude");
-    assert.deepEqual(JSON.parse(result.stdout).args, ["--", expected]);
+    assert.deepEqual(withoutGuard(JSON.parse(result.stdout).args, "claude"), ["--", expected]);
+  }
+});
+
+test("Claude settings preserve existing hooks/options and quote literal project selectors", async t => {
+  const options = fixture(t), settings = { model: "original", hooks: { Stop: [{ hooks: [{ type: "command", command: "existing-hook" }] }], SessionStart: [] } };
+  const file = path.join(options.cwd, "settings.json"); writeFileSync(file, JSON.stringify(settings));
+  for (const supplied of [["--settings", JSON.stringify(settings)], ["--settings", file], [`--settings=${JSON.stringify(settings)}`]]) {
+    const args = await claudeGuardArguments(["--model", "forwarded", ...supplied], "saved-cli --connection shared", "P' $(touch never)");
+    assert.deepEqual(args.slice(0, 2), ["--model", "forwarded"]);
+    const merged = JSON.parse(args.at(-1)); assert.equal(merged.model, "original");
+    assert.deepEqual(merged.hooks.Stop[0], settings.hooks.Stop[0]); assert.equal(merged.hooks.Stop.length, 2);
+    assert.deepEqual(merged.hooks.SessionStart, []);
+    assert.match(merged.hooks.Stop[1].hooks[0].command, /project guard --project 'P'\\'' \$\(touch never\)'$/);
+    assert.equal(readFileSync(file, "utf8"), JSON.stringify(settings));
+  }
+  for (const args of [["--settings"], ["--settings", '{"disableAllHooks":true}'], ["--settings", "{}", "--settings", "{}"], ["--settings", '{"hooks":{"Stop":{}}}']]) {
+    await assert.rejects(claudeGuardArguments(args, "saved-cli", "P"), { code: "OPTIONS_INVALID" });
   }
 });
 

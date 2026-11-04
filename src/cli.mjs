@@ -30,6 +30,7 @@ import { startWork } from "./work-start.mjs";
 import { tellWork } from "./work-tell.mjs";
 import { readRecord } from "./store.mjs";
 import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
+import { waitProject, guardProject } from "./project-wait.mjs";
 import { verifyProjectThread } from "./thread-verify.mjs";
 import { withDeviceAccount, prepareDevice, recoverDeviceKey, enrollDevice, pairDevice, verifyDevice, deviceStatus, deviceIdentityInfo, readPairingCode } from "./remote-device.mjs";
 import { readDevice } from "./remote-device-store.mjs";
@@ -233,6 +234,19 @@ async function mainOnTarget(argv) {
     let command = args.shift();
     if (command === "project") {
       const action = args.shift();
+      if (action === "guard" || action === "wait") {
+        if (supervisor) throw Object.assign(new Error("A bound supervisor cannot wait for or guard an entire project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
+        const project = takeOption(args, "--project", undefined);
+        const timeout = action === "wait" ? takeOption(args, "--timeout-ms", undefined) : undefined;
+        if (args.length) throw usage(`Unexpected project ${action} arguments.`);
+        if (action === "guard") { console.log(JSON.stringify(await guardProject(project))); return; }
+        const data = await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
+          read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),
+        });
+        success("project.wait", data, json); if (!json) console.log(JSON.stringify(data, null, 2));
+        if (data.reason === "observation_failed") process.exitCode = 1;
+        return;
+      }
       if (action === "control") {
         if (supervisor) throw Object.assign(new Error("A bound supervisor cannot control project supervision."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         const operation = args.shift(), project = takeOption(args, "--project", undefined), all = takeFlag(args, "--all"), work = takeOption(args, "--work", undefined);
@@ -260,7 +274,7 @@ async function mainOnTarget(argv) {
         if (args.length !== 1) throw usage("Expected: project event TOKEN.");
         const data = await projectEvent(args[0]); success("project.event", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
       }
-      throw usage("Expected: project sync|event|prune.");
+      throw usage("Expected: project sync|wait|guard|control|event|prune.");
     }
     if (command === "work") {
       const action = args.shift();

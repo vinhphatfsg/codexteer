@@ -214,6 +214,7 @@ export const topics = {
       "GOALを - で標準入力から読むと、起動前に標準入力を読み切る。",
       "起動したオーケストレーターはwork startで担当とbindingを作り、project syncで観測し、work tellで介入する。",
       "プロジェクト用の監督IDは作らない。work startが担当別に登録し、project controlが既存のbindingを制御する。",
+      "Claude起動時はproject guardをStop hookとして--settingsへ追加する。checkoutの設定ファイルは編集しない。自分で起動するセッションの.claude/settings.json設定例はhelp projectを参照。Codexのhookは手動設定する（docs/orchestration.md）。",
       "本文の委任範囲と役割分担はhelp orchestrate prompt、手順の詳細はdocs/orchestration.md。",
     ],
     see: ["orchestrate prompt", "supervise", "supervise prompt", "projects", "thread", "remote"],

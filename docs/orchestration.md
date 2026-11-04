@@ -1,6 +1,6 @@
 # オーケストレーション
 
-オーケストレーターは、担当への発注から検収・統合までを4操作で進めます。役割ラベルの指定や、担当ごとの監督ID・cursor・findingの手渡しは不要です。常駐プロセスは必要ありません。
+オーケストレーターは、担当への発注から検収・統合までを4操作で進め、離席中は`project wait`で監視します。役割ラベルの指定や、担当ごとの監督ID・cursor・findingの手渡しは不要です。別の常駐スケジューラーは必要ありません。
 
 | やりたいこと | 操作 |
 | --- | --- |
@@ -58,6 +58,44 @@ tellは最新のcomplete syncから送信直前まで再照合し、新しいイ
 controlはproject全体の新しい監督IDを作らず、各担当の既存recordを制御します。`--all`と`--work`はどちらか一方を指定します。返り値のrequested・changed・already・failed、各code、membership_digestを確認してください。部分失敗でも全担当の結果を返し、CLIは終了値1（JSONはok:false）です。busyは未完了、binding不在は失敗、同じ状態への再実行はalreadyです。stop済みはresumeできません。対象集合は呼出し開始時のsnapshotで、新しく追加された担当は含まれません。
 
 pause/stopは新しい外部効果を拒否する制御で、受付済みの担当プロセス自体を終了させません。ユーザーの停止指示では新規作成・追加送信も止め、controlの部分失敗を報告します。停止中でも既存の結果保存・後始末はできます。別IDや低水準操作で制御を迂回しません。
+
+## 待機と停止のガード
+
+```sh
+codexteer project wait --project sample --json
+codexteer project wait --project sample --timeout-ms 30000 --json
+codexteer project guard --project sample
+```
+
+未停止の担当がいる間は、waitを終了通知の届くバックグラウンドタスクとして実行します。単にシェルの`&`で切り離すだけでは親セッションへ通知される保証がありません。返ったら結果を読み、必要な検収・対応の後に再びwaitを開始します。質問・承認・URLをユーザーへ伝えた後も続けます。timeout・接続失敗で終了したwaitは監視中ではありません。検収済みの担当は`project control stop`で終了し、ユーザーがオーケストレーションの終了を求めた場合も対象の制御を明示的にstopします。
+
+waitは最後に完全に公開されたproject syncを基準に、新しいターン終了（成功・失敗・取消・中断）、質問、承認待ち、バックエンド失敗、membership変更を待ちます。既にidleの担当や、既に確認した質問・承認待ちだけでは返りません。ユーザーがDesktopで直接次のターンを開始・完了した場合も検知します。通常の進捗だけではcursorや基準を更新しません。sharedは既定1秒、Cloudを含む集合は15秒間隔で照会します。`--timeout-ms`は0以上の整数で、省略時は無期限です。開始済みの観測は完了まで待つため、指定時間を超えて返る場合があります。
+
+返り値の`changed:true`と`sync`に、syncと同じsnapshot・詳細token・continuationを返します。完全な結果の永続化を基準更新点とし、同じ変化を繰り返し通知しません。基準が未作成（旧版のsnapshotを含む）なら`reason:initial_sync`として最初のsyncを返します。timeoutは`changed:false, timed_out:true, reason:timeout, sync:null`です。観測失敗は`reason:observation_failed, timed_out:false`と不完全なsyncを返し、終了値1になります。最後の完全な基準は保持します。通常のsyncでも全体が不完全なら、waitの完全な基準は進めません。projectごとにwaitは1つで、重複起動は`RECORD_BUSY`です。送信や担当制御は行いません。
+
+wait終了後に出力を失った場合、次の`project sync`が返す`wait_sync_token`を`project sync --continue TOKEN`へ渡すと、最新のwait結果を復元できます。最新のwait snapshotとその全文参照はpruneでも保持します。プロセス終了や出力配送は読了の証明にはならないため、オーケストレーター自身がsnapshotを読み切って検収します。
+
+guardはClaude CodeのStop hook用の生JSONを返します（通常の`ok/data` envelopeは使いません）。停止済み以外の担当がいて生存するwaitがなければ、終了値0で`{"decision":"block","reason":"…"}`を返します。条件を満たす場合とmanaged workがない場合は`{}`です。pausedは介入を一時停止するだけで未完了であり、Desktopからの実行も止めないため監視対象に数えます。binding不在も未完了として扱います。waitは本人専用のlocal storeへpidと起動識別を保存し、guardはOSの起動情報を照合します。macOSでは起動日時に加えprocess titleのwait固有nonce、Linuxではboot IDと起動tickを照合し、死んだ・停止した・zombieのプロセスを認めません。対応OSはmacOSとLinuxです。
+
+`orchestrate`はClaude Code起動時に、生成した同じCLIコマンド・project・接続経路のguardを`--settings`へ追加します。checkoutの設定ファイルは編集しません。自分で起動したClaude Codeでは`.claude/settings.json`の既存設定へ次を追加してください。`sample`はwork startと同じ調整用project IDへ、commandは同じCODEX_HOME・接続・hostを選ぶ保存済みコマンドまたはPATHコマンドへ置き換えます。
+
+```json
+{
+  "hooks": {
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "codexteer project guard --project sample",
+        "timeout": 10
+      }]
+    }]
+  }
+}
+```
+
+[Claude CodeのStop hook仕様](https://code.claude.com/docs/en/hooks#stop)に従い、`stop_hook_active`でも条件を再確認します。無条件の再停止許可は監視の欠落を通すため行いません。拒否理由のwait開始またはcontrol stopで解消できます。guardは接続やsyncを実行せず、syncの失敗によって判定を待ち続けません。local storeの破損・権限不足やプロセス検査不能の場合は`systemMessage`で警告して停止を許します。状態を修復しwaitを再開するまで監視は保証されません。Claude Codeには連続したhook継続の上限があり、ユーザー中断、hookの無効化、親セッションの終了も阻止できません。生存確認から停止までの間にwaitが終了する競合も残るため、バックグラウンドタスクの終了通知が必要です。
+
+[CodexにもStop hookがあります](https://learn.chatgpt.com/docs/hooks#stop)。同じ`decision:block`と`reason`を受け付けます。Codexで手動設定する場合は上記JSONを`.codex/hooks.json`へ置き、hookを有効・信頼済みにします。CLIのhook無効化や他hookの`continue:false`が優先される場合は継続を強制できず、バックグラウンドhookの終了自体も新しいユーザーターンを開始しません。`orchestrate --agent codex`への自動設定注入は行いません。Codexのconfig layerと信頼確認に従う明示設定を使います。guardが保証するのは停止時点のwait生存条件であり、受信通知・読了・検収の完了そのものではありません。
 
 ## 本文生成と互換操作
 

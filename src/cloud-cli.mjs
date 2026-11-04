@@ -31,6 +31,8 @@ import { acquireResource, resourceStatus, renewResource, releaseResource, listRe
 import { startWork } from "./work-start.mjs";
 import { tellWork } from "./work-tell.mjs";
 import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
+import { waitProject, guardProject } from "./project-wait.mjs";
+import { observationConnection } from "./connection.mjs";
 
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code, execution_environment: "cloud" });
 function option(args, name, fallback) {
@@ -93,6 +95,15 @@ export async function mainCloud(argv) {
 
   if (command === "project") {
     const action = args.shift();
+    if (action === "guard" || action === "wait") {
+      if (supervisor) throw failure("A bound supervisor cannot wait for or guard an entire project.", "SUPERVISOR_CONTROL_FORBIDDEN");
+      const project = option(args, "--project"), timeout = action === "wait" ? option(args, "--timeout-ms") : undefined; exact(args, 0);
+      if (action === "guard") { console.log(JSON.stringify(await guardProject(project))); return; }
+      const data = await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
+        read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),
+      });
+      output("project.wait", data); if (data.reason === "observation_failed") process.exitCode = 1; return;
+    }
     if (action === "control") {
       if (supervisor) throw failure("A bound supervisor cannot control project supervision.", "SUPERVISOR_CONTROL_FORBIDDEN");
       const operation = args.shift(), project = option(args, "--project"), all = flag(args, "--all"), work = option(args, "--work"); exact(args, 0);
@@ -107,10 +118,10 @@ export async function mainCloud(argv) {
     if (action === "sync") {
       if (supervisor) throw failure("A bound supervisor cannot sync an entire project.", "SUPERVISOR_CONTROL_FORBIDDEN");
       const project = option(args, "--project"), byteBudget = Number(option(args, "--byte-budget", "16000")), continuation = option(args, "--continue"), offset = Number(option(args, "--offset", "0")), eventOffset = Number(option(args, "--event-offset", "0")); exact(args, 0);
-      output("project.sync", continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget }, { read: (threadId, options) => observeThread(threadId, options, dependencies) })); return;
+      output("project.sync", continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) })); return;
     }
     if (action === "event") { exact(args, 1); output("project.event", await projectEvent(args[0])); return; }
-    throw failure("Expected project sync|event|prune.");
+    throw failure("Expected project sync|wait|guard|control|event|prune.");
   }
   if (command === "work") {
     const action = args.shift();

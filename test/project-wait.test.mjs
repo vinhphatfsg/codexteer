@@ -1,0 +1,140 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
+import { tempPrefix } from "../test-support/temp.mjs";
+import { observationServer } from "../test-support/observation-server.mjs";
+import { observeThread } from "../src/observe.mjs";
+import { registerManagedThread, getManagedThread } from "../src/project-index.mjs";
+import { registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
+import { syncProject, continueProjectSync, projectEvent } from "../src/project-sync.mjs";
+import { waitProject, guardProject } from "../src/project-wait.mjs";
+import { listRecords, writeRecord } from "../src/store.mjs";
+import { pruneProjectHistory } from "../src/project-history.mjs";
+
+const ID = "11111111-1111-4111-8111-000000000001", SESSION = "22222222-2222-4222-8222-000000000001";
+async function fixture(t, mode = "aggregate") {
+  const home = await mkdtemp(tempPrefix("ct-wait-")); t.after(() => rm(home, { recursive: true, force: true }));
+  const cloud = mode.startsWith("cloud"), id = cloud ? `durable_${ID}` : ID;
+  const thread = { id, historyMode: mode.endsWith("paged") ? "paginated" : "aggregate", status: { type: "idle" },
+    ...(cloud ? { environments: [{ environmentId: "env", environmentConfigId: "config" }] } : {}),
+    turns: [{ id: "t0", status: "completed", items: [{ id: "question", type: "agentMessage", text: "Need answer", questions: ["Which?"] }] }] };
+  const server = observationServer(thread), read = (id, options) => observeThread(id, options, {
+    discover: async () => ({ paths: { socket: "fixture" } }), connect: async () => server.client,
+  });
+  const storage = { home }, connection = cloud ? "desktop-cloud" : "shared";
+  await registerManagedThread(id, { projectId: "P", connection, ...(cloud ? { environmentConfigId: "config" } : {}) }, storage);
+  await registerSupervisor(id, SESSION, { ...storage, connection });
+  const dependencies = { storage, read, pollMs: 5, processIdentity: async () => "same-start" };
+  await syncProject("P", {}, dependencies);
+  return { home, id, thread, server, storage, dependencies };
+}
+
+for (const mode of ["aggregate", "paged", "cloud", "cloud-paged"]) {
+  test(`${mode}: an idle worker awaiting an answer stays watched through a Desktop turn and wakes once`, async t => {
+    const f = await fixture(t, mode), before = await getManagedThread(f.id, f.storage);
+    const unchanged = await waitProject("P", { timeoutMs: 15 }, f.dependencies);
+    assert.equal(unchanged.changed, false); assert.equal(unchanged.timed_out, true); assert.equal(unchanged.sync, null);
+    assert.deepEqual(await getManagedThread(f.id, f.storage), before, "timeout cannot consume a cursor or revision");
+    let returned = false;
+    const waiting = waitProject("P", { timeoutMs: 2000 }, f.dependencies).then(result => { returned = true; return result; });
+    await delay(20); assert.equal(returned, false);
+    f.thread.status = { type: "active", activeFlags: [] };
+    f.thread.turns.push({ id: "t1", status: "inProgress", items: [{ id: "answer", type: "userMessage", content: [{ type: "text", text: "Approved" }] }] });
+    await delay(20); assert.equal(returned, false, "starting/progress alone does not wake wait");
+    f.thread.turns[1].status = "completed"; f.thread.status = { type: "idle" };
+    f.thread.turns[1].items.push({ id: "report", type: "agentMessage", text: "Finished" });
+    const result = await waiting;
+    assert.equal(result.changed, true); assert.equal(result.reason, "work_changed"); assert.equal(result.sync.complete, true);
+    const report = result.sync.works[0].events.find(e => e.event_id === "report");
+    assert.equal((await projectEvent(report.token, f.storage)).event.text, "Finished");
+    assert.equal((await waitProject("P", { timeoutMs: 15 }, f.dependencies)).timed_out, true, "same change is not returned twice");
+    assert.deepEqual(await listRecords("project-waits", f.storage), []);
+    assert.ok(f.server.calls.every(c => !c.method.startsWith("turn/")), "no delivery or control effect");
+  });
+}
+
+for (const change of ["question", "approval", "failure", "cancelled"]) test(`wait catches new ${change} without treating persistent attention as new`, async t => {
+  const f = await fixture(t);
+  if (change === "question") f.thread.turns[0].items.push({ id: "q2", type: "agentMessage", text: "Another question", questions: ["Answer?"] });
+  if (change === "approval") f.thread.status = { type: "active", activeFlags: ["waitingOnApproval"] };
+  if (change === "failure") { f.thread.turns.push({ id: "failed-turn", status: "failed", items: [] }); f.thread.status = { type: "systemError" }; }
+  if (change === "cancelled") f.thread.turns.push({ id: "cancelled-turn", status: "cancelled", items: [] });
+  const result = await waitProject("P", { timeoutMs: 0 }, f.dependencies);
+  assert.equal(result.changed, true); assert.equal(result.reason, "work_changed");
+  assert.equal((await waitProject("P", { timeoutMs: 10 }, f.dependencies)).timed_out, true);
+});
+
+test("membership changes wake wait; empty projects establish a baseline then time out", async t => {
+  const f = await fixture(t);
+  await registerManagedThread("11111111-1111-4111-8111-000000000002", { projectId: "P", connection: "shared" }, f.storage);
+  const read = async (id, options) => ({ thread_id: id, cursor: options.since ?? "initial", omitted_older_events: 0, events: [], has_more: false, status: "idle", attention: [] });
+  const changed = await waitProject("P", { timeoutMs: 0 }, { ...f.dependencies, read });
+  assert.equal(changed.reason, "membership_changed");
+  assert.equal((await waitProject("empty", { timeoutMs: 0 }, f.dependencies)).reason, "initial_sync");
+  assert.equal((await waitProject("empty", { timeoutMs: 0 }, f.dependencies)).timed_out, true);
+});
+
+test("failed observations are explicit, preserve the complete baseline and do not hide a later successful turn", async t => {
+  const f = await fixture(t);
+  const failed = await waitProject("P", { timeoutMs: 0 }, { ...f.dependencies, read: async () => { throw Object.assign(new Error(), { code: "CLOUD_RATE_LIMITED" }); } });
+  assert.equal(failed.changed, false); assert.equal(failed.timed_out, false); assert.equal(failed.reason, "observation_failed");
+  assert.equal(failed.sync.complete, false);
+  f.thread.turns.push({ id: "t2", status: "completed", items: [{ id: "late", type: "agentMessage", text: "late report" }] });
+  assert.equal((await waitProject("P", { timeoutMs: 0 }, f.dependencies)).changed, true);
+});
+
+test("a partial project sync cannot consume changes against wait's last complete project baseline", async t => {
+  const f = await fixture(t), other = "11111111-1111-4111-8111-000000000002";
+  await registerManagedThread(other, { projectId: "P", connection: "shared", syncCursor: "o0" }, f.storage);
+  let unavailable = false;
+  const read = (id, options) => id === f.id ? f.dependencies.read(id, options) : unavailable ? Promise.reject(new Error("offline"))
+    : Promise.resolve({ thread_id: id, cursor: "o0", events: [], has_more: false, status: "active", attention: [] });
+  await syncProject("P", {}, { ...f.dependencies, read });
+  f.thread.turns.push({ id: "after-baseline", status: "completed", items: [{ id: "important", type: "agentMessage", text: "Important" }] });
+  unavailable = true;
+  assert.equal((await syncProject("P", {}, { ...f.dependencies, read })).complete, false);
+  unavailable = false;
+  const result = await waitProject("P", { timeoutMs: 0 }, { ...f.dependencies, read });
+  assert.equal(result.changed, true); assert.ok(result.sync.works.find(w => w.thread_id === f.id).events.some(e => e.event_id === "important"));
+});
+
+test("latest wait snapshot remains recoverable through a new sync and explicit pruning", async t => {
+  const f = await fixture(t);
+  f.thread.turns.push({ id: "report", status: "completed", items: [{ id: "report", type: "agentMessage", text: "Recoverable report" }] });
+  const notified = await waitProject("P", { timeoutMs: 0 }, f.dependencies), token = notified.sync.sync_token;
+  const recovered = await syncProject("P", {}, f.dependencies);
+  assert.equal(recovered.wait_sync_token, token);
+  await pruneProjectHistory("P", f.storage);
+  const snapshot = await continueProjectSync(token, {}, f.storage);
+  const report = snapshot.works[0].events.find(e => e.event_id === "report");
+  assert.equal((await projectEvent(report.token, f.storage)).event.text, "Recoverable report");
+});
+
+test("guard counts paused and missing bindings, checks start identity, and allows empty or all-stopped projects", async t => {
+  const f = await fixture(t), guard = () => guardProject("P", f.dependencies);
+  assert.equal((await guard()).decision, "block");
+  await controlSupervisor(f.id, "pause", f.storage);
+  assert.equal((await guard()).decision, "block");
+  await writeRecord("project-waits", "dead", { schema: 1, project_id: "P", pid: process.pid, process_start: "different-start" }, f.storage);
+  assert.equal((await guard()).decision, "block", "PID alone does not prove wait liveness");
+  let enter; const entered = new Promise(resolve => { enter = resolve; });
+  const waiting = waitProject("P", { timeoutMs: 60 }, { ...f.dependencies, read: async (...args) => { enter(); return f.dependencies.read(...args); } });
+  await entered;
+  assert.deepEqual(await guard(), {});
+  await assert.rejects(waitProject("P", { timeoutMs: 0 }, f.dependencies), { code: "RECORD_BUSY" });
+  await waiting; assert.equal((await guard()).decision, "block");
+  await controlSupervisor(f.id, "stop", f.storage); assert.deepEqual(await guard(), {});
+  assert.deepEqual(await guardProject("empty", f.dependencies), {});
+  await registerManagedThread("11111111-1111-4111-8111-000000000002", { projectId: "P", connection: "shared" }, f.storage);
+  assert.equal((await guard()).decision, "block");
+});
+
+test("invalid wait options and inspection failures do not masquerade as monitoring", async t => {
+  const f = await fixture(t);
+  for (const timeoutMs of [-1, NaN, Infinity, 0.5]) await assert.rejects(waitProject("P", { timeoutMs }, f.dependencies), { code: "PROJECT_WAIT_INVALID" });
+  await assert.rejects(waitProject("P", {}, { ...f.dependencies, processIdentity: async () => null }), { code: "PROJECT_WAIT_IDENTITY_UNAVAILABLE" });
+  await writeRecord("project-waits", "uninspectable", { schema: 1, project_id: "P", pid: process.pid, process_start: "start" }, f.storage);
+  const guard = await guardProject("P", { ...f.dependencies, processIdentity: async () => { throw Object.assign(new Error(), { code: "EPERM" }); } });
+  assert.equal(guard.decision, undefined); assert.match(guard.systemMessage, /could not verify.*EPERM/);
+});
