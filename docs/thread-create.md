@@ -46,7 +46,7 @@ CLI終了後の承認はDesktopが担当します。codexteerは承認を自動�
 - `--title`、`--model`、`--thinking`を明示指定できます。standaloneで指定しないモデルはプロジェクトのApp Server設定に従います。権限・承認はDesktopに保存されたローカルの選択に揃えます。他チャットの設定を継承しません。関連付けを明示した場合はDesktopのnative作成規則に従います。
 - standaloneで`--title`を省略すると、初回指示の空白をまとめた先頭80文字を名前にします。タイトル生成用のAIは起動しません。対象サーバーでは未使用の空チャットをDesktopが購読するために、先に名前を保存して履歴を永続化する必要があります。
 - cwd・permissions・sandbox・approval policy・approvals reviewerのCLIからの上書きは提供しないため、指定すると作成前に拒否します。
-- ローカルの`work start`・standalone `thread create`と、`work tell --new-turn`・`send --new-turn`は開始直前にDesktopの保存済み権限モードを読み直します。通常のsteerは現在のターンの設定を保ちます。選択の欠落・矛盾・未対応schemaは`DESKTOP_PERMISSION_UNVERIFIED`で未送信のまま停止します。`config.toml`は変更しません。
+- ローカルの`work start`・standalone `thread create`は新規作成時にDesktopの保存済み権限モードを読み取ります。選択の欠落・矛盾・未対応schemaは`DESKTOP_PERMISSION_UNVERIFIED`で未作成のまま停止します。既存スレッドの`work tell --new-turn`・`send --new-turn`はスレッド自身の設定を継承し、ホストの保存選択では上書きしません。この送信に保存選択の読取りは不要です。通常のsteerも現在のターンの設定を保ちます。`config.toml`は変更しません。
 - `--via-thread`のAI中継経路は削除しました。自動fallbackもありません。
 - 本書のstandalone方式は登録済みローカルプロジェクト向けです。worktreeやクラウド実行はこの方式では扱いません。新規Cloud担当は`--connection desktop-cloud environments list`で環境を選び、`--connection desktop-cloud thread create --environment <ID_OR_EXACT_NAME>`で作成します。複数担当の管理には[work startとproject sync](orchestration.md)、環境の要件には[Desktop Cloud操作](desktop-cloud.md)を参照してください。
 - `--timeout-ms`は各RPCの待機期限で、既定120000、1000〜600000です。

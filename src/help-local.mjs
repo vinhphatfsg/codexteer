@@ -537,7 +537,7 @@ export const topics = {
       "CODEXTEER.mdはroot直下の通常ファイルだけを読み、64 KiB以下・BOMなしのUTF-8を改行も含め原文のまま一度だけ初回指示へ入れる。ない場合はその事実を初回指示へ書く。",
       "方針は権限拡張や承認・質問への代理回答を許可しない。既存担当へ方針変更を自動送信しない。",
       "Desktop Cloudのprojectはローカルの調整用namespaceで、Desktop DBのproject所属を要求しない。ローカルcheckoutとCloud側の一致は自動保証しない。",
-      "ローカルのwork startとwork tell --new-turnはDesktopの保存済み権限モードに揃える。選択が確認できなければDESKTOP_PERMISSION_UNVERIFIEDで送信しない。",
+      "ローカルのwork startはDesktopの保存済み権限モードに揃え、未確認ならDESKTOP_PERMISSION_UNVERIFIEDで作成しない。work tell --new-turnは対象スレッド自身の権限設定を継承する。",
       "work tellは最新のcomplete project syncを要求し、送信直前に差分をdrainする。新event、質問・承認待ち、attention不明、不完全syncでは送らない。",
       "finding・source・kind・監督IDは内部化する。質問・承認への回答を代理生成するflagは提供しない。",
     ],

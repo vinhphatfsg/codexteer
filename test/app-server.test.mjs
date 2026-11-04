@@ -4,7 +4,7 @@ import { VERSION, PACKAGE_NAME } from "../src/version.mjs";
 import { RUNTIME_PROTOCOL, RUNTIME_CAPABILITIES } from "../src/compatibility.mjs";
 const steerState = { codex_steer_version: VERSION, codex_steer_package: PACKAGE_NAME, codex_steer_protocol: RUNTIME_PROTOCOL };
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { sendOnClient, sendAppServerMessage } from "../src/app-server.mjs";
 import { RpcFailure } from "../src/rpc.mjs";
 
@@ -222,7 +222,6 @@ test("compatible new-turn rechecks its endpoint before subscription and sending"
   const calls = [];
   const options = {
     newTurn: true,
-    permissionMode: async () => ({ permissions: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" }),
     discover: async () => ({ paths: { lease: root, socket: "unused", control: "control" }, state: { ...steerState, codex_steer_version: "0.0.1" } }),
     inspectControl: async paths => { assert.equal(paths.control, "control"); calls.push("inspect"); },
     subscribe: async () => { calls.push("subscribe"); },
@@ -439,26 +438,31 @@ test("paged sends require pagination capability and stop on rejected page reads"
   }
 });
 
-test("new turn reapplies Desktop's current permission selection after subscription", async () => {
-  let selected = { permissions: ":read-only", approvalPolicy: "on-request", approvalsReviewer: "user" };
-  let actual;
-  const client = { async request(method, params) {
-    if (method === "thread/read") return { thread: thread("idle") };
-    actual = params; return { turn: { id: TURN } };
-  } };
-  await sendOnClient(client, ID, "continue", { newTurn: true,
-    permissionMode: async () => ({ ...selected }),
-    subscribe: async () => { selected = { permissions: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" }; },
-  });
-  assert.equal(actual.approvalsReviewer, "auto_review");
-  assert.equal(actual.approvalPolicy, "on-request");
-  assert.equal(actual.permissions, ":workspace");
-});
-
-test("unreadable Desktop permission selection prevents subscription and initial delivery", async () => {
-  const client = { async request() { return { thread: thread("idle") }; } };
-  await assert.rejects(sendOnClient(client, ID, "continue", { newTurn: true,
-    permissionMode: async () => { throw Object.assign(new Error("unknown selection"), { code: "DESKTOP_PERMISSION_UNVERIFIED" }); },
-    subscribe: async () => assert.fail("unknown permissions must not resume"),
-  }), { code: "DESKTOP_PERMISSION_UNVERIFIED" });
+test("existing new turns preserve thread permissions without reading host selection", async t => {
+  const root = await mkdtemp(tempPrefix("cs-thread-permissions-")); t.after(() => rm(root, { recursive: true, force: true }));
+  for (const selection of ["full-access", "missing", "malformed", "conflicting"]) {
+    const home = await mkdtemp(`${root}/home-`);
+    const file = `${home}/.codex-global-state.json`;
+    if (selection !== "missing") await writeFile(file, selection === "malformed" ? "{" : JSON.stringify({
+      "electron-persisted-atom-state": {
+        "permission-selection-by-host-id:local": { kind: "agent-mode", agentMode: "full-access" },
+        "agent-mode-by-host-id": { local: selection === "conflicting" ? "read-only" : "full-access" },
+      },
+    }));
+    const policy = { approvalPolicy: "on-request", approvalsReviewer: "user", sandboxPolicy: { type: "readOnly" } };
+    let effective = structuredClone(policy), sent = 0;
+    const result = await sendAppServerMessage(ID, "continue", {
+      newTurn: true,
+      discover: async () => ({ paths: { home, lease: root, socket: "unused", control: "control" }, state: { ...steerState, cli_version: "fixture" } }),
+      inspectControl: async () => {}, subscribe: async (control, id) => { assert.equal(control, "control"); assert.equal(id, ID); },
+      connect: async () => ({ close() {}, async request(method, params) {
+        if (method === "thread/read") return { thread: { ...thread("idle"), cwd: home } };
+        assert.equal(method, "turn/start"); sent++;
+        assert.deepEqual(Object.keys(params).sort(), ["clientUserMessageId", "input", "threadId"]);
+        for (const key of Object.keys(policy)) if (params[key] !== undefined) effective[key] = params[key];
+        return { turn: { id: TURN } };
+      } }),
+    });
+    assert.equal(result.sent, true); assert.equal(sent, 1); assert.deepEqual(effective, policy);
+  }
 });

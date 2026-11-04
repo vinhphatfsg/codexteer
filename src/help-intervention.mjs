@@ -81,7 +81,6 @@ export const topics = {
       SUPERVISOR_PAUSED,
       SUPERVISOR_STOPPED,
       { code: "TASK_IDLE", when: "通常sendで、送れる実行中ターンがない（タスクがidle・停止中など）。未送信", action: "readで状態を読み直す。idleのタスクの再開はユーザーの依頼がある場合だけ--new-turnで送る。" },
-      { code: "DESKTOP_PERMISSION_UNVERIFIED", when: "ローカルの新ターンでDesktopの保存済み権限選択や同梱schemaを確認できない", action: "Desktopで権限モードを選び直し、readで状態を確認する。権限値を推測して送らない。" },
       { code: "TASK_BUSY", when: "--new-turnで、タスクがidleでない、または再開処理中に実行中になった。未送信", action: "--new-turnを外す。readで実行中のターンを確かめてから通常sendで送るか判断する。" },
       { code: "NOT_SENT", when: "他のコードのない送信前の失敗（同じタスクの送信ロックが残っている等）。未送信", action: "error.messageの理由を確認し、readで状態を読み直してから判断する。送信ロックが残るなら、配送をhistory checkで確かめてからユーザーに報告する。" },
       OPTIONS_INVALID,
@@ -106,7 +105,7 @@ export const topics = {
       "printf '%s\\n' '理由' '変更方針' | codexteer send <THREAD> -",
     ],
     notes: [
-      "ローカルの--new-turnはDesktopの保存済み権限モードに揃える。通常steerは現在のターンの設定を保つ。",
+      "ローカルの--new-turnは対象スレッド自身の権限設定を継承し、ホストの保存選択では上書きしない。Desktopの保存選択が読めなくても既存スレッドへの送信には影響しない。",
       "-- 以降はオプションとして解釈しない。--dry-runや--jsonも本文として送られる。本文の途中に置いた -- は本文に残る。",
       "-- より前の未知の--オプションや値のないオプションはOPTIONS_INVALID（Cloud・Desktop CloudはCLOUD_OPTIONS_INVALID）で拒否し、何も送らない。エラー文とerror.unknown_optionsがその語（先頭から3件、各40文字まで）を示す。",
       "--source・--kind・--evidence・--based-on・--supersedes・--expires-at・--checkpoint・--findingか--supervisorがあると本文の前に見出し行を付け、どれもなければ本文だけを送る。",
