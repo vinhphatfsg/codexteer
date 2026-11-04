@@ -6,12 +6,12 @@ function launchFailure(agent, error) {
   return Object.assign(new Error(`Could not start ${agent} (${error.code ?? "START_FAILED"}). Check that it is installed and executable on PATH.`), { code: error.code ?? "START_FAILED" });
 }
 
-export async function launchAgent(agent, agentArgs, prompt) {
+export async function launchAgent(agent, agentArgs, prompt, { env = process.env } = {}) {
   let child;
   try {
     // Keep forwarded argv intact. The agent's own terminator keeps its variadic
     // options from consuming the generated prompt as another option value.
-    child = spawn(agent, [...agentArgs, "--", prompt], { shell: false, stdio: "inherit" });
+    child = spawn(agent, [...agentArgs, "--", prompt], { shell: false, stdio: "inherit", env });
   } catch (error) { throw launchFailure(agent, error); }
 
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"];

@@ -40,7 +40,7 @@ codexteer project control resume --project sample --work <THREAD> --json
 codexteer project control stop --project sample --all --json
 ```
 
-sharedの作成先はDesktopの実在project ID・完全一致名とrootsを照合します。sharedとDesktop Cloudを同じproject集合に入れる場合は同じ調整用IDを使い、各担当の接続はmembershipへ保存します。発注本文をシェルコードとして評価しません。
+sharedの作成先はDesktopの実在project ID・完全一致名とrootsを照合します。managed projectの集合はwork startへ渡した指定文字列で保存するため、名前で起動した場合もsync・wait・guard・controlで同じ文字列を使い、照合で得たIDへ途中で置き換えません。sharedとDesktop Cloudを同じproject集合に入れる場合は同じ調整用IDを使い、各担当の接続はmembershipへ保存します。発注本文をシェルコードとして評価しません。
 
 作成結果の担当IDとreceiptを記録します。`create_not_dispatched`は作成側が未作成・作成RPC未送信・指示未送信・担当IDなしを明示した段階です。原因を直して同じ発注・開始オプションを再実行すると同じattempt_idで作成をやり直せます。部分成功・unknown・観測不能では同じ担当を読み取り照合し、createを繰り返しません。membershipを先に登録してから監督を結び、stoppedを自動で置き換えません。初回観測で省略件数が0と確認できない場合は、sharedとDesktop Cloudの双方でhistory gapとして止まり、cursorを保存しません。完全な初回観測の公開イベント全文は未提示として保存し、次のsyncで返します。
 
@@ -65,6 +65,7 @@ pause/stopは新しい外部効果を拒否する制御で、受付済みの担�
 codexteer project wait --project sample --json
 codexteer project wait --project sample --timeout-ms 30000 --json
 codexteer project guard --project sample
+codexteer project guard --project sample --status --json
 ```
 
 未停止の担当がいる間は、waitを終了通知の届くバックグラウンドタスクとして実行します。単にシェルの`&`で切り離すだけでは親セッションへ通知される保証がありません。返ったら結果を読み、必要な検収・対応の後に再びwaitを開始します。質問・承認・URLをユーザーへ伝えた後も続けます。timeout・接続失敗で終了したwaitは監視中ではありません。検収済みの担当は`project control stop`で終了し、ユーザーがオーケストレーションの終了を求めた場合も対象の制御を明示的にstopします。
@@ -79,7 +80,17 @@ wait終了後に出力を失った場合、次の`project sync`が返す`wait_sy
 
 同じCODEX_HOMEで0.22.0など旧版のsyncを併用すると、旧版がheadの`wait_baseline`など未対応フィールドを保存せず、次のwaitが`initial_sync`を返す場合があります。基準不明を変化なしと扱わず、完全なsyncで再初期化する動作です。結果を読んでwaitを再開してください。以後は新しい基準で待機しますが、旧syncを再び使うと再初期化が必要になります。基準と復元tokenを維持する運用では、生成した同じ保存済みCLIを一貫して使います。
 
-guardはClaude CodeのStop hook用の生JSONを返します（通常の`ok/data` envelopeは使いません）。停止済み以外の担当がいて生存するwaitがなければ、終了値0で`{"decision":"block","reason":"…"}`を返します。条件を満たす場合とmanaged workがない場合は`{}`です。pausedは介入を一時停止するだけで未完了であり、Desktopからの実行も止めないため監視対象に数えます。binding不在も未完了として扱います。waitは本人専用のlocal storeへpidと起動識別を保存し、guardはOSの起動情報を照合します。macOSでは起動日時に加えprocess titleのwait固有nonce、Linuxではboot IDと起動tickを照合し、死んだ・停止した・zombieのプロセスを認めません。対応OSはmacOSとLinuxです。
+guardはClaude CodeのStop hook用の生JSONを返します（通常の`ok/data` envelopeは使いません）。停止済み以外の担当がいて自分のセッションに属する生存waitがなければ、終了値0で`{"decision":"block","reason":"…"}`を返します。条件を満たす場合とmanaged workがない場合は`{}`です。pausedは介入を一時停止するだけで未完了であり、Desktopからの実行も止めないため監視対象に数えます。binding不在も未完了として扱います。waitは本人専用のlocal storeへpidと起動識別、最も近いClaude/Codex CLI親プロセスのpidと起動識別を保存し、guardは自分の親プロセスと一致する所有者のwaitだけを数えます。macOSでは起動日時に加えprocess titleのwait固有nonce、Linuxではboot IDと起動tickを照合し、死んだ・停止した・zombieのプロセスを認めません。対応OSはmacOSとLinuxです。
+
+同じCODEX_HOME・host・projectは1オーケストレーターで扱います。結果の基準と排他はproject単位のため、別セッションのwaitが動作中でも自分のguardは停止を拒否し、2つ目のwaitは`RECORD_BUSY`になります。所有セッションでwaitを終了・取消してから、最後の結果とsyncを読み、引継ぎ先のセッションからwaitを再開してください。lockの手動削除、他セッションのwaitの流用、競合解消のための担当のcontrol stopは行いません。別セッションからのsyncや操作も自動的には排除されないため、この単一オーケストレーターの前提を守ってください。
+
+通常のnative Claude/Codex CLIとNode版CLIを親プロセスから識別します。Claudeのnative installerが使う`~/.local/bin/claude`と、symlink先の`~/.local/share/claude/versions/<version>`も扱います（[公式の配置仕様](https://code.claude.com/docs/en/setup#auto-updates)）。共有App Serverは複数のスレッドを持つため、CLIセッションの所有者として認めません。親から切り離されたプロセスや未対応の起動ラッパーなど、自分のセッションを特定できない場合は`PROJECT_GUARD_OWNER_UNVERIFIED`の`systemMessage`で監視未確認を警告し、停止を許します。別セッションのwaitを自分の監視として認めたわけではありません。hookとwaitを同じ対応CLIセッションから実行し、親プロセスの経路を確認してください。自分を識別できた場合は、別セッションや所有者不明のwaitでは引き続き停止を拒否します。プロセス所属は調整用の識別で、ユーザーや同じOSユーザーのプログラムを隔離する仕組みではありません。
+
+macOSの起動識別は、起動日時とcommandのSHA-256だけを保存・比較します。ユーザーの目標を含むpromptやcommand全文は保存しません。wait自身にも同じ形式を使い、process titleのnonceによる区別を維持します。OSから読んだcommandはその場でhashにし、Linuxは従来どおりboot IDと起動tickで識別します。旧形式の識別を持つwaitは新しいguardと一致しないため、所有セッションで旧waitを終了してから、同じ新しいCLIでwaitとhookを実行してください。既存recordや稼働中の保存済みCLIを自動で書き換えません。
+
+開始時には受信したセッションで`project guard --project sample --status --json`を実行します。この形式は通常のenvelopeで`data.stop_hook`を返します。`configured`は、直接Claude起動が`CODEXTEER_STOP_GUARD`へ付けたproject・launcherのpid・起動識別の印を、現在の親プロセスと照合できた状態です。入れ子のCLIや別のlauncherへ引き継がれた印は認めません。本文の生成だけでは受信側の起動経路を知ることができず、環境変数も設定しません。
+
+印のない手動起動、Codex起動、異なるproject、プロセス検査不能は`unverified`です。最初の報告で「監視漏れを止める仕組みがない（有効なStop hookを確認できない）」ことと、`help project`の設定例を案内してください。手動設定済みならセッションの有効なhook一覧（Claude Codeでは`/hooks`）で同じproject・CLI・接続経路のguardとhook無効化の有無を確認します。ファイルの存在だけで有効と判断しません。`configured`も設定時の印であり、その後の無効化、信頼設定、CLIの継続上限やhook実行そのものまでは保証しません。未完了の間はhookの状態にかかわらず自分のwaitを動かし続けます。
 
 `orchestrate`はClaude Code起動時に、生成した同じCLIコマンド・project・接続経路のguardを`--settings`へ追加します。checkoutの設定ファイルは編集しません。自分で起動したClaude Codeでは`.claude/settings.json`の既存設定へ次を追加してください。`sample`はwork startと同じ調整用project IDへ、commandは同じCODEX_HOME・接続・hostを選ぶ保存済みコマンドまたはPATHコマンドへ置き換えます。
 
