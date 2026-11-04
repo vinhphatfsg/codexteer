@@ -222,6 +222,7 @@ test("compatible new-turn rechecks its endpoint before subscription and sending"
   const calls = [];
   const options = {
     newTurn: true,
+    permissionMode: async () => ({ permissions: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" }),
     discover: async () => ({ paths: { lease: root, socket: "unused", control: "control" }, state: { ...steerState, codex_steer_version: "0.0.1" } }),
     inspectControl: async paths => { assert.equal(paths.control, "control"); calls.push("inspect"); },
     subscribe: async () => { calls.push("subscribe"); },
@@ -436,4 +437,28 @@ test("paged sends require pagination capability and stop on rejected page reads"
       assert.equal(calls.filter(call => call.method.startsWith("turn/")).length, 0);
     }
   }
+});
+
+test("new turn reapplies Desktop's current permission selection after subscription", async () => {
+  let selected = { permissions: ":read-only", approvalPolicy: "on-request", approvalsReviewer: "user" };
+  let actual;
+  const client = { async request(method, params) {
+    if (method === "thread/read") return { thread: thread("idle") };
+    actual = params; return { turn: { id: TURN } };
+  } };
+  await sendOnClient(client, ID, "continue", { newTurn: true,
+    permissionMode: async () => ({ ...selected }),
+    subscribe: async () => { selected = { permissions: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" }; },
+  });
+  assert.equal(actual.approvalsReviewer, "auto_review");
+  assert.equal(actual.approvalPolicy, "on-request");
+  assert.equal(actual.permissions, ":workspace");
+});
+
+test("unreadable Desktop permission selection prevents subscription and initial delivery", async () => {
+  const client = { async request() { return { thread: thread("idle") }; } };
+  await assert.rejects(sendOnClient(client, ID, "continue", { newTurn: true,
+    permissionMode: async () => { throw Object.assign(new Error("unknown selection"), { code: "DESKTOP_PERMISSION_UNVERIFIED" }); },
+    subscribe: async () => assert.fail("unknown permissions must not resume"),
+  }), { code: "DESKTOP_PERMISSION_UNVERIFIED" });
 });

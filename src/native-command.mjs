@@ -98,3 +98,27 @@ export async function nativeOnAppServer(client, endpoint, action, args, context,
     catch { if (result) result.native_request_cleanup_required = true; else if (error) error.native_request_cleanup_required = true; }
   }
 }
+
+export function validatePermissionSchemas(schemas) {
+  for (const name of ["ThreadStartParams", "TurnStartParams"]) {
+    const schema = schemas[name];
+    if (schema?.properties?.permissions?.type?.includes("string") !== true
+      || !schema.properties.approvalPolicy || !schema.properties.approvalsReviewer
+      || !schema.properties[name === "ThreadStartParams" ? "sandbox" : "sandboxPolicy"]
+      || !schema.definitions?.ApprovalsReviewer?.enum?.includes("auto_review")) throw Object.assign(new Error("Bundled and running App Server permission schemas must match."), { code: "DESKTOP_PERMISSION_UNVERIFIED" });
+  }
+}
+
+// Match the live server to its bundled schema; older servers must not silently
+// ignore permission fields and accept a turn under a different mode.
+export async function inspectPermissionProtocol(state, { run = spawnSync, executable = BUNDLED_CLI } = {}) {
+  const version = run(executable, ["--version"], { encoding: "utf8", timeout: 5000 });
+  if (version.status !== 0 || version.stdout?.match(/codex-cli ([\w.+-]+)/)?.[1] !== state.cli_version) throw Object.assign(new Error("Bundled and running App Server permission schemas must match."), { code: "DESKTOP_PERMISSION_UNVERIFIED" });
+  const directory = await mkdtemp(path.join(os.tmpdir(), "codexteer-permission-schema-"));
+  try {
+    const generated = run(executable, ["app-server", "generate-json-schema", "--experimental", "--out", directory], { encoding: "utf8", timeout: 15000, maxBuffer: 8 * 1024 * 1024 });
+    if (generated.status !== 0) throw Object.assign(new Error("Bundled and running App Server permission schemas must match."), { code: "DESKTOP_PERMISSION_UNVERIFIED" });
+    const names = ["ThreadStartParams", "TurnStartParams"];
+    validatePermissionSchemas(Object.fromEntries(await Promise.all(names.map(async name => [name, JSON.parse(await readFile(path.join(directory, "v2", `${name}.json`), "utf8"))]))));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+}

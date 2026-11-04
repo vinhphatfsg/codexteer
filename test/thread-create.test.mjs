@@ -56,6 +56,7 @@ async function fixture(t) {
 async function standaloneFixture(t) {
   const f = await fixture(t), native = f.deps.native;
   f.options = { title: "検証" };
+  f.deps.permissionMode = async () => ({ permissions: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" });
   f.deps.caller = async () => { throw new Error("Standalone creation must not read an existing caller."); };
   f.deps.inspectControl = async () => {};
   f.deps.subscribe = async (endpoint, id) => { assert.equal(id, CHILD); f.calls.push("desktop/subscribe"); };
@@ -86,8 +87,8 @@ test("project and prompt alone create exactly one task with its own real native 
   const f = await standaloneFixture(t), request = f.client.request;
   f.options = {}; f.thread.name = null;
   f.client.request = async (method, params, ...rest) => {
-    if (method === "thread/start") { assert.equal(params.projectId, f.project.id); assert.deepEqual(params.runtimeWorkspaceRoots, f.roots); assert.equal(params.approvalPolicy, undefined); }
-    if (method === "turn/start") { assert.deepEqual(params.input, [{ type: "text", text: "日本語\nfirst instruction" }]); assert.equal(params.parentTurnId, undefined); }
+    if (method === "thread/start") { assert.equal(params.projectId, f.project.id); assert.deepEqual(params.runtimeWorkspaceRoots, f.roots); assert.equal(params.approvalPolicy, "on-request"); assert.equal(params.approvalsReviewer, "auto_review"); assert.equal(params.permissions, ":workspace"); }
+    if (method === "turn/start") { assert.deepEqual(params.input, [{ type: "text", text: "日本語\nfirst instruction" }]); assert.equal(params.parentTurnId, undefined); assert.equal(params.approvalsReviewer, "auto_review"); assert.equal(params.permissions, ":workspace"); }
     return request(method, params, ...rest);
   };
   const receipt = await createProjectThread("サンプル", "日本語\nfirst instruction", f.options, f.deps);
@@ -292,4 +293,11 @@ test("explicit native creation distinguishes definitive rejections from unknown 
     assert.equal(f.writes.at(-1)[2].creation_status, creation);
     assert.equal(f.writes.at(-1)[2].delivery_status, delivery);
   }
+});
+
+ test("standalone refuses an unverified Desktop selection before creating a chat", async t => {
+  const f = await standaloneFixture(t);
+  f.deps.permissionMode = async () => { throw Object.assign(new Error("unverified"), { code: "DESKTOP_PERMISSION_UNVERIFIED" }); };
+  await assert.rejects(createProjectThread("サンプル", "first", f.options, f.deps), { code: "DESKTOP_PERMISSION_UNVERIFIED", creation_status: "not_created", sent: false });
+  assert(!f.calls.includes("thread/start"));
 });

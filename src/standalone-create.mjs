@@ -1,3 +1,4 @@
+import { desktopPermissionMode } from "./desktop-permissions.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
@@ -34,7 +35,7 @@ export async function createStandaloneProjectThread(selector, prompt, settings, 
   discover = discoverRuntime, connect = RpcClient.connect, aliases = projectAliases,
   endpoint = discoverNativeEndpoint, inspectEndpoint = inspectNativeEndpoint, inspectCommand = inspectNativeCommandProtocol, native,
   workspace = projectWorkspace, history = fetchThread, membership = desktopMembership,
-  inspectControl = verifyControlEndpoint, subscribe = ensureDesktopSubscription, write = writeRecord, sleep = delay,
+  inspectControl = verifyControlEndpoint, subscribe = ensureDesktopSubscription, write = writeRecord, sleep = delay, permissionMode = desktopPermissionMode,
 } = {}) {
   const attemptId = settings.attemptId ?? randomUUID();
   const title = settings.title ?? [...prompt.trim().replace(/\s+/gu, " ")].slice(0, 80).join("");
@@ -65,12 +66,13 @@ export async function createStandaloneProjectThread(selector, prompt, settings, 
       title, title_source: settings.title === undefined ? "initial-instruction" : "explicit", backend: "app-server-native-assignment", connection_mode: "shared", protocol,
       creation_status: "not_created", sent: false, delivery_status: "not_sent", verification_status: "not_started",
       message_characters: [...prompt].length, prompt_sha256: createHash("sha256").update(prompt).digest("hex"), dry_run: !!settings.dryRun };
+    const permissions = await permissionMode(client, { home: paths.home, state, cwd: scope.cwd, operation: "thread/start", roots: scope.runtimeWorkspaceRoots });
     if (settings.dryRun) return receipt;
     receipt.receipt_path = storePath("creations", attemptId, paths.home);
     await write("creations", attemptId, { ...receipt, creation_status: "dispatching" }, storage);
     await check(); creating = true;
     const started = await client.request("thread/start", { cwd: scope.cwd, projectId: project.id, runtimeWorkspaceRoots: scope.runtimeWorkspaceRoots,
-      ephemeral: false, ...(settings.model === undefined ? {} : { model: settings.model }) }, { mutation: true });
+      ephemeral: false, ...permissions, ...(settings.model === undefined ? {} : { model: settings.model }) }, { mutation: true });
     if (!started?.thread?.id) throw Object.assign(failure("No created task ID was confirmed. Do not retry automatically.", "NATIVE_CREATION_UNKNOWN"), { uncertain: true });
     const threadId = normalizeThreadId(started.thread.id);
     Object.assign(receipt, { thread_id: threadId, deep_link: threadDeepLink(threadId), creation_status: "created" });
@@ -94,8 +96,10 @@ export async function createStandaloneProjectThread(selector, prompt, settings, 
     }
     receipt.client_message_id = randomUUID();
     await write("creations", attemptId, { ...receipt, delivery_status: "dispatching" }, storage);
+    const turnPermissions = await permissionMode(client, { home: paths.home, state, cwd: scope.cwd, roots: scope.runtimeWorkspaceRoots });
+    await check();
     sending = true;
-    const delivery = await client.request("turn/start", { threadId, input: [{ type: "text", text: prompt }], clientUserMessageId: receipt.client_message_id,
+    const delivery = await client.request("turn/start", { threadId, input: [{ type: "text", text: prompt }], clientUserMessageId: receipt.client_message_id, ...turnPermissions,
       ...(settings.thinking === undefined ? {} : { effort: settings.thinking }) }, { mutation: true });
     if (typeof delivery?.turn?.id !== "string" || !delivery.turn.id.trim()) throw Object.assign(failure("No initial turn ID was confirmed. Inspect the task before resending.", "INITIAL_TURN_UNCONFIRMED"), { uncertain: true });
     accepted = true;

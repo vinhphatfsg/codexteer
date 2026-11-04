@@ -1,3 +1,4 @@
+import { desktopPermissionMode } from "./desktop-permissions.mjs";
 import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
 import { sendDesktopCloudInput } from "./desktop-cloud.mjs";
 import { mkdir, rm, readFile, writeFile } from "node:fs/promises";
@@ -69,7 +70,7 @@ export async function readSendState(client, threadId) {
   return { ...current, turns };
 }
 
-export async function sendOnClient(client, threadId, message, { newTurn = false, subscribe, clientMessageId = randomUUID(), beforeSend } = {}) {
+export async function sendOnClient(client, threadId, message, { newTurn = false, subscribe, clientMessageId = randomUUID(), beforeSend, permissionMode = async () => ({}) } = {}) {
   const thread = await readSendState(client, threadId);
   const input = [{ type: "text", text: message }];
   if (!newTurn) {
@@ -91,17 +92,19 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
   // Optional safety checks (e.g. a paged --based-on cursor) must be usable before
   // resuming, too. Validate again after resume to catch intervening user input.
   await beforeSend?.(thread, client);
+  await permissionMode(thread);
   await subscribe(threadId);
   const resumed = await readSendState(client, threadId);
   if (resumed.status?.type !== "idle" || resumed.turns.some(turn => turn.status === "inProgress")) throw Object.assign(new Error("Task became active while resuming. Nothing was sent."), { code: "TASK_BUSY" });
-  await beforeSend?.(resumed, client);
   const clientUserMessageId = clientMessageId;
-  const accepted = await client.request("turn/start", { threadId, input, clientUserMessageId }, { mutation: true });
+  const permissions = await permissionMode(resumed);
+  await beforeSend?.(resumed, client);
+  const accepted = await client.request("turn/start", { threadId, input, clientUserMessageId, ...permissions }, { mutation: true });
   if (typeof accepted?.turn?.id !== "string") throw new RpcFailure("App Server did not confirm a turn ID. Do not retry automatically.", { code: "PROTOCOL_ERROR", uncertain: true });
   return { turn_id: accepted.turn.id, client_message_id: clientUserMessageId };
 }
 
-export async function sendAppServerMessage(threadInput, message, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend, connect, discover, subscribe = ensureDesktopSubscription, inspectControl = verifyControlEndpoint } = {}) {
+export async function sendAppServerMessage(threadInput, message, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend, connect, discover, subscribe = ensureDesktopSubscription, inspectControl = verifyControlEndpoint, permissionMode = desktopPermissionMode } = {}) {
   if (isDesktopCloudTask(threadInput)) return sendDesktopCloudInput(threadInput, message, { dryRun, newTurn, clientMessageId, beforeSend });
   if (isCloudTask(threadInput)) return sendCloudInput(threadInput, message, { dryRun, newTurn, clientMessageId, beforeSend });
   const remote = targetHost() !== "local";
@@ -139,6 +142,7 @@ export async function sendAppServerMessage(threadInput, message, { dryRun = fals
     };
     const receipt = await sendOnClient(client, threadId, message, { newTurn, clientMessageId,
       beforeSend: async (...args) => { await beforeSend?.(...args); await checkRuntime(); },
+      permissionMode: remote ? undefined : async thread => permissionMode(client, { home: paths.home, state, cwd: thread.cwd, roots: thread.environments?.find(environment => environment.environmentId === "local")?.runtimeWorkspaceRoots ?? [] }),
       subscribe: async id => { await checkRuntime(); return remote ? ensureRemoteDesktopSubscription(id) : subscribe(paths.control, id); },
     });
     result = { ...plan, ...receipt, sent: true, delivery_status: "accepted" };
