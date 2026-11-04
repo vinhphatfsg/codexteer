@@ -2,6 +2,11 @@
 
 公開日は日本時間です。
 
+## 未リリース
+
+- `project wait --project ID [--timeout-ms N] [--json]`を追加しました。最後の完全なproject syncを基準に、新しいターン終了・質問・承認待ち・失敗、またはmembership変更を待ち、syncと同じsnapshotを返します。idleだけでは通知せず、timeoutと観測失敗を区別します。最新のwait結果はsyncの`wait_sync_token`で復元できます。
+- `project guard --project ID`を追加しました。未停止の担当（pausedを含む）がいて生存するwaitがなければ、Stop hookの停止拒否JSONを返します。プロセスの起動識別を確認し、異常終了したwaitを監視中と扱いません。Claude向け`orchestrate`はhookを起動設定へ追加し、生成本文は質問・承認・URLの伝達後もバックグラウンドwaitを続けるよう案内します。手動のClaude・Codex hook設定例と制約をオーケストレーション文書へ追加しました。
+
 ## 0.22.0 — 2026-11-04公開
 
 オーケストレーターがmanaged projectの担当を立ち上げ（`work start`）、まとめて把握し（`project sync`）、指示し（`work tell`）、止める（`project control`）4操作を追加しました。役割の指定は設けず、担当範囲はrepository rootの`CODEXTEER.md`と発注で決めます。

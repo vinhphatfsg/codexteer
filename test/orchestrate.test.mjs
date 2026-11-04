@@ -153,7 +153,8 @@ test("every saved and PATH prompt command example reaches the real CLI parser wi
       const expanded = line.replace(/<PROJECT>/g, "P").replace(/<CHECKOUT>/g, options.cwd).replace(/<TITLE>/g, "fixture")
         .replace(/<ORDER-FILE>|<INSTRUCTION-FILE>/g, order).replace(/<DURABLE-THREAD>/g, "durable_" + ID)
         .replace(/<THREAD>|<TOKEN>|<EVENT-TOKEN>/g, ID).replace(/<EVENT-OFFSET>|<OFFSET>/g, "0").replace(/<ENVIRONMENT>/g, "fixture-config");
-      const r = spawnSync("/bin/sh", ["-c", expanded], { ...options, env: { ...options.env, PATH: bin, CODEX_THREAD_ID: "" }, timeout: 10000 });
+      const bounded = line.includes(" project wait ") ? expanded + " --timeout-ms 0" : expanded;
+      const r = spawnSync("/bin/sh", ["-c", bounded], { ...options, env: { ...options.env, PATH: bin, CODEX_THREAD_ID: "" }, timeout: 10000 });
       assert.ok([0, 1].includes(r.status), expanded + "\n" + r.stderr);
       if (line.endsWith(" --version")) { assert.equal(r.status, 0); assert.ok(r.stdout.trim()); continue; }
       const response = JSON.parse(r.stdout);

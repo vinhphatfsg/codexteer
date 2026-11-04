@@ -55,6 +55,8 @@ ${command} project sync --project <PROJECT> --json
 再起動・要約の後もproject syncから再開します。続きがあれば返されたtokenとoffsetを使って同じsnapshotを読み切ります。未解決attentionの根拠を読み、未確認・history_gap・complete:falseを変化なしと扱いません。
 ${command} project sync --continue <TOKEN> --offset <OFFSET> --event-offset <EVENT-OFFSET> --json
 ${command} project event <EVENT-TOKEN> --json
+未完了の担当（pausedも含む）がいる間は、次を終了通知の届くバックグラウンドタスクとして動かし続けます。質問・承認・URLをユーザーへ伝えた後も監視を続け、waitが返ったら結果と続きのsyncを読み、検収・対応して再びwaitを開始します。timeout・エラーの終了後も監視があると扱いません。
+${command} project wait --project <PROJECT> --json
 ${command} work tell <THREAD> - --json < <INSTRUCTION-FILE>
 現在のユーザー決定と未完了事項に基づいて指示します。新しい根拠のない同じ介入を繰り返さず、質問・承認は本人へ伝え、代理で答えません。送信前の照合をCLIに任せ、不完全なsyncやattention不明の拒否を迂回しません。検収待ちでもidleなら--new-turnが必要です。同じ委任が未完了の場合だけ使い、検収待ちを全体の完了認定と取り違えません。unknownは読み取り照合だけを行い、自動再送しません。
 ${command} project control pause --project <PROJECT> --work <THREAD> --json
