@@ -192,7 +192,8 @@ test("guard counts paused and missing bindings, checks start identity, and allow
   assert.match(foreign.reason, /one orchestrator|another session/i);
   assert.equal((await guardProject("P", { ...f.dependencies,
     orchestratorIdentity: async () => ({ pid: 123, process_start: "reused-pid" }) })).decision, "block");
-  assert.equal((await guardProject("P", { ...f.dependencies, orchestratorIdentity: async () => null })).decision, "block");
+  const unidentified = await guardProject("P", { ...f.dependencies, orchestratorIdentity: async () => null });
+  assert.equal(unidentified.decision, undefined); assert.match(unidentified.systemMessage, /PROJECT_GUARD_OWNER_UNVERIFIED/);
   assert.deepEqual(await guard(), {});
   await assert.rejects(waitProject("P", { timeoutMs: 0 }, f.dependencies), { code: "RECORD_BUSY" });
   } finally { release(); await waiting; }
@@ -215,6 +216,27 @@ test("owner resolution uses the nearest CLI, excludes shared servers and never t
   assert.deepEqual(await resolve([{ ...claude, command: '"/path with spaces/node" "/path with spaces/claude"' }]), { pid: 20, process_start: "start-20" });
 });
 
+test("an unidentified orchestrator warns and allows Stop instead of repeatedly blocking", async t => {
+  const f = await fixture(t);
+  const deps = { ...f.dependencies, orchestratorIdentity: async () => null };
+  for (const hasWait of [false, true]) {
+    if (hasWait) await writeRecord("project-waits", "live", { schema: 1, project_id: "P", pid: 123,
+      process_start: "same-start", owner: { pid: 456, process_start: "some-owner" } }, f.storage);
+    const result = await guardProject("P", deps);
+    assert.equal(result.decision, undefined);
+    assert.match(result.systemMessage, /cannot identify.*orchestrator session.*stop is allowed/i);
+  }
+});
+
+test("the documented native Claude version path resolves as a session without recognizing unrelated version binaries", async () => {
+  const resolve = executable => orchestratorIdentity({
+    processAncestors: async () => [{ pid: 20, executable, command: `${executable} --version` }],
+    processIdentity: async () => "native-start",
+  });
+  assert.deepEqual(await resolve("/home/example/.local/share/claude/versions/2.1.318"), { pid: 20, process_start: "native-start" });
+  assert.equal(await resolve("/home/example/.local/share/unrelated/versions/2.1.318"), null);
+});
+
 test("hook markers require this project's live launcher and cannot cross nested CLI sessions", async () => {
   const launcher = { pid: 30, executable: "/usr/bin/node", command: "node codexteer.mjs orchestrate" };
   const agent = { pid: 20, executable: "/bin/claude", command: "claude" };
@@ -233,7 +255,6 @@ test("invalid wait options and inspection failures do not masquerade as monitori
   const f = await fixture(t);
   for (const timeoutMs of [-1, NaN, Infinity, 0.5]) await assert.rejects(waitProject("P", { timeoutMs }, f.dependencies), { code: "PROJECT_WAIT_INVALID" });
   await assert.rejects(waitProject("P", {}, { ...f.dependencies, processIdentity: async () => null }), { code: "PROJECT_WAIT_IDENTITY_UNAVAILABLE" });
-  assert.equal((await guardProject("P", { ...f.dependencies, orchestratorIdentity: async () => { throw new Error("not needed without waits"); } })).decision, "block");
   await writeRecord("project-waits", "uninspectable", { schema: 1, project_id: "P", pid: process.pid, process_start: "start",
     owner: await f.dependencies.orchestratorIdentity() }, f.storage);
   const guard = await guardProject("P", { ...f.dependencies, processIdentity: async () => { throw Object.assign(new Error(), { code: "EPERM" }); } });

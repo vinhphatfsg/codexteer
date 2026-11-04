@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, readlink } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
@@ -18,7 +18,10 @@ const failed = new Set(["failed", "systemError"]);
 
 // Include boot identity/start ticks on Linux. On macOS ps supplies the process
 // start date and a per-wait nonce in its process title, so even PID reuse within
-// one second cannot match. Stopped/zombie processes cannot count as observing.
+// one second cannot match. Hash command text before returning an identity: an
+// agent's argv can contain the entire private orchestration prompt. Equality
+// still includes the command/nonce without copying it into local records.
+// Stopped/zombie processes cannot count as observing.
 export async function processIdentity(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   try {
@@ -30,7 +33,8 @@ export async function processIdentity(pid) {
     if (process.platform === "darwin") {
       const { stdout } = await exec("/bin/ps", ["-p", String(pid), "-o", "lstart=", "-o", "stat=", "-o", "command="], { timeout: 2000, env: { ...process.env, LC_ALL: "C" } });
       const match = stdout.trim().match(/^(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(\S+)\s+(.+)$/);
-      return !match || /[ZXT]/.test(match[2]) ? null : `${match[1].replace(/\s+/g, " ")}:${match[3]}`;
+      return !match || /[ZXT]/.test(match[2]) ? null
+        : `${match[1].replace(/\s+/g, " ")}:sha256:${createHash("sha256").update(match[3]).digest("hex")}`;
     }
     throw failure("Project wait process identity is supported on macOS and Linux.", "PROJECT_WAIT_IDENTITY_UNAVAILABLE");
   } catch (error) {
@@ -41,13 +45,15 @@ export async function processIdentity(pid) {
 
 // Use the nearest agent ancestor, never a shared terminal/shell or project ID.
 // comm identifies native CLIs; the first script argument covers Node installs.
+// Official native install layout: https://code.claude.com/docs/en/setup#auto-updates
+const nativeClaude = executable => /(?:^|\/)\.local\/share\/claude\/versions\/\d+\.\d+\.\d+$/.test(executable);
 function agentProcess({ executable, command }) {
   const words = command.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
   const args = words.map(word => word.replace(/^["']|["']$/g, ""));
   // A shared App Server hosts multiple threads; it is not one CLI session.
   const beforePrompt = args.slice(0, args.indexOf("--") < 0 ? args.length : args.indexOf("--"));
   if (path.basename(executable) === "codex" && beforePrompt.includes("app-server")) return false;
-  if (["claude", "codex"].includes(path.basename(executable))) return true;
+  if (["claude", "codex"].includes(path.basename(executable)) || nativeClaude(executable)) return true;
   if (!/^node(?:js)?$/.test(path.basename(executable))) return false;
   const script = words[1]?.replace(/^["']|["']$/g, "") ?? "";
   if (/(?:^|\/)codex(?:\.m?js)?$/.test(script)) return !beforePrompt.includes("app-server");
@@ -65,6 +71,8 @@ export async function processAncestors() {
         const [stat, cmdline, comm] = await Promise.all([readFile(`/proc/${pid}/stat`, "utf8"), readFile(`/proc/${pid}/cmdline`, "utf8"), readFile(`/proc/${pid}/comm`, "utf8")]);
         ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
         executable = comm.trim(); command = cmdline.split("\0").filter(Boolean).map(word => JSON.stringify(word)).join(" ");
+        // Linux comm holds only the basename of a version-named native binary.
+        if (/^\d+\.\d+\.\d+$/.test(executable)) executable = await readlink(`/proc/${pid}/exe`);
       } catch (error) { if (["ENOENT", "ESRCH"].includes(error.code)) break; throw error; }
     } else if (process.platform === "darwin") {
       // Keep comm last: macOS truncates non-final ps columns, including paths.
@@ -197,7 +205,8 @@ export async function guardProject(projectId, dependencies = {}) {
     if (!unfinished.length) return {};
     const waits = (await listRecords("project-waits", storage)).filter(wait => wait?.schema === 1
       && wait.project_id === projectId && typeof wait.process_start === "string" && wait.process_start);
-    const owner = waits.length ? await (dependencies.orchestratorIdentity ?? (() => orchestratorIdentity(dependencies)))() : null;
+    const owner = await (dependencies.orchestratorIdentity ?? (() => orchestratorIdentity(dependencies)))();
+    if (!owner) return { systemMessage: "Project guard cannot identify the calling orchestrator session (PROJECT_GUARD_OWNER_UNVERIFIED); stop is allowed. Monitoring is unverified. Run the hook and project wait from the same supported Claude/Codex CLI session and inspect its parent process chain before relying on monitoring. No other session's wait has been accepted." };
     for (const wait of waits) {
       if (owner && wait.owner?.pid === owner.pid && wait.owner.process_start === owner.process_start
         && await identity(wait.pid) === wait.process_start) return {};

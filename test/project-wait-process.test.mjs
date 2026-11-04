@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { once } from "node:events";
-import { mkdtemp, chmod, rm } from "node:fs/promises";
+import { mkdtemp, chmod, rm, readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { tempPrefix } from "../test-support/temp.mjs";
@@ -12,9 +14,11 @@ import { registerManagedThread } from "../src/project-index.mjs";
 import { registerSupervisor } from "../src/supervision.mjs";
 import { listRecords } from "../src/store.mjs";
 import { startAgentSession } from "../test-support/agent-session.mjs";
+import { processIdentity } from "../src/project-wait.mjs";
 
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url));
 const ID = "11111111-1111-4111-8111-000000000001", SESSION = "22222222-2222-4222-8222-000000000001";
+const exec = promisify(execFile);
 
 async function fixture(t) {
   const home = await mkdtemp(tempPrefix("ct-wait-proc-")), env = { ...process.env, CODEX_HOME: home };
@@ -85,6 +89,65 @@ test("real CLI wait: unchanged idle attention times out without changing the syn
   const result = await f.cli(["project", "wait", "--project", "P", "--timeout-ms", "0", "--json"]);
   assert.equal(result.data.changed, false); assert.equal(result.data.timed_out, true); assert.equal(result.data.sync, null);
   assert.deepEqual(await listRecords("project-sync-heads", { home: f.home }), before);
+});
+
+test("wait and owner records remain compact and never persist the orchestrator prompt", { timeout: 20000 }, async t => {
+  const f = await fixture(t), waiting = await f.launchWait();
+  try {
+    const [record] = await listRecords("project-waits", { home: f.home });
+    assert.ok(Buffer.byteLength(JSON.stringify(record)) < 1024, "process identities must not copy the launch prompt");
+    assert.doesNotMatch(JSON.stringify(record), /あなたは担当|目標と委任|--settings/);
+    if (process.platform === "darwin") {
+      assert.match(record.owner.process_start, /:sha256:[a-f0-9]{64}$/);
+      assert.match(record.process_start, /:sha256:[a-f0-9]{64}$/);
+    }
+    assert.deepEqual(await f.guard(), {}, "hashed identities still recognize this session's live wait");
+  } finally { await waiting.child.kill(); await waiting.closed; }
+});
+
+test("a detached macOS guard warns when launchd is its parent, even with another live wait", { timeout: 20000, skip: process.platform !== "darwin" }, async t => {
+  const f = await fixture(t), waiting = await f.launchWait(), output = `${f.home}/detached-guard.json`;
+  try {
+    const guard = `
+      const deadline = Date.now() + 5000;
+      while (process.ppid !== 1 && Date.now() < deadline) await new Promise(r => setTimeout(r, 10));
+      if (process.ppid !== 1) throw new Error("Guard was not adopted by launchd");
+      process.argv = [process.execPath, ${JSON.stringify(BIN)}, "project", "guard", "--project", "P"];
+      await import(${JSON.stringify(new URL("../bin/codexteer.mjs", import.meta.url).href)});
+    `;
+    // The short-lived launcher exits; its detached child waits for launchd
+    // adoption before executing this checkout's real CLI.
+    const launcher = `
+      const { spawn } = require("node:child_process"), fs = require("node:fs");
+      const out = fs.openSync(${JSON.stringify(output)}, "w", 0o600);
+      const child = spawn(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(guard)}], { detached: true, stdio: ["ignore", out, out] });
+      child.unref(); fs.closeSync(out);
+    `;
+    await exec(process.execPath, ["-e", launcher], { env: { ...process.env, CODEX_HOME: f.home }, timeout: 10000 });
+    let text = "";
+    for (let n = 0; n < 700; n++) {
+      text = await readFile(output, "utf8");
+      if (text.trim()) break;
+      await delay(10);
+    }
+    const result = JSON.parse(text);
+    assert.equal(result.decision, undefined);
+    assert.match(result.systemMessage, /PROJECT_GUARD_OWNER_UNVERIFIED.*stop is allowed/);
+    assert.deepEqual(await f.guard(), {}, "the identified owning session still has a valid wait");
+  } finally { await waiting.child.kill(); await waiting.closed; }
+});
+
+test("macOS hashed identity preserves command changes, including a wait nonce", { skip: process.platform !== "darwin" }, async () => {
+  const original = process.title;
+  try {
+    process.title = "codexteer-identity-private-goal-first";
+    const first = await processIdentity(process.pid);
+    assert.match(first, /:sha256:[a-f0-9]{64}$/);
+    assert.doesNotMatch(first, /private-goal/);
+    assert.equal(await processIdentity(process.pid), first);
+    process.title = "codexteer-identity-private-goal-second";
+    assert.notEqual(await processIdentity(process.pid), first, "same PID and start date with a changed nonce must not match");
+  } finally { process.title = original; }
 });
 
 test("real CLI wait: a fresh Desktop turn after idle awaiting an answer wakes the background command", { timeout: 20000 }, async t => {

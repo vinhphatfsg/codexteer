@@ -518,6 +518,7 @@ export const topics = {
       "同じCODEX_HOME・host・projectは1オーケストレーターで扱う。guardは最も近いClaude/Codex CLI親プロセスのpid・起動識別が一致するwaitだけを数える。所有者不明・旧版のwaitは許可に使わない。別セッションのwaitが生きていても停止は拒否し、重複waitはRECORD_BUSYのまま引継ぎを案内する。所有セッションでwaitを終了してから再開し、lock削除やcontrol stopで競合を迂回しない。",
       "guard --statusのstop_hook:configuredは直接Claude起動の設定印を検証できた状態。prompt生成・手動起動・Codex起動・検査不能はunverified。最初の報告で監視漏れを止める仕組みがない（有効なhookを確認できない）ことと、このtopicの設定例を伝える。手動設定はセッションの有効なhook一覧で確認する。ファイルの存在や設定印は実行中の無効化・信頼設定・継続上限を保証しない。",
       "guardは接続・sync・送信を行わず、stop_hook_activeでも条件を再確認する。ローカル状態の読取りやプロセス検査が不能ならsystemMessageで警告して停止を許す。ユーザーの中断・hook無効化・CLI側の継続上限は阻止できない。",
+      "自分のオーケストレーターを特定できない場合もPROJECT_GUARD_OWNER_UNVERIFIEDのsystemMessageで監視未確認を警告して停止を許す。別セッションのwaitを認めた状態とは区別する。hookとwaitを同じ対応CLIから実行し、親プロセスの経路を確認する。macOSのprocess_startは起動日時とcommandのSHA-256だけを保存し、prompt全文を含めない。旧形式のwaitは所有セッションで終了し、新しいCLIでwaitとhookを揃える。",
       "未解決の質問・承認・失敗は解消を完全な観測で確認するまで再掲する。429は再試行せず、取得済み結果とretry_after_msを返す。",
       "project prune --project IDで過去のsync履歴を整理する。最新sync・未提示初回結果・参照中の根拠は保持する。保存総量はCODEX_HOMEのhost namespaceごとに256 MiB、全文観測は1担当1回16 MiBまで。容量不足では省略保存せず拒否する。",
       "idleかつ最新turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ち。開始前idleや情報不足は未確認。検収待ちは全体の完了認定ではない。",
