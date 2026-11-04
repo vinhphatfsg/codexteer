@@ -105,6 +105,7 @@ export const topics = {
       "printf '%s\\n' '理由' '変更方針' | codexteer send <THREAD> -",
     ],
     notes: [
+      "ローカルの--new-turnは対象スレッド自身の権限設定を継承し、ホストの保存選択では上書きしない。Desktopの保存選択が読めなくても既存スレッドへの送信には影響しない。",
       "-- 以降はオプションとして解釈しない。--dry-runや--jsonも本文として送られる。本文の途中に置いた -- は本文に残る。",
       "-- より前の未知の--オプションや値のないオプションはOPTIONS_INVALID（Cloud・Desktop CloudはCLOUD_OPTIONS_INVALID）で拒否し、何も送らない。エラー文とerror.unknown_optionsがその語（先頭から3件、各40文字まで）を示す。",
       "--source・--kind・--evidence・--based-on・--supersedes・--expires-at・--checkpoint・--findingか--supervisorがあると本文の前に見出し行を付け、どれもなければ本文だけを送る。",

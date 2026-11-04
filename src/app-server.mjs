@@ -94,8 +94,10 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
   await subscribe(threadId);
   const resumed = await readSendState(client, threadId);
   if (resumed.status?.type !== "idle" || resumed.turns.some(turn => turn.status === "inProgress")) throw Object.assign(new Error("Task became active while resuming. Nothing was sent."), { code: "TASK_BUSY" });
-  await beforeSend?.(resumed, client);
   const clientUserMessageId = clientMessageId;
+  await beforeSend?.(resumed, client);
+  // Existing threads own their permission settings. Omit overrides so a host
+  // preference cannot broaden a thread that Desktop restricted separately.
   const accepted = await client.request("turn/start", { threadId, input, clientUserMessageId }, { mutation: true });
   if (typeof accepted?.turn?.id !== "string") throw new RpcFailure("App Server did not confirm a turn ID. Do not retry automatically.", { code: "PROTOCOL_ERROR", uncertain: true });
   return { turn_id: accepted.turn.id, client_message_id: clientUserMessageId };

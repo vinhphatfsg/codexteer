@@ -17,7 +17,7 @@ import { createStandaloneProjectThread } from "./standalone-create.mjs";
 const failure = (message, code = "CREATION_FAILED") => Object.assign(new Error(message), { code });
 
 export function creationOptions(options = {}) {
-  if (["cwd", "permissions", "sandbox", "approvalPolicy", "approvalsReviewer", "viaThread"].some(key => options[key] !== undefined)) throw failure("Native creation uses Desktop's project and permission settings. cwd/permission overrides and --via-thread are unsupported.", "INVALID_CREATION_OPTIONS");
+  if (["cwd", "permissions", "sandbox", "approvalPolicy", "approvalsReviewer", "viaThread"].some(key => options[key] !== undefined)) throw failure("Creation follows Desktop's project and saved permission selection. cwd/permission overrides and --via-thread are unsupported.", "INVALID_CREATION_OPTIONS");
   for (const key of ["title", "model"]) if (options[key] !== undefined && (typeof options[key] !== "string" || !options[key].trim())) throw failure(`${key} must not be empty.`, "INVALID_CREATION_OPTIONS");
   if (options.thinking !== undefined && !["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(options.thinking)) throw failure("Invalid --thinking.", "INVALID_CREATION_OPTIONS");
   const timeoutMs = options.timeoutMs ?? 120000;
