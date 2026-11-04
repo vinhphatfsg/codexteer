@@ -4,6 +4,9 @@
 
 ## 未リリース
 
+- `project guard`が自分のオーケストレーターを特定できない場合は、監視未確認の警告を返して停止を許します。Claude native installerの版番号付き実行パスを識別し、macOSのwait・所有者の起動識別はcommand全文の代わりにSHA-256を保存します。
+- オーケストレーターは受信セッションで`project guard --project ID --status --json`を使い、直接Claude起動のStop hook設定印を照合できます。本文だけの生成や手動起動など有効性が未確認の経路では、最初の報告で監視漏れとhookの設定方法を案内します。単一タスクの監督本文にも、質問・承認・URLの伝達後にwatchを再開する案内を追加しました。
+- `project guard`は自分のClaude/Codex CLIセッションに属する生存waitだけを認めます。同じCODEX_HOME・host・projectは1オーケストレーターで扱い、別セッションのwaitでは停止を許可せず、重複waitの`RECORD_BUSY`は所有セッションとの引継ぎを案内します。
 - `project wait --project ID [--timeout-ms N] [--json]`を追加しました。最後の完全なproject syncを基準に、新しいターン終了・質問・承認待ち・失敗、またはmembership変更を待ち、syncと同じsnapshotを返します。idleだけでは通知せず、timeoutと観測失敗を区別します。最新のwait結果はsyncの`wait_sync_token`で復元できます。
 - `project guard --project ID`を追加しました。未停止の担当（pausedを含む）がいて生存するwaitがなければ、Stop hookの停止拒否JSONを返します。プロセスの起動識別を確認し、異常終了したwaitを監視中と扱いません。Claude向け`orchestrate`はhookを起動設定へ追加し、生成本文は質問・承認・URLの伝達後もバックグラウンドwaitを続けるよう案内します。手動のClaude・Codex hook設定例と制約をオーケストレーション文書へ追加しました。
 

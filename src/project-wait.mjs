@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, readlink } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
@@ -9,6 +9,7 @@ import { listManagedThreads } from "./project-index.mjs";
 import { getSupervisor } from "./supervision.mjs";
 import { readRecord, listRecords, writeRecord, removeRecord, withStoreLock } from "./store.mjs";
 import { shellArgument } from "./prompt-command.mjs";
+import path from "node:path";
 
 const exec = promisify(execFile);
 const failure = (message, code = "PROJECT_WAIT_INVALID") => Object.assign(new Error(message), { code });
@@ -17,7 +18,10 @@ const failed = new Set(["failed", "systemError"]);
 
 // Include boot identity/start ticks on Linux. On macOS ps supplies the process
 // start date and a per-wait nonce in its process title, so even PID reuse within
-// one second cannot match. Stopped/zombie processes cannot count as observing.
+// one second cannot match. Hash command text before returning an identity: an
+// agent's argv can contain the entire private orchestration prompt. Equality
+// still includes the command/nonce without copying it into local records.
+// Stopped/zombie processes cannot count as observing.
 export async function processIdentity(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   try {
@@ -29,12 +33,86 @@ export async function processIdentity(pid) {
     if (process.platform === "darwin") {
       const { stdout } = await exec("/bin/ps", ["-p", String(pid), "-o", "lstart=", "-o", "stat=", "-o", "command="], { timeout: 2000, env: { ...process.env, LC_ALL: "C" } });
       const match = stdout.trim().match(/^(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(\S+)\s+(.+)$/);
-      return !match || /[ZXT]/.test(match[2]) ? null : `${match[1].replace(/\s+/g, " ")}:${match[3]}`;
+      return !match || /[ZXT]/.test(match[2]) ? null
+        : `${match[1].replace(/\s+/g, " ")}:sha256:${createHash("sha256").update(match[3]).digest("hex")}`;
     }
     throw failure("Project wait process identity is supported on macOS and Linux.", "PROJECT_WAIT_IDENTITY_UNAVAILABLE");
   } catch (error) {
     if (["ENOENT", "ESRCH"].includes(error.code) || error.code === 1) return null;
     throw error;
+  }
+}
+
+// Use the nearest agent ancestor, never a shared terminal/shell or project ID.
+// comm identifies native CLIs; the first script argument covers Node installs.
+// Official native install layout: https://code.claude.com/docs/en/setup#auto-updates
+const nativeClaude = executable => /(?:^|\/)\.local\/share\/claude\/versions\/\d+\.\d+\.\d+$/.test(executable);
+function agentProcess({ executable, command }) {
+  const words = command.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+  const args = words.map(word => word.replace(/^["']|["']$/g, ""));
+  // A shared App Server hosts multiple threads; it is not one CLI session.
+  const beforePrompt = args.slice(0, args.indexOf("--") < 0 ? args.length : args.indexOf("--"));
+  if (path.basename(executable) === "codex" && beforePrompt.includes("app-server")) return false;
+  if (["claude", "codex"].includes(path.basename(executable)) || nativeClaude(executable)) return true;
+  if (!/^node(?:js)?$/.test(path.basename(executable))) return false;
+  const script = words[1]?.replace(/^["']|["']$/g, "") ?? "";
+  if (/(?:^|\/)codex(?:\.m?js)?$/.test(script)) return !beforePrompt.includes("app-server");
+  return /(?:^|\/)claude(?:\.m?js)?$/.test(script) || /\/@anthropic-ai\/claude-code\/cli\.js$/.test(script);
+}
+
+export async function processAncestors() {
+  const ancestors = [], visited = new Set();
+  let pid = process.ppid;
+  while (pid > 1 && !visited.has(pid) && ancestors.length < 64) {
+    visited.add(pid);
+    let ppid, executable, command;
+    if (process.platform === "linux") {
+      try {
+        const [stat, cmdline, comm] = await Promise.all([readFile(`/proc/${pid}/stat`, "utf8"), readFile(`/proc/${pid}/cmdline`, "utf8"), readFile(`/proc/${pid}/comm`, "utf8")]);
+        ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+        executable = comm.trim(); command = cmdline.split("\0").filter(Boolean).map(word => JSON.stringify(word)).join(" ");
+        // Linux comm holds only the basename of a version-named native binary.
+        if (/^\d+\.\d+\.\d+$/.test(executable)) executable = await readlink(`/proc/${pid}/exe`);
+      } catch (error) { if (["ENOENT", "ESRCH"].includes(error.code)) break; throw error; }
+    } else if (process.platform === "darwin") {
+      // Keep comm last: macOS truncates non-final ps columns, including paths.
+      const { stdout } = await exec("/bin/ps", ["-p", String(pid), "-o", "ppid=", "-o", "comm="], { timeout: 2000 });
+      const match = stdout.trim().match(/^(\d+)\s+(.+)$/);
+      if (!match) break;
+      ppid = Number(match[1]); executable = match[2]; command = "";
+      if (/^(?:node(?:js)?|codex)$/.test(path.basename(executable))) {
+        command = (await exec("/bin/ps", ["-p", String(pid), "-o", "args="], { timeout: 2000 })).stdout.trim();
+      }
+    } else throw failure("Orchestrator process inspection requires macOS or Linux.", "PROJECT_WAIT_IDENTITY_UNAVAILABLE");
+    ancestors.push({ pid, ppid, executable, command }); pid = ppid;
+  }
+  return ancestors;
+}
+
+export async function orchestratorIdentity(dependencies = {}) {
+  const ancestors = await (dependencies.processAncestors ?? processAncestors)();
+  const owner = ancestors.find(agentProcess);
+  if (!owner) return null;
+  const start = await (dependencies.processIdentity ?? processIdentity)(owner.pid);
+  return start ? { pid: owner.pid, process_start: start } : null;
+}
+
+export async function projectGuardStatus(projectId, dependencies = {}) {
+  if (typeof projectId !== "string" || !projectId.trim()) throw failure("Use project guard --project ID --status.");
+  try {
+    let marker;
+    try { marker = JSON.parse((dependencies.env ?? process.env).CODEXTEER_STOP_GUARD ?? "null"); } catch { /* Unverified inherited value. */ }
+    if (marker?.project_id !== projectId || !Number.isSafeInteger(marker.pid) || marker.pid <= 0
+      || typeof marker.process_start !== "string" || !marker.process_start) return { project_id: projectId, stop_hook: "unverified" };
+    const ancestors = await (dependencies.processAncestors ?? processAncestors)();
+    const launcherIndex = ancestors.findIndex(p => p.pid === marker?.pid);
+    // A marker inherited by a nested or unrelated agent is not its hook setting.
+    const agents = launcherIndex > 0 ? ancestors.slice(0, launcherIndex).filter(agentProcess) : [];
+    const configured = agents.length === 1
+      && await (dependencies.processIdentity ?? processIdentity)(marker.pid) === marker.process_start;
+    return { project_id: projectId, stop_hook: configured ? "configured" : "unverified" };
+  } catch (error) {
+    return { project_id: projectId, stop_hook: "unverified", error: error.code ?? "PROCESS_INSPECTION_FAILED" };
   }
 }
 
@@ -78,7 +156,8 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
     try {
       const start = await identity(process.pid);
       if (!start) throw failure("Cannot verify this wait process's start identity.", "PROJECT_WAIT_IDENTITY_UNAVAILABLE");
-      const record = { schema: 1, project_id: projectId, pid: process.pid, process_start: start, created_at: new Date().toISOString() };
+      const owner = await (dependencies.orchestratorIdentity ?? (() => orchestratorIdentity(dependencies)))();
+      const record = { schema: 1, project_id: projectId, pid: process.pid, process_start: start, owner, created_at: new Date().toISOString() };
       await writeRecord("project-waits", key, record, storage);
       try {
         // Separate from reviewed cursors: retain observed clear/reappearance
@@ -109,7 +188,10 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
         }
       } finally { await removeRecord("project-waits", key, storage); }
     } finally { process.title = originalTitle; }
-  }, storage);
+  }, storage).catch(error => {
+    if (error.code === "RECORD_BUSY") error.message = "Project wait is already owned by another operation. Use one orchestrator per CODEX_HOME, host and project. Do not adopt another session's wait or remove its lock; have the owning session finish/cancel its wait and hand off before retrying.";
+    throw error;
+  });
 }
 
 export async function guardProject(projectId, dependencies = {}) {
@@ -121,11 +203,15 @@ export async function guardProject(projectId, dependencies = {}) {
     const unfinished = [];
     for (const member of members) if ((await getSupervisor(member.thread_id, storage))?.state !== "stopped") unfinished.push(member.thread_id);
     if (!unfinished.length) return {};
-    for (const wait of await listRecords("project-waits", storage)) {
-      if (wait?.schema === 1 && wait.project_id === projectId && typeof wait.process_start === "string"
-        && wait.process_start && await identity(wait.pid) === wait.process_start) return {};
+    const waits = (await listRecords("project-waits", storage)).filter(wait => wait?.schema === 1
+      && wait.project_id === projectId && typeof wait.process_start === "string" && wait.process_start);
+    const owner = await (dependencies.orchestratorIdentity ?? (() => orchestratorIdentity(dependencies)))();
+    if (!owner) return { systemMessage: "Project guard cannot identify the calling orchestrator session (PROJECT_GUARD_OWNER_UNVERIFIED); stop is allowed. Monitoring is unverified. Run the hook and project wait from the same supported Claude/Codex CLI session and inspect its parent process chain before relying on monitoring. No other session's wait has been accepted." };
+    for (const wait of waits) {
+      if (owner && wait.owner?.pid === owner.pid && wait.owner.process_start === owner.process_start
+        && await identity(wait.pid) === wait.process_start) return {};
     }
-    return { decision: "block", reason: `Managed work remains unfinished (${unfinished.length}, including paused work). Using the same saved CLI or PATH command, CODEX_HOME and host/connection route that invoked this hook, run project wait --project ${shellArgument(projectId)} --json as a background task with completion notification; read its result and rearm it after every exit, including after relaying questions, approvals or URLs. After acceptance, use project control stop --project ${shellArgument(projectId)} --work THREAD (or --all when all work is accepted). To end orchestration at the user's request, stop its managed controls explicitly.` };
+    return { decision: "block", reason: `Managed work remains unfinished (${unfinished.length}, including paused work). This session has no verified live wait. Use one orchestrator per CODEX_HOME, host and project; another session's wait cannot notify you. On RECORD_BUSY, arrange handoff with the owning session instead of adopting its wait or deleting its lock. Using the same saved CLI or PATH command, CODEX_HOME and host/connection route that invoked this hook, run project wait --project ${shellArgument(projectId)} --json from this agent session as a background task with completion notification; read its result and rearm it after every exit, including after relaying questions, approvals or URLs. After acceptance, use project control stop --project ${shellArgument(projectId)} --work THREAD (or --all when all work is accepted). To end orchestration at the user's request, stop its managed controls explicitly.` };
   } catch (error) {
     // Hook failures must be visible but must not trap the user behind corrupt
     // local state. No backend connection or project sync is needed by guard.

@@ -45,8 +45,10 @@ ${ORCHESTRATED_SUPERVISION_POLICY}
 独立した仕事だけを並行させ、ビルド・画面・DB・設定などの共有資源は順番を管理します。resourceは協調用リースで、OSの強制ロックではありません。${cloudCommand ? "Desktop Cloud環境の再公開も共有資源として順番を管理します。実行中の担当へ影響した運用観測と、未確認の条件・保証を区別し、影響がないと仮定しません。" : ""}`,
     `4. 頼む・見る・言う・止める
 ${usePathCli ? "PATHとCODEX_HOMEを同じ対象プロファイルで維持します。" : "保存した起動ファイルとCLI、元のNodeと版、CODEX_HOMEを維持します。編集・移動・削除や別CLIへの自動切替をせず、使用不能なら理由を報告します。"}
-コマンドの接続指定を付け直さず、そのまま使います。<PROJECT>はwork startに使う同じproject IDまたはnamespace、<CHECKOUT>は方針を読むローカルcheckoutです。sharedの作成先は実在のDesktop project ID・完全一致名とrootsを事前に照合します。各placeholderは実際の値をシェル引数として引用し、発注本文をシェルコードとして評価しません。
+コマンドの接続指定を付け直さず、そのまま使います。<PROJECT>は冒頭の対象projectと同じ指定文字列を全操作で使い、照合後もIDと名前を混用しません。<CHECKOUT>は方針を読むローカルcheckoutです。sharedの作成先は実在のDesktop project ID・完全一致名とrootsを事前に照合します。各placeholderは実際の値をシェル引数として引用し、発注本文をシェルコードとして評価しません。
 ${command} --version
+${command} project guard --project ${shellArgument(project)} --status --json
+受信した自分のセッションで最初にStop hookの状態を確認します。stop_hook:configuredは、このprojectの直接起動でhookを設定した印と親プロセスの照合です。本文生成だけでは起動経路は分かりません。unverifiedまたは検査不能なら、最初の報告で「監視漏れを止める仕組みがない（有効なStop hookを確認できない）」ことと、${command} help project の設定例を伝えます。手動設定済みならセッションの有効なhook一覧で同じproject・CLI・経路のguardとhook無効化の有無を確認し、設定ファイルの存在だけでは有効としません。configuredでも実行中の無効化・信頼設定・継続上限までは保証しません。
 ${command} help work --json
 ${command} projects list --json
 ${canStart ? `${command} work start --project <PROJECT> --root <CHECKOUT> --title <TITLE> - --json < <ORDER-FILE>` : "このhost経路ではwork startは未対応です。新規作成が必要ならlocal Desktopのプロファイルで本文を生成し直し、自動で別経路へ切り替えません。"}
@@ -57,6 +59,7 @@ ${command} project sync --continue <TOKEN> --offset <OFFSET> --event-offset <EVE
 ${command} project event <EVENT-TOKEN> --json
 未完了の担当（pausedも含む）がいる間は、次を終了通知の届くバックグラウンドタスクとして動かし続けます。質問・承認・URLをユーザーへ伝えた後も監視を続け、waitが返ったら結果と続きのsyncを読み、検収・対応して再びwaitを開始します。timeout・エラーの終了後も監視があると扱いません。
 ${command} project wait --project <PROJECT> --json
+同じCODEX_HOME・host・projectは1オーケストレーターで扱います。guardは自分のセッションのwaitだけを数えます。RECORD_BUSYなら他セッションのwaitを引き継がず、所有セッションでwaitを終了して引継ぎを調整し、阻害要因を報告します。lock削除や担当のcontrol stopを競合回避に使いません。
 ${command} work tell <THREAD> - --json < <INSTRUCTION-FILE>
 現在のユーザー決定と未完了事項に基づいて指示します。新しい根拠のない同じ介入を繰り返さず、質問・承認は本人へ伝え、代理で答えません。送信前の照合をCLIに任せ、不完全なsyncやattention不明の拒否を迂回しません。検収待ちでもidleなら--new-turnが必要です。同じ委任が未完了の場合だけ使い、検収待ちを全体の完了認定と取り違えません。unknownは読み取り照合だけを行い、自動再送しません。
 ${command} project control pause --project <PROJECT> --work <THREAD> --json

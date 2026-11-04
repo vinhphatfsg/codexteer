@@ -9,6 +9,7 @@ import { launchAgent } from "./agent-launch.mjs";
 import { targetContext, targetHost, hostFields } from "./target.mjs";
 import { shellArgument } from "./prompt-command.mjs";
 import { readFile } from "node:fs/promises";
+import { processIdentity } from "./project-wait.mjs";
 
 export async function claudeGuardArguments(agentArgs, command, project) {
   const args = [...agentArgs], settingsArgs = args.map((arg, i) => arg === "--settings" || arg.startsWith("--settings=") ? i : -1).filter(i => i >= 0);
@@ -50,5 +51,14 @@ export async function orchestrateAgent(project, goal, { agent = "claude", agentA
   if (!deployment) await prepareCodexHome(codexHome());
   // Session settings add this hook without editing the checkout's .claude files.
   const args = agent === "claude" ? await claudeGuardArguments(agentArgs, command, project) : agentArgs;
-  return launchAgent(agent, args, prompt);
+  const env = { ...process.env };
+  delete env.CODEXTEER_STOP_GUARD;
+  if (agent === "claude") {
+    // An unavailable OS inspection leaves status unverified; it must not
+    // prevent an otherwise supported interactive CLI from starting.
+    let start;
+    try { start = await processIdentity(process.pid); } catch { /* Reported by guard --status. */ }
+    if (start) env.CODEXTEER_STOP_GUARD = JSON.stringify({ project_id: project, pid: process.pid, process_start: start });
+  }
+  return launchAgent(agent, args, prompt, { env });
 }
