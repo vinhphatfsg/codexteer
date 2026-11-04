@@ -126,3 +126,14 @@ test("host routing, UI backend, ambiguous links and invalid IDs keep their exist
     return true;
   });
 });
+
+test("an option value documented in help is never read as the routing target", async () => {
+  const { topics } = await import("../src/help.mjs");
+  const { selectedCloudInvocation } = await import("../src/task-id.mjs");
+  const options = new Set();
+  for (const topic of Object.values(topics)) for (const line of topic.usage ?? []) {
+    for (const match of line.matchAll(/(--[a-z][a-z-]*)[ =]([A-Z][A-Z_|-]*|N)\b/g)) options.add(match[1]);
+  }
+  assert.ok(options.has("--event-offset") && options.has("--work"));
+  for (const option of options) assert.equal(selectedCloudInvocation([option, cloud, "read", local]), false, option);
+});
