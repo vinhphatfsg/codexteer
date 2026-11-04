@@ -2,28 +2,22 @@
 
 公開日は日本時間です。
 
-## 0.22.0 — 未公開
+## 0.22.0 — 2026-11-04公開
 
-- sharedとDesktop Cloudの初回観測は履歴の先頭を証明できない場合にhistory gapとして止まり、startもsyncもcursorを確定しません。過去の根拠不足attentionは完全な成功観測後に履歴上の注意へ分け、検収待ちの分類を妨げません。
-- `project prune --project ID`で過去のsync履歴と提示済み初回全文の重複を整理できます。最新sync・未提示初回結果・参照中の根拠は保持します。保存対象の総量はhost namespaceごとに256 MiB、1担当の全文観測は1回16 MiBまでで、不足時は全文を省略せず拒否します。保持期限は設けず、整理で削除した古いtokenは取得不能になります。
-- `help thread`と同梱skillの新規Cloud担当の案内をDesktop Cloudへ統一しました。
+オーケストレーターがmanaged projectの担当を立ち上げ（`work start`）、まとめて把握し（`project sync`）、指示し（`work tell`）、止める（`project control`）4操作を追加しました。役割の指定は設けず、担当範囲はrepository rootの`CODEXTEER.md`と発注で決めます。
 
-- managed threadへの低水準`send`は監督IDの有無によらず拒否し、介入は`work tell`に限定します。配送直前に公開イベントの追加・更新と現在の質問・承認状態を再照合します。
-- `project sync`は完全な最新観測で消えた待機フラグを解消し、質問と失敗の証拠を別々に保持します。公開イベントは要約前の全文を保存し、コマンド出力も`project event`で取得できます。`work start`の初回観測も次のsyncで提示します。
-- `project control stop`は今後の監督による介入を止めます。受付済みの担当の実行・編集・外部操作を終了する操作ではありません。
+- `work start`を追加しました。`CODEXTEER.md`を原文のまま発注書へ入れ、Desktop sharedまたはDesktop Cloudで作成・managed index登録・監督登録・初回観測までを一度に行います。段階を保存して同じ作成を再送せず、作成結果が不明なときは読み取り照合だけを行います。Desktop Cloudはenvironment configurationと明示したローカルcheckoutを使い、調整用projectへ登録します。Web Cloud（`--connection cloud`）の経路は提供しません。
+- `project sync`を追加しました。managed projectの全担当を前回cursorから差分取得し、動作中・対応が必要・検収待ち・未確認へ分類します。直近turnの完了を証明できるidleの担当は検収待ちとし、開始前idleと区別します。途中コマンドの非ゼロ終了は担当の失敗と扱いません。未解決の質問・承認・失敗は完全な観測で解消を確認するまで再掲し、history gap・429・不完全取得・出力省略を明示します。byte予算を超える結果はcontinuationで分割します。
+- `project event TOKEN`で、syncが要約した公開イベントとコマンド出力の全文を取得できます。`work start`の初回観測も次のsyncで提示します。
+- `work tell`を追加しました。最新のcomplete project syncを基点に送信直前まで再照合し、新しいイベント、質問・承認待ち、attention不明、history gap、並行sync、membership変更では送信しません。finding・source・kind・監督IDは内部で扱い、unknownと同一意図を自動再送しません。
+- `project control pause|stop|resume`で個別（`--work`）または全担当（`--all`）を制御できます。部分失敗とbusyを明示し、stop済みの担当は再開しません。stopは今後の監督による介入を止める操作で、受付済みの担当の実行・編集・外部操作は終了しません。停止済みの担当へのwork tell・work startは、ユーザーの明示的な指示を受けてから新しい担当として`work start`するよう案内します。
+- `project prune --project ID`で過去のsync履歴と提示済み初回全文の重複を整理できます。最新sync・未提示初回結果・参照中の根拠は保持します。保存対象の総量はhost namespaceごとに256 MiB、1担当の全文観測は1回16 MiBまでで、不足時は全文を省略せず拒否します。保持期限は設けず、整理で削除した古いtokenは取得できなくなります。
+- 初回観測で履歴の先頭を証明できない場合、`work start`と`project sync`はhistory gapとして止まり、cursorを確定しません。
 
-- `project sync`は直近turnの完了と入力待ちを証明できる担当を検収待ちに分類し、開始前idleと区別します。同じ委任を`work tell --new-turn`で続け、activeになれば動作中へ戻ります。
+互換性の変更:
 
-- `project sync`は途中コマンドの非ゼロ終了を担当の失敗と扱わず、turnやbackendの失敗と区別します。担当への発注では、前提への異論・改善案と根拠を求めます。
-
-- `project control pause|stop|resume`で個別または全担当を制御できます。部分失敗とbusyを明示し、stop済みの担当は再開しません。オーケストレーター本文とhelpを4操作へ整理し、担当範囲を方針と発注から決め、確認済みの道具でDesktop Cloudとlocal Desktopを選びます。
-
-- `project sync`の並行実行によるcursorの巻き戻りを防ぎ、未解決attentionの根拠をページをまたいで保持します。担当内のイベントもcontinuationで分割してbyte予算を守り、不正な観測ページや停止済み担当の自動再登録を拒否します。
-
-- `work tell`を追加しました。最新のcomplete project syncから送信直前までを再照合し、質問・承認待ち、attention不明、history gap、並行sync、membership変更では送信しません。finding・source・kind・監督IDを内部化し、unknownと同一意図を自動再送しません。
-- managed threadの外部効果を共通gateへ集約しました。受付確認できないDesktop UI sendとpaired `command/exec`は拒否し、方針ファイルの差し替え、作成照合の不一致、stopped supervisorの自動再登録をfail closedにします。
-- `project sync`を追加しました。managed projectの全担当を前回cursorから公平に差分取得し、動作中・対応が必要・検収待ち・未確認へ分類します。未解決attentionを再掲し、history gap・429・不完全取得・出力省略を明示します。長文は`project event`で全文取得できます。
-- `work start`を追加しました。repository rootの`CODEXTEER.md`を原文のまま発注書へ入れ、Desktop sharedまたはDesktop Cloudで作成・managed index登録・監督登録・初回観測までを一度に行います。段階を保存して同じ作成を再送せず、作成結果が不明なときは読み取り照合だけを行います。Desktop Cloudはenvironment configurationと明示したローカルcheckoutを使い、調整用projectへ登録します。work startのWeb Cloud経路は提供しません。
+- managed threadへの低水準`send`は監督IDの有無によらず`MANAGED_INTERVENTION_REQUIRED`で拒否し、介入は`work tell`に限定します。受付確認できない`--backend ui`の送信（`MANAGED_UI_UNSUPPORTED`）とpaired `command/exec`も拒否します。managed threadでない担当の`send`は従来どおりです。
+- `orchestrate prompt`の本文を4操作へ整理し、固定の役割分担を削除しました。担当範囲は方針と発注から決め、Cloudの担当はDesktop Cloudで立ち上げます。0.21.0で追加したWeb Cloud優先の案内は削除しました。`help`の入口も4操作から選べる構成にし、`help thread`と同梱skillの新規Cloud担当の案内をDesktop Cloudへ統一しました。低水準のWeb Cloudコマンドは引き続き利用できます。
 
 ## 0.21.0 — 2026-11-03公開
 
