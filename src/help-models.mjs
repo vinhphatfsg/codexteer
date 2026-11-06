@@ -12,7 +12,7 @@ export const topics = {
     examples: ["codexteer --connection desktop-cloud models select", "codexteer --connection desktop-cloud models list --json",
       "codexteer --connection desktop-cloud models show --json", "codexteer --connection desktop-cloud models set --model <MODEL> --thinking <EFFORT> --json"],
     notes: [
-      "select（models だけでも同じ）は対話端末専用。Enter は表示された現在値、q・Ctrl-C・EOF は中止。select に --json は付けない。",
+      "select（models だけでも同じ）は対話端末専用。Enter は表示された現在値、q・Ctrl-C・EOF は中止。中止時は設定を変えず、短い案内を表示して正常終了する。select に --json は付けない。",
       "CODEX_HOME/codex-steer/settings/desktop-cloud-model.json に保存する。保存完了後の新しい work start/thread create が直ちに読み取る。再起動不要。",
       "作成引数 → 保存値 → Cloud の既定値の順。モデルだけ上書きした場合、保存モデルと異なればそのモデルの既定エフォートを使う。",
       "初回ターンには model/effort を明示する。既存スレッド、通常の送信・継続、作成開始済みの同じ発注の再実行には新しい保存値を適用しない。",

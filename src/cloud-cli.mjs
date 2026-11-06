@@ -352,7 +352,11 @@ async function desktopCloudCommands(command, args, { supervisor, output, bound, 
       exact(args, 0);
       if (action === "select") {
         if (json) throw failure("models select is interactive. Use models list --json and models set --model MODEL --thinking EFFORT --json.");
-        await pickCloudModel();
+        try { await pickCloudModel(); }
+        catch (error) {
+          if (error.code !== "DESKTOP_CLOUD_MODEL_CANCELLED") throw error;
+          process.stdout.write("\n選択を中止しました。設定は変更していません。\n");
+        }
       } else if (action === "list") output("models.list", { models: await desktopCloudModels(), saved: await readCloudModelDefaults() });
       else if (action === "show") output("models.show", { saved: await readCloudModelDefaults(), applies_to: "new-desktop-cloud-threads" });
       else if (action === "reset") output("models.reset", await resetCloudModelDefaults());

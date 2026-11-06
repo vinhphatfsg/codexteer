@@ -76,14 +76,16 @@ TLA2TOOLS_JAR=/absolute/path/to/tla2tools.jar npm run test:models-formal
 - 最終コードで `npm run check` 成功、`npm test` は815件中813成功・失敗0・既存の opt-in 2件スキップ。配布 tarball と npx 経由の新しいヘルプ・保存設定の読取りも含みます。
 - JavaScript テストはページング、不正カタログ、保存値の再読込み、未対応ペアの拒否、上書きの優先順位、原子的保存、中止、作成要求、再実行、受付不明、照合時のペア不一致を確認します。
 - 実 CLI を隔離 CODEX_HOME とテスト専用 Cloud サービスで起動し、保存を切り替えた直後の `thread create` と `work start` が、異なる選択を `thread/start` と初回 `turn/start` へ渡すことを検証しました。同じ発注を繰り返しても追加の作成・送信はありません。
-- 対話端末でモデルとエフォートの選択・保存、Ctrl-C 中止後の既存値保持を確認しました。テスト専用ローダーは本番の接続先設定として提供しません。
+- 対話端末でモデルとエフォートの選択・保存、中止後の既存値保持を確認しました。`q`・Ctrl-C・EOF の3経路はいずれも「選択を中止しました。設定は変更していません。」と表示し、エラーや不要な使い方案内を出さず正常終了します。モデル選択中とエフォート選択中を含む PTY 試験で、保存ファイルのバイト列が変わらないことも確認しました。テスト専用ローダーは本番の接続先設定として提供しません。
 - 新しい `models list` を実 Cloud に対して読み取り実行し、9モデルと各モデルの選択肢を取得できました。公式 CLI の生成スキーマでも `TurnStartParams.model` と `effort` がそのターン以後に適用される契約を確認しました。
 - 2026-11-07 JST、変更をローカルの通常の `codexteer` コマンドへ反映し、実 Cloud の新規スレッドでも以下の受入試験を完了しました。作成コマンドに `--model` / `--thinking` は指定せず、両方とも `model_source` / `thinking_source` が `saved` であることを確認しました。
 
 | 作成経路 | 保存した組合せ | Cloud から読み直した値 | 初回ターン |
 | --- | --- | --- | --- |
-| `thread create` | `gpt-6-astra` / `max` | `thread.model = gpt-6-astra`, `thread.reasoningEffort = max` | `completed`, `error = null` |
-| `models set` 直後の `work start` | `gpt-6.1-terra` / `high` | `thread.model = gpt-6.1-terra`, `thread.reasoningEffort = high` | `completed`, `error = null` |
+| `thread create` | モデルA / エフォートA | `thread.model` / `thread.reasoningEffort` が保存した組合せと一致 | `completed`, `error = null` |
+| `models set` 直後の `work start` | モデルB / エフォートB | `thread.model` / `thread.reasoningEffort` が保存した組合せと一致 | `completed`, `error = null` |
+
+モデルAとB、エフォートAとBはそれぞれ異なります。アカウントの実カタログから選んだ具体名は公開記録では匿名化し、照合に使った実値はローカルの非公開証跡に保持しています。
 
 実 Cloud の `thread/read` と `thread/turns/list` で独立に照合しました。各スレッドの履歴は初回ターン1件だけで、指定した確認文字列の返答があり、ツール実行はありませんでした。モデル自身の自己申告やローカルの作成レシートだけを判定根拠にはしていません。Desktop の再起動なしで、保存後の次の CLI 呼出しに設定切替が反映され、設定復元後も既存の各スレッドは元の組合せを保持しました。
 
