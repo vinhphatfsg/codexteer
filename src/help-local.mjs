@@ -82,6 +82,7 @@ export const topics = {
       { need: "Cloudタスクの記録済み差分を見る", command: "help diff" },
       { need: "Desktop Cloud（durable_ ID）を使う", command: "help desktop-cloud" },
       { need: "Desktop Cloudの実行環境を一覧する", command: "help environments" },
+      { need: "Cloudの既定モデルとエフォートを選ぶ", command: "help models" },
       { need: "別ホスト（hostId付きリンク）のプロジェクト・タスクを扱う", command: "help remote" },
       { need: "Remote Controlで既存のactiveターンへ指示する", command: "help remote-control" },
       { need: "codexteer専用の端末鍵を登録・ペアリングする", command: "help remote-device" },
@@ -531,12 +532,13 @@ export const topics = {
   work: {
     title: "managed担当を開始し、complete syncを基点に安全に指示する",
     when: "方針付き担当を立ち上げるとき、またはproject syncで確認済みの担当へcursor・finding・監督IDを手渡さず指示するとき。",
-    usage: ["work start --project ID|NAME --title TITLE [--root PATH] <WORK-ORDER>|-", "work tell THREAD [--sync-token TOKEN] [--new-turn] <INSTRUCTION>|-", "--connection desktop-cloud work start --project NAME --environment ID|NAME --title TITLE --root PATH <WORK-ORDER>|-"],
+    usage: ["work start --project ID|NAME --title TITLE [--root PATH] <WORK-ORDER>|-", "work tell THREAD [--sync-token TOKEN] [--new-turn] <INSTRUCTION>|-", "--connection desktop-cloud work start --project NAME --environment ID|NAME --title TITLE --root PATH [--model MODEL] [--thinking EFFORT] <WORK-ORDER>|-"],
     options: [
       { name: "--project", text: "sharedではDesktopのproject ID/完全一致名。Desktop Cloudではcodexteer側の調整用namespace。" },
       { name: "--title", text: "担当を識別する短い題名。役割の種類ではない。" },
       { name: "--root", default: "現在のディレクトリ", text: "CODEXTEER.mdを読むローカルcheckout。Desktop Cloudでは明示必須。" },
       { name: "--environment", text: "Desktop Cloudの公開済みenvironment configurationのIDまたは完全一致名。" },
+      { name: "--model MODEL / --thinking EFFORT", text: "Desktop Cloud専用。models selectの保存値を今回の作成だけ上書きする。同じ発注の再実行では変更不可。" },
       { name: "--sync-token", text: "通常は省略する。並行syncの競合時だけ確認済みの最新tokenを指定する。" },
       { name: "--new-turn", text: "検収待ちでもidleなら必要。同じ委任の未完了作業を続けるidle/terminal担当だけで新しいturnを開始する。" },
     ],

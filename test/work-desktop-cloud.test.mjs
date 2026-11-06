@@ -15,6 +15,7 @@ import { getSupervisor, registerSupervisor, controlSupervisor } from "../src/sup
 import { syncProject } from "../src/project-sync.mjs";
 import { tellWork } from "../src/work-tell.mjs";
 import { repositorySource } from "../src/repository-source.mjs";
+import { resolveCloudModelSelection, setCloudModelDefaults } from "../src/desktop-cloud-models.mjs";
 
 const uuid = "aaaaaaaa-aaaa-4aaa-8aaa-000000000009", ID = `durable_${uuid}`, ENV = "fixture~asenvcfg_work";
 const sha = s => createHash("sha256").update(s).digest("hex");
@@ -25,7 +26,7 @@ async function fixture(t) {
   const state = { turns: [], flags: [], environment: ENV, status: "idle", lost: false, missing: false, calls: [] };
   const rpc = { close() {}, async request(method, params) {
     state.calls.push({ method, params });
-    if (method === "model/list") return { data: [{ model: "neutral-default", isDefault: true }] };
+    if (method === "model/list") return { data: [{ model: "neutral-default", isDefault: true, defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "high" }] }] };
     if (method === "thread/start" && state.lostCreate) throw Object.assign(new Error("creation receipt lost"), { uncertain: true });
     if (method === "thread/start") return { thread: { id: uuid } };
     if (method === "thread/name/set") return {};
@@ -48,13 +49,32 @@ async function fixture(t) {
   const transport = { ...storage, connect, environments };
   const read = async (id, options) => readSnapshot(await fetchThread(await connect(), id), options);
   const deps = { storage, resolveEnvironment: async selector => { assert.ok([ENV, "Fixture"].includes(selector)); return { id: ENV, name: "Fixture" }; },
-    create: ({ environmentConfigId, prompt, title, attemptId }) => createDesktopCloudTask(environmentConfigId, prompt, { title, attemptId }, transport),
+    resolveModelSelection: options => resolveCloudModelSelection(options, transport),
+    create: ({ environmentConfigId, prompt, title, attemptId, modelSelection }) => createDesktopCloudTask(environmentConfigId, prompt, { title, attemptId, modelSelection }, transport),
     reconcile: record => reconcileDesktopCloudCreation(record, transport), read };
   const input = { project: "coordination-only", title: "tests", order: "Report a focused result.", root, environment: "Fixture", connection: "desktop-cloud" };
   return { home, root, policy, state, storage, transport, read, deps, input };
 }
 const creates = f => f.state.calls.filter(c => c.method === "thread/start").length;
 const deliveries = f => f.state.calls.filter(c => ["turn/start", "turn/steer"].includes(c.method)).length;
+
+test("new work reads saved defaults immediately and a reserved order keeps its original selection across changes", async t => {
+  const f = await fixture(t); let paused = false;
+  await setCloudModelDefaults({ model: "neutral-default", thinking: "high" }, f.transport);
+  f.deps.hook = async boundary => { if (!paused && boundary === "attempt_saved") { paused = true; throw Object.assign(Error("pause"), { code: "INTERRUPTED" }); } };
+  await assert.rejects(startWork(f.input, f.deps), { code: "INTERRUPTED" });
+  await setCloudModelDefaults({ model: "neutral-default", thinking: "low" }, f.transport);
+  const result = await startWork(f.input, f.deps);
+  assert.equal(result.model_selection.thinking, "high");
+  assert.equal(f.state.calls.find(c => c.method === "turn/start").params.effort, "high");
+  await startWork(f.input, f.deps); assert.equal(creates(f), 1); assert.equal(deliveries(f), 1);
+  await assert.rejects(startWork({ ...f.input, thinking: "low" }, f.deps), { code: "WORK_START_CONFLICT" });
+  // A separate new order resolves the newly saved value before allocation.
+  let resolved;
+  f.deps.hook = async (boundary, record) => { if (boundary === "attempt_saved") { resolved = record.model_selection; throw Object.assign(Error("pause"), { code: "INTERRUPTED" }); } };
+  await assert.rejects(startWork({ ...f.input, title: "next worker" }, f.deps), { code: "INTERRUPTED" });
+  assert.equal(resolved.thinking, "low"); assert.equal(creates(f), 1);
+});
 
 test("Desktop Cloud work start pins configuration, policy bytes and provenance without Desktop project assignment", async t => {
   const f = await fixture(t);
@@ -95,7 +115,7 @@ test("unknown initial delivery reconciles stored prompt read-only, and missing h
   f.state.missing = true; await assert.rejects(startWork(f.input, f.deps), { code: "THREAD_NOT_FOUND" });
   f.state.missing = false; assert.equal((await startWork(f.input, f.deps)).stage, "observed");
   assert.equal(creates(f), 1); assert.equal(deliveries(f), 1);
-  for (const [field, value] of [["environment_config_id", "another"], ["prompt_sha256", "0".repeat(64)]]) await assert.rejects(reconcileDesktopCloudCreation({ ...record, [field]: value }, f.transport), { code: "WORK_RECONCILE_MISMATCH" });
+  for (const [field, value] of [["environment_config_id", "another"], ["prompt_sha256", "0".repeat(64)], ["model_selection", { model: "neutral-default", thinking: "high" }]]) await assert.rejects(reconcileDesktopCloudCreation({ ...record, [field]: value }, f.transport), { code: "WORK_RECONCILE_MISMATCH" });
   assert.equal(await reconcileDesktopCloudCreation({ ...record, attempt_id: randomUUID() }, f.transport), null);
   assert.equal((await desktopCloudReceipt(record.attempt_id, f.storage)).delivery_status, "accepted");
   await syncProject(f.input.project, {}, { storage: f.storage, read: f.read });
