@@ -380,14 +380,16 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       // shows; a partial sync is not a review. A member this publication could
       // not read keeps the entry it was last reviewed against, stamped with the
       // publication that wrote it. A settled member leaves both, even when a
-      // partial sync settles it.
+      // partial sync settles it. Only wait reports failures: a member that fails
+      // only the wait probe must not be returned again after every ordinary sync.
       let { wait_baseline: baseline, wait_reported_failures: failures = {} } = head;
       if (dependencies.waitProbe || head.complete) {
-        const entries = {}; failures = {};
+        const entries = {};
+        if (dependencies.waitProbe) failures = {};
         for (const [id, state] of states) {
           if (state.complete) entries[id] = { cursor: state.cursor, signal: projectWaitSignal(state.latest), sync_token: syncToken };
           else {
-            failures[id] = works.find(work => work.thread_id === id).error;
+            if (dependencies.waitProbe) failures[id] = works.find(work => work.thread_id === id).error;
             if (baseline?.works?.[id]) entries[id] = { sync_token: baseline.sync_token, ...baseline.works[id] };
           }
         }
@@ -396,7 +398,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       }
       const unsettled = map => Object.fromEntries(Object.entries(map).filter(([id]) => !head.settled?.[id]));
       if (baseline) head.wait_baseline = { ...baseline, works: unsettled(baseline.works) };
-      failures = unsettled(failures);
+      failures = Object.fromEntries(Object.entries(unsettled(failures)).filter(([id]) => plan.has(id)));
       if (Object.keys(failures).length) head.wait_reported_failures = failures; else delete head.wait_reported_failures;
       // Save detail records before publishing a head that work tell may consume.
       const detailStart = eventRecords.length;

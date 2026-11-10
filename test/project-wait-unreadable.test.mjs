@@ -8,7 +8,7 @@ import { registerManagedThread, listManagedThreads, managedMembershipDigest, upd
 import { registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
 import { syncProject } from "../src/project-sync.mjs";
 import { waitProject } from "../src/project-wait.mjs";
-import { readRecord, writeRecord, recordStats } from "../src/store.mjs";
+import { readRecord, writeRecord, removeRecord, recordStats } from "../src/store.mjs";
 
 const uuid = n => `11111111-1111-4111-8111-${String(n).padStart(12, "0")}`, session = n => `22222222-2222-4222-8222-${String(n).padStart(12, "0")}`;
 const A = uuid(1), B = uuid(2), C = uuid(3);
@@ -177,4 +177,27 @@ test("a 0.23.0 head and wait record behave as before on the first wait and keep 
   assert.equal((await f.wait(30)).reason, "timeout");
   Object.assign(f.works.get(A), { error: null, attention: approval });
   assert.equal((await f.wait(1000)).reason, "work_changed", "the clear 0.23.0 observed still makes the approval new");
+});
+
+test("a member that fails only the wait probe is returned once, however many ordinary syncs follow", async t => {
+  const f = await fixture(t, { count: 3 }); await f.sync();
+  const unknown = { [B]: "PROJECT_WAIT_ATTENTION_UNKNOWN" };
+  f.works.get(B).attention = undefined;
+  const failed = await f.wait();
+  assert.equal(failed.reason, "observation_failed"); assert.deepEqual(failed.unreadable, [{ thread_id: B, error: unknown[B] }]);
+  for (const round of [1, 2]) {
+    assert.equal((await f.sync()).complete, true, "an ordinary sync reads the member in full");
+    assert.deepEqual((await f.head()).wait_reported_failures, unknown, `complete sync ${round} keeps what wait reported`);
+    const saved = await f.history(), quiet = await f.wait(30);
+    assert.equal(quiet.reason, "timeout", `wait after sync ${round}`); assert.deepEqual(quiet.unreadable, [{ thread_id: B, error: unknown[B] }]);
+    assert.equal(await f.history(), saved, `wait after sync ${round} saves nothing`);
+  }
+  f.works.get(A).error = "RPC_REJECTED";
+  assert.equal((await f.sync()).complete, false);
+  assert.deepEqual((await f.head()).wait_reported_failures, unknown, "a partial sync reports nothing to wait");
+  assert.equal((await f.wait()).reason, "observation_failed", "the failure the sync saw is still new to wait");
+  assert.deepEqual((await f.head()).wait_reported_failures, { [A]: "RPC_REJECTED", ...unknown });
+  await removeRecord("project-index", createHash("sha256").update(B).digest("hex").slice(0, 40), f.storage);
+  await f.sync();
+  assert.deepEqual((await f.head()).wait_reported_failures, { [A]: "RPC_REJECTED" }, "work no longer in the project is forgotten");
 });
