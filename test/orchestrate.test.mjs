@@ -28,7 +28,7 @@ test("orchestration preserves literal goals, uses four operations and has no fix
   assert.equal(data.goal, goal); assert.ok(data.prompt.includes(goal));
   assertOrchestrationContent(data.prompt);
   for (const operation of ["work start", "project sync", "work tell", "project control"]) assert.ok(data.prompt.includes(operation));
-  for (const text of ["CODEXTEER.md", "専門性", "理由と境界", "Unity", "Blender", "GUI", "実機", "確認タスク", "再起動", "unknown", "再公開", "fetch", "main", "高度", "一次資料", "隣接分野", "waitはその担当の変化を監視していません", "waitを静かにする目的でstopしません"]) assert.ok(data.prompt.includes(text), text);
+  for (const text of ["CODEXTEER.md", "専門性", "理由と境界", "Unity", "Blender", "GUI", "実機", "確認タスク", "再起動", "unknown", "再公開", "fetch", "main", "高度", "一次資料", "隣接分野", "waitはその担当の変化を監視していません", "waitを静かにする目的でstopしません", "wait_sync_tokenも--continueで読み切ります"]) assert.ok(data.prompt.includes(text), text);
   assert.doesNotMatch(data.prompt, /supervise prompt|--supervisor|--agent|--based-on|findings create|--connection cloud(?:\s|$)|Web Cloud|Codex担当には/);
   assert.doesNotMatch(ORCHESTRATED_SUPERVISION_POLICY, /Codex担当には|Claude|GPT|Gemini|[\r\n]/);
   assert.ok(Buffer.byteLength(data.prompt) < 13000, "compact workflow limits context consumption");

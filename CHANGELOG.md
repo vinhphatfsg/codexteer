@@ -12,6 +12,7 @@
 - `work tell`は、最新のsyncで対象の担当が完全に読めていれば、他の担当が未読でも送れます。receiptの`other_work`は未読・質問待ちの担当とsync後のmembership変更を返します。`WORK_TELL_MEMBERSHIP_CHANGED`は返さなくなりました。`--sync-token`の以前のsyncは、その後に対象が再読されていない間だけ使えます。
 - `project wait`は読めない担当があっても、読めた担当の変化を`work_changed`で返します。読めない担当は全ての結果の`unreadable`に載り、`observation_failed`は新しい失敗かエラーcodeの変化ごとに1回だけ返します。同じ失敗の間は、間に通常のsyncを実行しても、何も保存せずに待ち続けます。別のsyncとの公開競合に負けたwaitは、従来どおり`observation_failed`・`changed:false`で返ります。公開されなかった結果は`publication_conflict`にエラーcodeを持ちます。
 - `project wait`は、開始したClaude/Codex CLIセッションが異常終了すると、次の照会の前に`reason:"owner_exited"`・終了値1で終わり、wait記録とlockを解放します。再開したセッションのwaitが`RECORD_BUSY`になり続け、Stop hookが停止を拒否し続けることはなくなりました。セッションを特定できないwaitは従来どおり待ち続けます。実行中のwaitの内部で別の記録が使用中だった`RECORD_BUSY`は、他セッションのwaitが使用中だという案内に置き換えなくなりました。
+- オーケストレーター用の指示に、再起動・要約の後で前のwaitの結果を読んだ記録がなければ、syncが返す`wait_sync_token`を`--continue`で読み切る手順を加えました。waitが公開した変化は以後のsyncに出ないため、セッションが落ちる直前のwait結果を読み落とさないようにします。
 - `project sync`と`project wait`のJSONに`stop_hook`（`configured`|`unverified`）を追加しました。Desktop Cloud接続でも返します。
 - 履歴容量のエラーは`storage_bytes`・`required_bytes`・`limit_bytes`をJSONとtextの両方で返します。受信上限を超えた応答のメッセージは、失敗した接続の上限（Desktop Cloudは16 MiB、共有App Serverは64 MiB）を示します。
 
