@@ -114,7 +114,7 @@ export function helpData(topic = "overview", { errors = false } = {}) {
 }
 
 export function renderHelp(data) {
-  const interactive = x => x.startsWith("supervise <") || x.startsWith("orchestrate --");
+  const interactive = x => x.startsWith("supervise <") || /^orchestrate (?:--|resume )/.test(x);
   const withJson = x => (interactive(x) ? x : x.includes(" -- ") ? x.replace(" -- ", " [--json] -- ") : `${x} [--json]`);
   const section = (label, lines) => (lines.length ? ["", `${label}:`, ...lines] : []);
   return [
