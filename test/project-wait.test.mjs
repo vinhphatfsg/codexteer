@@ -82,6 +82,7 @@ test("failed observations are explicit, preserve the complete baseline and do no
   const failed = await waitProject("P", { timeoutMs: 0 }, { ...f.dependencies, read: async () => { throw Object.assign(new Error(), { code: "CLOUD_RATE_LIMITED" }); } });
   assert.equal(failed.changed, false); assert.equal(failed.timed_out, false); assert.equal(failed.reason, "observation_failed");
   assert.equal(failed.sync.complete, false);
+  assert.deepEqual(failed.sync.works.map(work => work.error), ["CLOUD_RATE_LIMITED"]);
   f.thread.turns.push({ id: "t2", status: "completed", items: [{ id: "late", type: "agentMessage", text: "late report" }] });
   assert.equal((await waitProject("P", { timeoutMs: 0 }, f.dependencies)).changed, true);
 });

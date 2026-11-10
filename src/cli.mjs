@@ -44,7 +44,7 @@ function success(command, data, json) {
   return data;
 }
 
-// Added beside hostFields, outside the paged sync envelope that output_bytes measures.
+// Outside the paged sync envelope: output_bytes and the byte budget measure that alone.
 async function withStopHook(data) {
   return Object.assign(data, { stop_hook: (await projectGuardStatus(data.project_id)).stop_hook });
 }
