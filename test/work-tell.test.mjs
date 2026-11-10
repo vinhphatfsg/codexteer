@@ -104,6 +104,23 @@ test("the receipt reports other members that are unread, waiting for a human, or
   assert.deepEqual((await tellWork(THREAD, "member added", {}, { storage: added, read: added.read, send: accept(added) })).other_work, { incomplete: [OTHER], human_attention: [], membership_changed: true });
 });
 
+test("settled members are not reported as unread; an excluded member's open question still is", async t => {
+  const idle = { id: OTHER, name: "other", status: { type: "idle" }, turns: [{ id: "turn-other", status: "completed", items: [] }] };
+  const quiet = await pair(t, readSnapshot(idle).cursor); quiet.other = idle;
+  await registerSupervisor(OTHER, SESSION.replace(/1212$/, "3434"), { home: quiet.home, owner: "fixture", connection: "shared" }); await controlSupervisor(OTHER, "stop", quiet);
+  assert.equal((await quiet.sync()).works.find(work => work.thread_id === OTHER).settled.basis, "observed"); await quiet.sync();
+  assert.deepEqual((await tellWork(THREAD, "observed settled", {}, { storage: quiet, read: quiet.readAll, send: accept(quiet) })).other_work, { incomplete: [], human_attention: [], membership_changed: false });
+
+  const asking = await pair(t); asking.other = { ...task([], ["waitingOnApproval"]), id: OTHER }; await asking.sync();
+  await registerSupervisor(OTHER, SESSION.replace(/1212$/, "3434"), { home: asking.home, owner: "fixture", connection: "shared" }); await controlSupervisor(OTHER, "stop", asking);
+  const unreadable = (id, options) => id === OTHER ? Promise.reject(Object.assign(new Error("too large"), { code: "PAYLOAD_TOO_LARGE" })) : asking.readAll(id, options);
+  const excluded = await syncProject("project-tell", { excludeUnreadable: OTHER, reason: "history exceeds the receive limit" }, { storage: asking, read: unreadable });
+  assert.equal(excluded.exclude_unreadable.outcome, "excluded"); assert.equal(excluded.works.find(work => work.thread_id === OTHER).complete, false);
+  assert.deepEqual((await tellWork(THREAD, "excluded settled", {}, { storage: asking, read: asking.readAll, send: accept(asking) })).other_work, { incomplete: [], human_attention: [OTHER], membership_changed: false });
+  await asking.sync(unreadable);
+  assert.deepEqual((await tellWork(THREAD, "excluded carried", {}, { storage: asking, read: asking.readAll, send: accept(asking) })).other_work, { incomplete: [], human_attention: [OTHER], membership_changed: false });
+});
+
 test("an older sync token stays a valid basis until the target is completely read again", async t => {
   const f = await pair(t), first = await f.sync(), second = await f.sync(targetFails(f));
   assert.equal(second.works.find(work => work.thread_id === THREAD).complete, false);
