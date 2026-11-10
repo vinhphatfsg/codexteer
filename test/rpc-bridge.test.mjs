@@ -139,7 +139,7 @@ test("steering succeeds over a real socket when the full history exceeds the rec
     });
   });
   const original = await RpcClient.connect(`${root}/s.sock`);
-  try { await assert.rejects(original.request("thread/read", { threadId, includeTurns: true }), { code: "PAYLOAD_TOO_LARGE", uncertain: false }); }
+  try { await assert.rejects(original.request("thread/read", { threadId, includeTurns: true }), { code: "PAYLOAD_TOO_LARGE", uncertain: false, message: /the 64 MiB receive limit/ }); }
   finally { original.close(); }
   calls.length = 0;
   const receipt = await sendAppServerMessage(threadId, "synthetic steering only", {

@@ -68,7 +68,7 @@ export async function connectDesktopCloud(options = {}, { credentials = cloudCre
       socket.once("close", () => finish(failure("Desktop Cloud connection closed.", "CONNECTION_FAILED")));
       socket.once("open", () => finish()); options.signal?.addEventListener("abort", cancel, { once: true }); if (options.signal?.aborted) cancel();
     });
-    client = new RpcClient(socket, { timeoutMs });
+    client = new RpcClient(socket, { timeoutMs, receiveLimitBytes: limit });
     const cancelInitialization = () => client.abort("Desktop Cloud initialization cancelled.", "CANCELLED");
     options.signal?.addEventListener("abort", cancelInitialization, { once: true });
     if (options.signal?.aborted) cancelInitialization();
