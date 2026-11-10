@@ -59,7 +59,7 @@ ${command} project sync --continue <TOKEN> --offset <OFFSET> --event-offset <EVE
 ${command} project event <EVENT-TOKEN> --json
 未完了の担当（pausedも含む）がいる間は、次を終了通知の届くバックグラウンドタスクとして動かし続けます。質問・承認・URLをユーザーへ伝えた後も監視を続け、waitが返ったら結果と続きのsyncを読み、検収・対応して再びwaitを開始します。読めない担当はunreadableに並び、waitは新しい失敗かエラーcodeの変化ごとに1回だけobservation_failedで返り、その後は読めた担当の変化を待ちます。stopしていない担当がunreadableにある間、waitはその担当の変化を監視していません。${command} status <THREAD>やそのbranchで別に確認してユーザーへ報告し、waitを静かにする目的でstopしません。timeout・エラーの終了後も監視があると扱いません。
 ${command} project wait --project <PROJECT> --json
-同じCODEX_HOME・host・projectは1オーケストレーターで扱います。guardは自分のセッションのwaitだけを数えます。RECORD_BUSYなら他セッションのwaitを引き継がず、所有セッションでwaitを終了して引継ぎを調整し、阻害要因を報告します。lock削除や担当のcontrol stopを競合回避に使いません。
+同じCODEX_HOME・host・projectは1オーケストレーターで扱います。guardは自分のセッションのwaitだけを数えます。RECORD_BUSYなら他セッションのwaitを引き継がず、所有セッションでwaitを終了して引継ぎを調整し、阻害要因を報告します。異常終了した前のセッションのwaitは次の照会で自分で終わるため、再開直後のRECORD_BUSYは少し待って再実行します。lock削除や担当のcontrol stopを競合回避に使いません。
 ${command} work tell <THREAD> - --json < <INSTRUCTION-FILE>
 現在のユーザー決定と未完了事項に基づいて指示します。新しい根拠のない同じ介入を繰り返さず、質問・承認は本人へ伝え、代理で答えません。送信前の照合をCLIに任せ、対象の不完全な観測やattention不明の拒否を迂回しません。可否は対象の担当だけで決まり、他の担当が未読でも送れます。receiptのother_workに担当が出たら、その対応を続けます。検収待ちでもidleなら--new-turnが必要です。同じ委任が未完了の場合だけ使い、検収待ちを全体の完了認定と取り違えません。unknownは読み取り照合だけを行い、自動再送しません。
 ${command} project control pause --project <PROJECT> --work <THREAD> --json

@@ -9,7 +9,7 @@ import { registerManagedThread, getManagedThread } from "../src/project-index.mj
 import { registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
 import { syncProject, continueProjectSync, projectEvent, projectWaitSignal } from "../src/project-sync.mjs";
 import { waitProject, guardProject, orchestratorIdentity, projectGuardStatus } from "../src/project-wait.mjs";
-import { listRecords, writeRecord } from "../src/store.mjs";
+import { listRecords, readRecord, writeRecord } from "../src/store.mjs";
 import { pruneProjectHistory } from "../src/project-history.mjs";
 import { createHash } from "node:crypto";
 
@@ -26,7 +26,7 @@ async function fixture(t, mode = "aggregate") {
   const storage = { home }, connection = cloud ? "desktop-cloud" : "shared";
   await registerManagedThread(id, { projectId: "P", connection, ...(cloud ? { environmentConfigId: "config" } : {}) }, storage);
   await registerSupervisor(id, SESSION, { ...storage, connection });
-  const dependencies = { storage, read, pollMs: 5, processIdentity: async () => "same-start",
+  const dependencies = { storage, read, pollMs: 5, processIdentity: async pid => pid === 123 ? "owner-start" : "same-start",
     orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) };
   await syncProject("P", {}, dependencies);
   return { home, id, thread, server, storage, dependencies };
@@ -260,4 +260,31 @@ test("invalid wait options and inspection failures do not masquerade as monitori
     owner: await f.dependencies.orchestratorIdentity() }, f.storage);
   const guard = await guardProject("P", { ...f.dependencies, processIdentity: async () => { throw Object.assign(new Error(), { code: "EPERM" }); } });
   assert.equal(guard.decision, undefined); assert.match(guard.systemMessage, /could not verify.*EPERM/);
+});
+
+test("a wait whose orchestrator exited ends without publishing and frees the project for the next session", async t => {
+  const f = await fixture(t), headKey = createHash("sha256").update("P").digest("hex").slice(0, 40);
+  let owner = "owner-start", reads = 0;
+  const dependencies = { ...f.dependencies, processIdentity: async pid => pid === 123 ? owner : "same-start",
+    read: async (...args) => {
+      const page = await f.dependencies.read(...args);
+      // The session dies between polls, right after a turn it never saw finished.
+      if (++reads === 2) { owner = null; f.thread.turns.push({ id: "t1", status: "completed", items: [{ id: "report", type: "agentMessage", text: "Done" }] }); }
+      return page;
+    } };
+  const head = await readRecord("project-sync-heads", headKey, f.storage);
+  const orphan = await waitProject("P", { timeoutMs: 5000 }, dependencies);
+  assert.deepEqual(orphan, { project_id: "P", changed: false, timed_out: false, reason: "owner_exited", unreadable: [], sync: null });
+  assert.equal(reads, 2, "the exited owner is noticed before the next read");
+  assert.deepEqual(await listRecords("project-waits", f.storage), []);
+  assert.deepEqual(await readRecord("project-sync-heads", headKey, f.storage), head, "nothing is published for an orchestrator that is gone");
+  const resumed = await waitProject("P", { timeoutMs: 0 }, { ...f.dependencies, orchestratorIdentity: async () => ({ pid: 456, process_start: "resumed" }),
+    processIdentity: async pid => pid === 456 ? "resumed" : "same-start" });
+  assert.equal(resumed.reason, "work_changed", "the next session's wait takes the lock and still sees the change");
+
+  for (const [name, identity, orchestrator] of [["unidentified owner", async pid => pid === 123 ? null : "same-start", async () => null],
+    ["uninspectable owner", async pid => { if (pid === 123) throw Object.assign(new Error("ps timed out"), { code: "ETIMEDOUT" }); return "same-start"; }, f.dependencies.orchestratorIdentity]]) {
+    const waited = await waitProject("P", { timeoutMs: 30 }, { ...f.dependencies, processIdentity: identity, orchestratorIdentity: orchestrator });
+    assert.equal(waited.reason, "timeout", `${name} keeps waiting`);
+  }
 });

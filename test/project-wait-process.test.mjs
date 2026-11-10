@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { once } from "node:events";
-import { mkdtemp, chmod, rm, readFile } from "node:fs/promises";
-import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, chmod, rm, readFile, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -200,4 +200,26 @@ test("real CLI background wait changes Stop guard decisions and SIGKILL leaves a
   assert.deepEqual(await guard(), {});
   assert.ok(calls.every(method => ["initialize", "thread/read"].includes(method)), "backend calls remain observation only");
   t.diagnostic("bin/codexteer.mjs: no wait=block; live wait=allow; reported turn=block; SIGKILL record=block; all stopped=allow");
+});
+
+for (const connection of [[], ["--connection", "desktop-cloud"]]) test(`real CLI wait${connection.length ? " (Desktop Cloud CLI)" : ""} ends with exit 1 when its agent session dies, and the next session's wait starts`, { timeout: 20000 }, async t => {
+  const f = await fixture(t), dir = `${f.home}/dying-agent`, out = `${dir}/wait.json`, code = `${dir}/wait.code`;
+  await mkdir(dir);
+  // A session that runs wait through a shell, so the wait outlives it as an orphan.
+  const command = `"${process.execPath}" "${BIN}" ${connection.join(" ")} project wait --project P --json > "${out}"; echo $? > "${code}"`;
+  await writeFile(`${dir}/claude`, `#!${process.execPath}\nrequire("node:child_process").spawn("/bin/sh", ["-c", ${JSON.stringify(command)}], { stdio: "ignore" });\nsetInterval(() => {}, 1000);\n`, { mode: 0o700 });
+  const agent = spawn(process.execPath, [`${dir}/claude`], { env: { ...process.env, CODEX_HOME: f.home }, stdio: "ignore" });
+  let record;
+  t.after(() => { for (const pid of [agent.pid, record?.pid]) try { process.kill(pid, "SIGKILL"); } catch { /* Already gone. */ } });
+  for (let n = 0; n < 500 && !record; n++) { record = (await listRecords("project-waits", { home: f.home }))[0]; if (!record) await delay(10); }
+  assert.equal(record?.owner?.pid, agent.pid, "the wait belongs to the session that started it");
+  agent.kill("SIGKILL"); await once(agent, "close");
+  let exit = "";
+  for (let n = 0; n < 1000 && !exit; n++) { exit = await readFile(code, "utf8").catch(() => ""); if (!exit) await delay(10); }
+  assert.equal(exit.trim(), "1", "an orphaned wait exits instead of holding the project");
+  const result = JSON.parse(await readFile(out, "utf8")).data;
+  assert.equal(result.reason, "owner_exited"); assert.equal(result.changed, false); assert.equal(result.timed_out, false);
+  assert.deepEqual(await listRecords("project-waits", { home: f.home }), []);
+  const next = await f.run(f.other, [...connection, "project", "wait", "--project", "P", "--timeout-ms", "0", "--json"]);
+  assert.equal(next.code, 0, next.stdout); assert.equal(JSON.parse(next.stdout).data.reason, "timeout", "no RECORD_BUSY for the resumed session");
 });

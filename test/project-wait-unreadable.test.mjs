@@ -30,7 +30,7 @@ async function fixture(t, { count = 2, project = "P" } = {}) {
     return { thread_id: id, cursor: `c${work.events.length}`, events: work.events.slice(Number(options.since.slice(1))), has_more: false,
       status: work.status, attention: work.attention, latest_turn_id: work.turn, latest_turn_status: work.turnStatus, active_turn_count: work.status === "active" ? 1 : 0 };
   };
-  const dependencies = { storage, read, pollMs: 5, processIdentity: async () => "same-start", orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) };
+  const dependencies = { storage, read, pollMs: 5, processIdentity: async pid => pid === 123 ? "owner-start" : "same-start", orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) };
   const finishTurn = id => { const work = works.get(id), turn = `next-${work.events.length + 1}`; Object.assign(work, { turn, status: "idle", turnStatus: "completed" }); work.events.push({ id: turn, type: "turn", status: "completed" }); };
   return { storage, works, calls, finishTurn, dependencies, sync: (options = {}) => syncProject(project, options, dependencies),
     wait: (timeoutMs = 0) => { calls.length = 0; return waitProject(project, { timeoutMs }, dependencies); },

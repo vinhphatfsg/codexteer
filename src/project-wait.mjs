@@ -194,7 +194,11 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
         const pollMs = dependencies.pollMs ?? (members.some(m => ["cloud", "desktop-cloud"].includes(m.connection)) ? 15000 : 1000);
         // Outside the paged sync envelope, on every return: the members the last read could not complete.
         const unreadable = () => Object.entries(failures).map(([thread_id, error]) => ({ thread_id, error }));
+        // A wait that outlives its session would hold the project lock forever and
+        // publish changes nobody reads. An inspection error is not proof of exit.
+        const ownerExited = async () => !!owner && await identity(owner.pid).then(start => start !== owner.process_start, () => false);
         for (;;) {
+          if (await ownerExited()) return { project_id: projectId, changed: false, timed_out: false, reason: "owner_exited", unreadable: unreadable(), sync: null };
           let reason;
           const sync = await syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => {
             failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete ? [] : [[id, state.error]]));
@@ -215,7 +219,7 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
       } finally { await removeRecord("project-waits", key, storage); }
     } finally { process.title = originalTitle; }
   }, storage).catch(error => {
-    if (error.code === "RECORD_BUSY") error.message = "Project wait is already owned by another operation. Use one orchestrator per CODEX_HOME, host and project. Do not adopt another session's wait or remove its lock; have the owning session finish/cancel its wait and hand off before retrying.";
+    if (error.code === "RECORD_BUSY") error.message = "Project wait is already owned by another operation. Use one orchestrator per CODEX_HOME, host and project. Do not adopt another session's wait or remove its lock; have the owning session finish/cancel its wait and hand off before retrying. A wait whose session has exited ends by itself at its next poll; after a resume, retry shortly.";
     throw error;
   });
 }

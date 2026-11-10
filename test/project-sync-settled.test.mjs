@@ -153,7 +153,7 @@ test("a head published by 0.23.0 is honored as written and gains no new field wh
   f.works.get(A).events.push(message("done")); f.works.get(B).events.push(message("q", { questions: ["Which?"] }));
   await writeRecord("project-sync-heads", headKey("legacy"), legacyHead(managedMembershipDigest(await listManagedThreads("legacy", f.storage))), f.storage);
   const legacy = await f.head();
-  const waited = await waitProject("legacy", { timeoutMs: 0 }, { storage: f.storage, read: f.read, pollMs: 5, processIdentity: async () => "same-start",
+  const waited = await waitProject("legacy", { timeoutMs: 0 }, { storage: f.storage, read: f.read, pollMs: 5, processIdentity: async pid => pid === 123 ? "owner-start" : "same-start",
     orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) });
   assert.equal(waited.reason, "timeout", "the 0.23.0 wait baseline is still the baseline");
   const result = await f.sync();
@@ -227,7 +227,7 @@ test("a settled row with a long reason pages at the smallest budget and is retur
 test("project wait does not read settled work and treats neither settling nor exclusion as a change", async t => {
   const f = await fixture(t, { count: 3 });
   const wait = () => { f.calls.length = 0; return waitProject("P", { timeoutMs: 0 }, { storage: f.storage, read: f.read, pollMs: 5,
-    processIdentity: async () => "same-start", orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) }); };
+    processIdentity: async pid => pid === 123 ? "owner-start" : "same-start", orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) }); };
   await f.sync(); await f.stop(A);
   assert.equal((await wait()).reason, "timeout", "stopping alone is not a change"); assert.ok(f.calls.includes(A));
   Object.assign(f.works.get(C), { turn: "turn-next" }); f.works.get(C).events.push({ id: "turn-next", type: "turn", status: "completed" });
