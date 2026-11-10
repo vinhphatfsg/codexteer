@@ -99,15 +99,17 @@ codexteer project guard --project sample --status --json
 
 未停止の担当がいる間は、waitを終了通知の届くバックグラウンドタスクとして実行します。単にシェルの`&`で切り離すだけでは親セッションへ通知される保証がありません。返ったら結果を読み、必要な検収・対応の後に再びwaitを開始します。質問・承認・URLをユーザーへ伝えた後も続けます。timeout・接続失敗で終了したwaitは監視中ではありません。検収済みの担当は`project control stop`で終了し、ユーザーがオーケストレーションの終了を求めた場合も対象の制御を明示的にstopします。
 
-waitは最後に完全に公開されたproject syncを基準に、新しいターン終了（成功・失敗・取消・中断）、質問、承認待ち、バックエンド失敗、membership変更を待ちます。既にidleの担当や、既に確認した質問・承認待ちだけでは返りません。ユーザーがDesktopで直接次のターンを開始・完了した場合も検知します。通常の進捗だけではcursorや基準を更新しません。`settled`の担当は読まず、`settled`になったことや除外そのものは変化として返しません。sharedは既定1秒、Cloudを含む集合は15秒間隔で照会します。`--timeout-ms`は0以上の整数で、省略時は無期限です。開始済みの観測は完了まで待つため、指定時間を超えて返る場合があります。
+waitは担当ごとに、最後にwaitが返した観測か完全なproject syncで示した観測を基準に、新しいターン終了（成功・失敗・取消・中断）、質問、承認待ち、バックエンド失敗、membership変更を待ちます。既にidleの担当や、既に確認した質問・承認待ちだけでは返りません。ユーザーがDesktopで直接次のターンを開始・完了した場合も検知します。通常の進捗だけではcursorや基準を更新しません。`settled`の担当は読まず、`settled`になったことや除外そのものは変化として返しません。sharedは既定1秒、Cloudを含む集合は15秒間隔で照会します。`--timeout-ms`は0以上の整数で、省略時は無期限です。開始済みの観測は完了まで待つため、指定時間を超えて返る場合があります。
 
-返り値の`changed:true`と`sync`に、syncと同じsnapshot・詳細token・continuationを返します。完全な結果の永続化を基準更新点とし、同じ変化を繰り返し通知しません。基準が未作成（旧版のsnapshotを含む）なら`reason:initial_sync`として最初のsyncを返します。timeoutは`changed:false, timed_out:true, reason:timeout, sync:null`です。観測失敗は`reason:observation_failed, timed_out:false`と不完全なsyncを返し、終了値1になります。最後の完全な基準は保持します。通常のsyncでも全体が不完全なら、waitの完全な基準は進めません。projectごとにwaitは1つで、重複起動は`RECORD_BUSY`です。送信や担当制御は行いません。
+返り値の`changed:true`と`sync`に、syncと同じsnapshot・詳細token・continuationを返します。waitが返した時点と完全なsyncの公開時点を基準更新点とし、同じ変化を繰り返し通知しません。更新するのは読めた担当の基準だけで、読めなかった担当は前の基準を保持します。基準が未作成（旧版のsnapshotを含む）なら`reason:initial_sync`として最初のsyncを返します。timeoutは`changed:false, timed_out:true, reason:timeout, sync:null`です。通常のsyncでも全体が不完全なら、waitの基準は進めません。projectごとにwaitは1つで、重複起動は`RECORD_BUSY`です。送信や担当制御は行いません。
 
-承認・質問のフラグは、読了済みcursorとは別に、現在の基準に対応する直近の観測を保存します。同じフラグが立ち続ける間は通知せず、消えたことを観測した後の再出現は同じ実行turnでも通知します。この観測はtimeout後のwait再起動にも引き継ぎ、新しい完全なsyncでは基準に合わせて初期化します。`attention:null`など現在のフラグが不明な場合は空配列と区別し、`PROJECT_WAIT_ATTENTION_UNKNOWN`の不完全観測として返します。担当cursorと最後の完全な基準は進めません。
+読めない担当がいても、waitは読めた担当の変化を待ち、`sync.complete:false`のままでも`changed:true`と`work_changed`などで返します。返り値はtimeoutを含めて常に`unreadable:[{thread_id, error}]`を持ち、直近の観測で読めなかった担当とエラーcodeを示します。読み取り失敗だけの場合は、新しく読めなくなった担当か、エラーcodeが変わった担当があるときに一度だけ`reason:observation_failed, changed:false, timed_out:false`と不完全なsyncを返し、終了値1になります。同じ失敗が続く間は返らず、syncの履歴も保存しません。completeにする目的でsyncやwaitを繰り返し実行しないでください。他の返り値と同じく結果を読んでwaitを再開します。読めない担当が検収してstop済みなら`--exclude-unreadable`で除外し、作業中なら原因を調べます。
+
+承認・質問のフラグは、読了済みcursorとは別に、各担当の基準に対応する直近の観測を保存します。同じフラグが立ち続ける間は通知せず、消えたことを観測した後の再出現は同じ実行turnでも通知します。この観測はtimeout後のwait再起動にも引き継ぎ、その担当の基準が更新されたときに初期化します。`attention:null`など現在のフラグが不明な場合は空配列と区別し、`PROJECT_WAIT_ATTENTION_UNKNOWN`の読み取り失敗として扱います。その担当のcursorと基準は進めません。
 
 wait終了後に出力を失った場合、次の`project sync`が返す`wait_sync_token`を`project sync --continue TOKEN`へ渡すと、最新のwait結果を復元できます。最新のwait snapshotとその全文参照はpruneでも保持します。プロセス終了や出力配送は読了の証明にはならないため、オーケストレーター自身がsnapshotを読み切って検収します。
 
-同じCODEX_HOMEで0.22.0など旧版のsyncを併用すると、旧版がheadの`wait_baseline`など未対応フィールドを保存せず、次のwaitが`initial_sync`を返す場合があります。基準不明を変化なしと扱わず、完全なsyncで再初期化する動作です。結果を読んでwaitを再開してください。以後は新しい基準で待機しますが、旧syncを再び使うと再初期化が必要になります。基準と復元tokenを維持する運用では、生成した同じ保存済みCLIを一貫して使います。
+同じCODEX_HOMEで0.22.0など旧版のsyncを併用すると、旧版がheadの`wait_baseline`など未対応フィールドを保存せず、次のwaitが`initial_sync`を返す場合があります。基準不明を変化なしと扱わず、そのwaitの結果で基準を作り直す動作です。結果を読んでwaitを再開してください。以後は新しい基準で待機しますが、旧syncを再び使うと再初期化が必要になります。基準と復元tokenを維持する運用では、生成した同じ保存済みCLIを一貫して使います。
 
 guardはClaude CodeのStop hook用の生JSONを返します（通常の`ok/data` envelopeは使いません）。停止済み以外の担当がいて自分のセッションに属する生存waitがなければ、終了値0で`{"decision":"block","reason":"…"}`を返します。条件を満たす場合とmanaged workがない場合は`{}`です。pausedは介入を一時停止するだけで未完了であり、Desktopからの実行も止めないため監視対象に数えます。binding不在も未完了として扱います。waitは本人専用のlocal storeへpidと起動識別、最も近いClaude/Codex CLI親プロセスのpidと起動識別を保存し、guardは自分の親プロセスと一致する所有者のwaitだけを数えます。macOSでは起動日時に加えprocess titleのwait固有nonce、Linuxではboot IDと起動tickを照合し、死んだ・停止した・zombieのプロセスを認めません。対応OSはmacOSとLinuxです。
 
