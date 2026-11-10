@@ -2,7 +2,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { connectionMode, desktopReadOnly } from "./connection.mjs";
 import { prepareBoundCommand } from "./prompt-command.mjs";
-import { orchestrationPrompt, validateOrchestrationInput } from "./orchestrate-prompt.mjs";
+import { orchestrationPrompt, validateOrchestrationInput, validateOrchestrationProject } from "./orchestrate-prompt.mjs";
 import { prepareCodexHome } from "./distribution.mjs";
 import { codexHome } from "./runtime.mjs";
 import { launchAgent } from "./agent-launch.mjs";
@@ -44,6 +44,19 @@ export async function prepareOrchestrationPrompt(project, goal, { agent, connect
   return { ...render(project, goal, command, { agent, usePathCli, cloudCommand, canStart: targetHost() === "local" }), command, cloud_command: cloudCommand, connection, ...runtime, ...hostFields() };
 }
 
+async function stopGuardEnv(project, guarded) {
+  const env = { ...process.env };
+  delete env.CODEXTEER_STOP_GUARD;
+  if (guarded) {
+    // An unavailable OS inspection leaves status unverified; it must not
+    // prevent an otherwise supported interactive CLI from starting.
+    let start;
+    try { start = await processIdentity(process.pid); } catch { /* Reported by guard --status. */ }
+    if (start) env.CODEXTEER_STOP_GUARD = JSON.stringify({ project_id: project, pid: process.pid, process_start: start });
+  }
+  return env;
+}
+
 export async function orchestrateAgent(project, goal, { agent = "claude", agentArgs = [], connection = "shared", usePathCli = false } = {}) {
   const { prompt, deployment, command } = await prepareOrchestrationPrompt(project, goal, { agent, connection, usePathCli });
   // PATH prompt generation is side-effect free; direct launch still verifies
@@ -51,14 +64,19 @@ export async function orchestrateAgent(project, goal, { agent = "claude", agentA
   if (!deployment) await prepareCodexHome(codexHome());
   // Session settings add this hook without editing the checkout's .claude files.
   const args = agent === "claude" ? await claudeGuardArguments(agentArgs, command, project) : agentArgs;
-  const env = { ...process.env };
-  delete env.CODEXTEER_STOP_GUARD;
-  if (agent === "claude") {
-    // An unavailable OS inspection leaves status unverified; it must not
-    // prevent an otherwise supported interactive CLI from starting.
-    let start;
-    try { start = await processIdentity(process.pid); } catch { /* Reported by guard --status. */ }
-    if (start) env.CODEXTEER_STOP_GUARD = JSON.stringify({ project_id: project, pid: process.pid, process_start: start });
+  return launchAgent(agent, args, prompt, { env: await stopGuardEnv(project, agent === "claude") });
+}
+
+// Settings and the marker belong to the process, not the saved session, so a
+// plain claude --resume runs without the guard. The session already holds its prompt.
+export async function resumeOrchestrator(session, project, { agentArgs = [], connection = "shared", usePathCli = false } = {}) {
+  validateOrchestrationProject(project);
+  if (typeof session !== "string" || !session.trim() || session.startsWith("-") || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(session)) {
+    throw Object.assign(new Error("SESSION_ID must be the Claude Code session ID or name to resume, without control characters or a leading -."), { code: "INVALID_ORCHESTRATION_SESSION" });
   }
-  return launchAgent(agent, args, prompt, { env });
+  if (connectionMode(connection) === "desktop") throw desktopReadOnly();
+  const { command, deployment } = await prepareBoundCommand({ session: null, connection, context: targetContext() ?? process.env.CODEX_THREAD_ID }, usePathCli);
+  if (!deployment) await prepareCodexHome(codexHome());
+  const args = await claudeGuardArguments(["--resume", session, ...agentArgs], command, project);
+  return launchAgent("claude", args, null, { env: await stopGuardEnv(project, true) });
 }

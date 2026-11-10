@@ -6,13 +6,17 @@ export const ORCHESTRATED_SUPERVISION_POLICY = [
   "同じ委任の未完了作業だけを継続し、pause/stop、質問・承認待ちを迂回しません。unknownを自動再送せず、最終差分・検証・成果物・未確認事項を提出します。",
 ].join(" ");
 
-export function validateOrchestrationInput(project, goal, agent) {
+export function validateOrchestrationProject(project) {
   if (typeof project !== "string" || !project.trim()) {
     throw Object.assign(new Error("--project requires a project ID or exact name."), { code: "PROJECT_REQUIRED" });
   }
   if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(project)) {
     throw Object.assign(new Error("The project selector must not contain control characters."), { code: "INVALID_ORCHESTRATION_PROJECT" });
   }
+}
+
+export function validateOrchestrationInput(project, goal, agent) {
+  validateOrchestrationProject(project);
   if (typeof goal !== "string" || !goal.trim()) {
     throw Object.assign(new Error("Orchestration GOAL must contain non-whitespace text."), { code: "INVALID_ORCHESTRATION_GOAL" });
   }
