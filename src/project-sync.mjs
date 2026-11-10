@@ -341,6 +341,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   for (const work of observed) work.detail_token = randomUUID();
   // The existing project head lock protects only publication, never network I/O.
   // A stale reader must not replace a newer attention head, even after a CAS miss.
+  let conflict = null;
   try {
     await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => withHistoryReservation({ eventRecords, works, head, previous }, async (historyWrite) => {
       const current = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage);
@@ -408,7 +409,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     }, storage), storage);
   } catch (error) {
     if (!["SYNC_CURSOR_CONFLICT", "PROJECT_SYNC_CONFLICT", "RECORD_BUSY"].includes(error.code)) throw error;
-    head.complete = false;
+    conflict = error.code; head.complete = false;
     for (const work of observed) { work.complete = false; work.cursor = null; work.error ??= error.code === "SYNC_CURSOR_CONFLICT" ? "SYNC_CURSOR_CONFLICT" : "PROJECT_SYNC_CONFLICT"; work.observation = "incomplete"; }
     for (const work of observed) eventRecords.push({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...work } } });
     await withHistoryReservation({ eventRecords, works, head, previous }, async (historyWrite) => {
@@ -417,8 +418,10 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     }, storage);
   }
   const page = pageResult({ project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, syncToken, byteBudget);
+  // Outside the paged envelope, whose byte count is already final. Only this
+  // marker tells a result that was never published from one where every read failed.
+  if (conflict) page.publication_conflict = conflict;
   if (!exclusion) return page;
-  // Outside the paged envelope, whose byte count is already final.
   const id = exclusion.member.thread_id, row = works.find(w => w.thread_id === id);
   page.exclude_unreadable = { thread_id: id, ...(exclusion.action === "carry" ? { outcome: "already_settled" }
     : head.settled?.[id]?.basis === "excluded" ? { outcome: "excluded", error: head.settled[id].error }

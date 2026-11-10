@@ -188,12 +188,13 @@ test("a sync that loses the publication race settles nothing and the newer head 
     if (id === C && !raced) { raced = true; f.works.get(B).status = "active"; await syncProject("P", {}, { storage: f.storage, read: f.read }); f.works.get(B).status = "idle"; }
     return f.read(id, options);
   } });
-  assert.equal(lost.complete, false); assert.equal(row(lost, B).error, "SYNC_CURSOR_CONFLICT"); assert.equal(row(lost, B).settled, undefined);
+  assert.equal(lost.complete, false); assert.equal(lost.publication_conflict, "SYNC_CURSOR_CONFLICT");
+  assert.equal(row(lost, B).error, "SYNC_CURSOR_CONFLICT"); assert.equal(row(lost, B).settled, undefined);
   assert.equal(row(lost, A).observation, "settled"); assert.equal(row(lost, A).settled.basis, "excluded"); assert.equal(row(lost, A).attention, "human");
   const head = await f.head();
   assert.deepEqual(Object.keys(head.settled), [A]); assert.deepEqual(head.unresolved_attention[A], attention);
   const next = await f.sync();
-  assert.equal(row(next, B).settled.basis, "observed"); assert.equal(f.calls.includes(A), false);
+  assert.equal(next.publication_conflict, undefined); assert.equal(row(next, B).settled.basis, "observed"); assert.equal(f.calls.includes(A), false);
   assert.deepEqual((await f.head()).unresolved_attention[A], attention);
 });
 

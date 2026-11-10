@@ -9,7 +9,7 @@
 - `project control stop`した担当は、停止後の完全な観測でidleまたは終了済みかつ未解決attentionなしを確かめた後、syncで読まなくなります。行は`observation:"settled"`で末尾に残り、未解決attentionは保持します。その後にDesktopから直接再開した作業は検知しません。
 - `project sync --project ID --exclude-unreadable THREAD --reason TEXT`を追加しました。停止済みで読み取りが失敗し続ける担当を理由付きで除外し、結果を`exclude_unreadable.outcome`で返します。停止していない担当は`PROJECT_SYNC_EXCLUDE_NOT_STOPPED`で拒否します。
 - `work tell`は、最新のsyncで対象の担当が完全に読めていれば、他の担当が未読でも送れます。receiptの`other_work`は未読・質問待ちの担当とsync後のmembership変更を返します。`WORK_TELL_MEMBERSHIP_CHANGED`は返さなくなりました。`--sync-token`の以前のsyncは、その後に対象が再読されていない間だけ使えます。
-- `project wait`は読めない担当があっても、読めた担当の変化を`work_changed`で返します。読めない担当は全ての結果の`unreadable`に載り、`observation_failed`は新しい失敗かエラーcodeの変化ごとに1回だけ返します。同じ失敗の間は何も保存せずに待ち続けます。
+- `project wait`は読めない担当があっても、読めた担当の変化を`work_changed`で返します。読めない担当は全ての結果の`unreadable`に載り、`observation_failed`は新しい失敗かエラーcodeの変化ごとに1回だけ返します。同じ失敗の間は何も保存せずに待ち続けます。別のsyncとの公開競合に負けたwaitは、従来どおり`observation_failed`・`changed:false`で返ります。公開されなかった結果は`publication_conflict`にエラーcodeを持ちます。
 - `project sync`と`project wait`のJSONに`stop_hook`（`configured`|`unverified`）を追加しました。Desktop Cloud接続でも返します。
 - 履歴容量のエラーは`storage_bytes`・`required_bytes`・`limit_bytes`をJSONとtextの両方で返します。受信上限を超えた応答のメッセージは、失敗した接続の上限（Desktop Cloudは16 MiB、共有App Serverは64 MiB）を示します。
 

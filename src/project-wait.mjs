@@ -200,7 +200,11 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
             failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete ? [] : [[id, state.error]]));
             return !!(reason = probeReason(snapshot, observedAttention, failures));
           } });
-          if (sync) return { project_id: projectId, changed: reason !== "observation_failed", timed_out: false, reason, unreadable: unreadable(), sync };
+          if (sync) {
+            // A newer sync won the head: nothing this wait read was published or reviewed.
+            if (sync.publication_conflict) reason = "observation_failed";
+            return { project_id: projectId, changed: reason !== "observation_failed", timed_out: false, reason, unreadable: unreadable(), sync };
+          }
           const observed = JSON.stringify(observedAttention);
           if (observed !== savedAttention) {
             await writeRecord("project-wait-attention", key, observedAttention, storage); savedAttention = observed;

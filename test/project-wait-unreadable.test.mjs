@@ -32,7 +32,7 @@ async function fixture(t, { count = 2, project = "P" } = {}) {
   };
   const dependencies = { storage, read, pollMs: 5, processIdentity: async () => "same-start", orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) };
   const finishTurn = id => { const work = works.get(id), turn = `next-${work.events.length + 1}`; Object.assign(work, { turn, status: "idle", turnStatus: "completed" }); work.events.push({ id: turn, type: "turn", status: "completed" }); };
-  return { storage, works, calls, finishTurn, sync: (options = {}) => syncProject(project, options, dependencies),
+  return { storage, works, calls, finishTurn, dependencies, sync: (options = {}) => syncProject(project, options, dependencies),
     wait: (timeoutMs = 0) => { calls.length = 0; return waitProject(project, { timeoutMs }, dependencies); },
     head: () => readRecord("project-sync-heads", key(project), storage),
     history: async () => (await Promise.all(["project-sync-events", "project-sync-results"].map(bucket => recordStats(bucket, storage)))).flat().reduce((sum, record) => sum + record.bytes, 0) };
@@ -92,6 +92,23 @@ test("a partial ordinary sync does not consume a change wait has not returned", 
   assert.equal(partial.complete, false); assert.ok(partial.works.find(work => work.thread_id === B).events.length > 0);
   const changed = await f.wait(1000);
   assert.equal(changed.reason, "work_changed"); assert.deepEqual(changed.unreadable, [{ thread_id: A, error: "PAYLOAD_TOO_LARGE" }]);
+  assert.equal((await f.wait(30)).reason, "timeout");
+});
+
+test("a wait whose publication loses to a concurrent sync fails the observation and keeps the change for the next wait", async t => {
+  const f = await fixture(t); f.works.get(A).error = "PAYLOAD_TOO_LARGE";
+  assert.equal((await f.wait()).reason, "initial_sync");
+  f.finishTurn(B); let raced = false;
+  const lost = await waitProject("P", { timeoutMs: 1000 }, { ...f.dependencies, read: async (id, options) => {
+    if (id === B && !raced) { raced = true; assert.equal((await f.sync()).complete, false); }
+    return f.dependencies.read(id, options);
+  } });
+  assert.ok(raced); assert.equal(lost.sync.publication_conflict, "SYNC_CURSOR_CONFLICT");
+  assert.equal(lost.reason, "observation_failed"); assert.equal(lost.changed, false); assert.equal(lost.timed_out, false);
+  assert.ok(lost.sync.works.every(work => work.complete === false));
+  assert.deepEqual(lost.unreadable, [{ thread_id: A, error: "PAYLOAD_TOO_LARGE" }], "only the member that could not be read is unreadable");
+  const changed = await f.wait(1000);
+  assert.equal(changed.reason, "work_changed", "the turn the lost publication saw is still new"); assert.equal(changed.sync.publication_conflict, undefined);
   assert.equal((await f.wait(30)).reason, "timeout");
 });
 
