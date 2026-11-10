@@ -123,22 +123,25 @@ test("a standing approval on a member read by the last return does not wake wait
   assert.equal((await f.wait(30)).reason, "timeout");
 });
 
-test("settled work is never listed as unreadable or remembered as a failure", async t => {
-  const f = await fixture(t, { count: 3 });
+for (const activeUnreadable of [false, true]) test(`settled work is never listed as unreadable or remembered as a failure${activeUnreadable ? " while active work stays unreadable" : ""}`, async t => {
+  const f = await fixture(t, { count: 4 }), D = uuid(4);
   await f.sync(); await controlSupervisor(A, "stop", f.storage); await f.sync();
   assert.ok((await f.head()).settled[A]);
   f.works.get(A).error = "PAYLOAD_TOO_LARGE";
   await controlSupervisor(B, "stop", f.storage); f.works.get(B).error = "PAYLOAD_TOO_LARGE";
+  if (activeUnreadable) f.works.get(D).error = "RPC_REJECTED";
+  const remaining = activeUnreadable ? [{ thread_id: D, error: "RPC_REJECTED" }] : [];
   const stopped = await f.wait();
   assert.equal(stopped.reason, "observation_failed", "stopped but unsettled work is still read");
-  assert.deepEqual(stopped.unreadable, [{ thread_id: B, error: "PAYLOAD_TOO_LARGE" }]);
-  assert.equal((await f.sync({ excludeUnreadable: B, reason: "history exceeds the receive limit" })).complete, true);
+  assert.deepEqual(stopped.unreadable, [{ thread_id: B, error: "PAYLOAD_TOO_LARGE" }, ...remaining]);
+  assert.equal((await f.sync({ excludeUnreadable: B, reason: "history exceeds the receive limit" })).complete, !activeUnreadable);
   const head = await f.head();
   assert.deepEqual(Object.keys(head.settled).sort(), [A, B]);
-  assert.equal(head.wait_reported_failures, undefined); assert.deepEqual(Object.keys(head.wait_baseline.works), [C]);
+  assert.deepEqual(head.wait_reported_failures, activeUnreadable ? { [D]: "RPC_REJECTED" } : undefined);
+  assert.deepEqual(Object.keys(head.wait_baseline.works).sort(), [C, D]);
   const quiet = await f.wait(30);
-  assert.equal(quiet.reason, "timeout"); assert.deepEqual(quiet.unreadable, []);
-  assert.deepEqual([...new Set(f.calls)], [C]);
+  assert.equal(quiet.reason, "timeout"); assert.deepEqual(quiet.unreadable, remaining);
+  assert.deepEqual([...new Set(f.calls)].sort(), [C, D]);
 });
 
 test("a 0.23.0 head and wait record behave as before on the first wait and keep an observed clear", async t => {

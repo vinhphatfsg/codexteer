@@ -378,21 +378,25 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       // The orchestrator reviews what a wait returns and what a complete sync
       // shows; a partial sync is not a review. A member this publication could
       // not read keeps the entry it was last reviewed against, stamped with the
-      // publication that wrote it.
+      // publication that wrote it. A settled member leaves both, even when a
+      // partial sync settles it.
+      let { wait_baseline: baseline, wait_reported_failures: failures = {} } = head;
       if (dependencies.waitProbe || head.complete) {
-        const reviewed = previous?.wait_baseline, baseline = {}, failures = {};
+        const entries = {}; failures = {};
         for (const [id, state] of states) {
-          if (head.settled?.[id]) continue;
-          if (state.complete) baseline[id] = { cursor: state.cursor, signal: projectWaitSignal(state.latest), sync_token: syncToken };
+          if (state.complete) entries[id] = { cursor: state.cursor, signal: projectWaitSignal(state.latest), sync_token: syncToken };
           else {
             failures[id] = works.find(work => work.thread_id === id).error;
-            if (reviewed?.works?.[id]) baseline[id] = { sync_token: reviewed.sync_token, ...reviewed.works[id] };
+            if (baseline?.works?.[id]) entries[id] = { sync_token: baseline.sync_token, ...baseline.works[id] };
           }
         }
-        head.wait_baseline = { sync_token: syncToken, membership_digest: membershipDigest, works: baseline };
-        if (Object.keys(failures).length) head.wait_reported_failures = failures; else delete head.wait_reported_failures;
+        baseline = { sync_token: syncToken, membership_digest: membershipDigest, works: entries };
         if (dependencies.waitProbe) head.wait_sync_token = syncToken;
       }
+      const unsettled = map => Object.fromEntries(Object.entries(map).filter(([id]) => !head.settled?.[id]));
+      if (baseline) head.wait_baseline = { ...baseline, works: unsettled(baseline.works) };
+      failures = unsettled(failures);
+      if (Object.keys(failures).length) head.wait_reported_failures = failures; else delete head.wait_reported_failures;
       // Save detail records before publishing a head that work tell may consume.
       const detailStart = eventRecords.length;
       for (const work of observed) {
