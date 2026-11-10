@@ -132,6 +132,23 @@ test("a resumed orchestrator reports configured only for the project it was resu
   }
 });
 
+test("the prompt's resume command, run as printed, restores a configured Stop hook", t => {
+  const options = fixture(t);
+  writeFileSync(path.join(options.env.PATH, "codexteer"), `#!/bin/sh\nexec node ${JSON.stringify(BIN)} "$@"\n`, { mode: 0o755 });
+  options.env = { ...options.env, CT_GUARD_PROBE: "1", CT_BIN: BIN };
+  for (const mode of [[], ["--use-path-cli"]]) {
+    const generated = run(options, ["prompt", "--project", PROJECT, "goal", "--agent", "claude", ...mode, "--json"]); assert.equal(generated.status, 0, generated.stderr);
+    const lines = JSON.parse(generated.stdout).data.prompt.split("\n").filter(line => line.includes(" orchestrate resume <SESSION-ID> "));
+    assert.equal(lines.length, 1, `${mode}`);
+    const resumed = spawnSync("/bin/sh", ["-c", lines[0].replace("<SESSION-ID>", SESSION)], { ...options, input: "" });
+    assert.equal(resumed.status, 0, resumed.stderr); assert.equal(JSON.parse(resumed.stdout).data.stop_hook, "configured", `${mode}`);
+  }
+  for (const agent of [["--agent", "codex"], []]) {
+    const other = run(options, ["prompt", "--project", PROJECT, "goal", ...agent, "--use-path-cli"]);
+    assert.equal(other.status, 0, other.stderr); assert.equal(other.stdout.includes("orchestrate resume"), false, `${agent}`);
+  }
+});
+
 test("invalid resume inputs never deploy or launch", t => {
   const options = fixture(t);
   const cases = [["resume"], ["resume", "--project", PROJECT], ["resume", SESSION], ["resume", SESSION, "extra", "--project", PROJECT],

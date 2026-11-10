@@ -32,6 +32,10 @@ test("orchestration preserves literal goals, uses four operations and has no fix
   assert.doesNotMatch(data.prompt, /supervise prompt|--supervisor|--agent|--based-on|findings create|--connection cloud(?:\s|$)|Web Cloud|Codex担当には/);
   assert.doesNotMatch(ORCHESTRATED_SUPERVISION_POLICY, /Codex担当には|Claude|GPT|Gemini|[\r\n]/);
   assert.ok(Buffer.byteLength(data.prompt) < 13000, "compact workflow limits context consumption");
+  for (const agent of ["claude", "codex"]) {
+    const { prompt } = orchestrationPrompt("P", goal, "prepared-command --connection shared", { agent, cloudCommand: "prepared-cloud --connection desktop-cloud" });
+    assert.ok(Buffer.byteLength(prompt) < 13000, `${agent} workflow stays compact`);
+  }
 });
 
 test("PATH generation is deterministic, offline and retains the Desktop Cloud command", t => {

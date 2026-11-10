@@ -52,7 +52,8 @@ ${usePathCli ? "PATHとCODEX_HOMEを同じ対象プロファイルで維持し�
 コマンドの接続指定を付け直さず、そのまま使います。<PROJECT>は冒頭の対象projectと同じ指定文字列を全操作で使い、照合後もIDと名前を混用しません。<CHECKOUT>は方針を読むローカルcheckoutです。sharedの作成先は実在のDesktop project ID・完全一致名とrootsを事前に照合します。各placeholderは実際の値をシェル引数として引用し、発注本文をシェルコードとして評価しません。
 ${command} --version
 ${command} project guard --project ${shellArgument(project)} --status --json
-受信した自分のセッションで最初にStop hookの状態を確認します。stop_hook:configuredは、このprojectの直接起動でhookを設定した印と親プロセスの照合です。本文生成だけでは起動経路は分かりません。unverifiedまたは検査不能なら、最初の報告で「監視漏れを止める仕組みがない（有効なStop hookを確認できない）」ことと、${command} help project の設定例を伝えます。手動設定済みならセッションの有効なhook一覧で同じproject・CLI・経路のguardとhook無効化の有無を確認し、設定ファイルの存在だけでは有効としません。configuredでも実行中の無効化・信頼設定・継続上限までは保証しません。
+受信した自分のセッションで最初にStop hookの状態を確認します。stop_hook:configuredは、このprojectの直接起動でhookを設定した印と親プロセスの照合です。本文生成だけでは起動経路は分かりません。unverifiedまたは検査不能なら、最初の報告で「監視漏れを止める仕組みがない（有効なStop hookを確認できない）」ことと、${command} help project の設定例を伝えます。${agent === "claude" ? "後のsync・waitでunverifiedになった時も同様にし、終了して下の行で再開するよう伝えます（<SESSION-ID>はこのセッションのID）。" : ""}手動設定済みならセッションの有効なhook一覧で同じproject・CLI・経路のguardとhook無効化の有無を確認し、設定ファイルの存在だけでは有効としません。configuredでも実行中の無効化・信頼設定・継続上限までは保証しません。${agent === "claude" ? `
+${command} orchestrate resume <SESSION-ID> --project ${shellArgument(project)}` : ""}
 ${command} help work --json
 ${command} projects list --json
 ${canStart ? `${command} work start --project <PROJECT> --root <CHECKOUT> --title <TITLE> - --json < <ORDER-FILE>` : "このhost経路ではwork startは未対応です。新規作成が必要ならlocal Desktopのプロファイルで本文を生成し直し、自動で別経路へ切り替えません。"}
