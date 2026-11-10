@@ -29,7 +29,6 @@ async function fixture(t) {
   return { home, root, read, get current() { return current; }, set current(value) { current = value; } };
 }
 
-// A second member of the same project whose reads are independent of the target's.
 async function pair(t, otherCursor) {
   const f = await fixture(t), other = { ...task(), id: OTHER };
   await registerManagedThread(OTHER, { projectId: "project-tell", connection: "shared", syncCursor: otherCursor ?? readSnapshot(other).cursor }, { home: f.home });
