@@ -1,4 +1,4 @@
-import { OPTIONS_INVALID, RUNTIME_NOT_READY, RUNTIME_UNAVAILABLE } from "./help-errors.mjs";
+import { MANAGED_SUPERVISOR_STOPPED, OPTIONS_INVALID, RUNTIME_NOT_READY, RUNTIME_UNAVAILABLE } from "./help-errors.mjs";
 const RESTART_SHARED = "ユーザーが作業を終えてDesktopを終了し、codexteer desktop startで起動し直す。codexteerは自動で起動・再起動しない。";
 
 const sharedRuntimeErrors = [
@@ -18,11 +18,7 @@ const managedStoppedErrors = [
     when: "project control stopで停止済みの担当へwork tellした。",
     action: "送信しない。停止済みの担当は再開も別担当への置換もしない。続けるのはユーザーが明示的に指示したときだけで、そのときは新しい題名か発注でwork startを実行し、別の担当として立ち上げる。",
   },
-  {
-    code: "MANAGED_SUPERVISOR_STOPPED",
-    when: "停止済みの担当と同じ題名・発注・方針でwork startを再実行した。",
-    action: "停止済みの担当は再開しない。続けるのはユーザーが明示的に指示したときだけで、そのときは新しい題名か発注でwork startを実行し、別の担当として立ち上げる。",
-  },
+  MANAGED_SUPERVISOR_STOPPED,
 ];
 
 const supervisorForbiddenError = {

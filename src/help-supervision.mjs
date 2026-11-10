@@ -1,4 +1,4 @@
-import { NODE_VERSION_MISMATCH, OPTIONS_INVALID, STORE_UNSAFE, SUPERVISOR_NOT_REGISTERED, SUPERVISOR_ORPHANED, SUPERVISOR_PAUSED, SUPERVISOR_STOPPED } from "./help-errors.mjs";
+import { MANAGED_SUPERVISOR_STOPPED, NODE_VERSION_MISMATCH, OPTIONS_INVALID, STORE_UNSAFE, SUPERVISOR_NOT_REGISTERED, SUPERVISOR_ORPHANED, SUPERVISOR_PAUSED, SUPERVISOR_STOPPED } from "./help-errors.mjs";
 const THREAD_OPTION = { name: "THREAD", text: "対象タスク。ローカルUUID、codex://threads/<UUID>[?hostId=...]、Cloudのtask_ IDか公式タスクURL、Desktop Cloudのdurable_ IDかhostId=durableのリンク。正規化して本文に埋め込む。" };
 const MESSAGE_OPTION = { name: "MESSAGE", default: "標準方針", text: "監督方針。指定すると標準方針全体を置き換える。引用して一つの引数で渡す。空白だけはINVALID_SUPERVISION_POLICY、--で始まる文はOPTIONS_INVALID。" };
 const AGENT_IDENTITY = "監督IDのowner（register --owner）と本文のsend --source（claudeはclaude-code）にもなる。claude/codex以外は生成前にOPTIONS_INVALIDで拒否する。";
@@ -18,6 +18,7 @@ const LAUNCH_RETURNS = "起動したエージェントの標準入力・標準�
 const SESSION_ERRORS = [
   { code: "SUPERVISOR_CONFLICT", when: "registerした対象に別のactive/paused監督がいる（異常終了で残った登録を含む）。または同じ監督IDが別タスクに登録済み。", action: "置き換えずユーザーに知らせる。不要な旧監督はユーザーがsupervise stopしてから、新しい本文で始める。" },
   SUPERVISOR_STOPPED,
+  MANAGED_SUPERVISOR_STOPPED,
   { code: "SUPERVISOR_MISMATCH", when: "コマンドの監督ID・--connection・remote transportが登録と違う（古い本文や別セッション）。", action: "その監督を終了する。生成されたコマンドを変えずに使っていたか確認する。" },
   SUPERVISOR_NOT_REGISTERED,
   SUPERVISOR_PAUSED,

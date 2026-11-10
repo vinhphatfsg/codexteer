@@ -1,13 +1,14 @@
 import { tempPrefix } from "../test-support/temp.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { registerSupervisor, getSupervisor, assertSupervisor, assertSupervisorRegistration, controlSupervisor, recordSupervisorObservation, withSupervisedSend, listSupervisors } from "../src/supervision.mjs";
 import { storePath, writeRecord } from "../src/store.mjs";
+import { registerManagedThread } from "../src/project-index.mjs";
 
 const ID = "11111111-1111-4111-8111-111111111111", OTHER = "22222222-2222-4222-8222-222222222222";
 const BIN = fileURLToPath(new URL("../bin/codexteer.mjs", import.meta.url)), run = promisify(execFile);
@@ -148,3 +149,30 @@ test("invalid retirement history fails closed", async t => {
     await assert.rejects(registerSupervisor(ID, randomUUID(), storage), { code: "SUPERVISOR_INVALID" });
   }
 });
+
+for (const { thread, connection, bucket } of targets) {
+  test(`${connection}: stopped project work is never supervised again, whatever registers it`, async t => {
+    const storage = await fixture(t), a = randomUUID(), b = randomUUID(), options = { ...storage, connection };
+    await registerManagedThread(thread, { projectId: "P", connection }, storage);
+    await registerSupervisor(thread, a, options);
+    await controlSupervisor(thread, "stop", storage);
+    const file = storePath(bucket, thread, storage.home), before = await readFile(file, "utf8");
+    for (const session of [a, b]) {
+      await assert.rejects(registerSupervisor(thread, session, options), { code: "MANAGED_SUPERVISOR_STOPPED" });
+      await assert.rejects(assertSupervisorRegistration(thread, session, options), { code: "MANAGED_SUPERVISOR_STOPPED" }, "doctor agrees with registration");
+    }
+    if (connection !== "desktop") for (const command of [["supervise", "register", thread], ["doctor", "--thread", thread]]) {
+      const result = await cli(storage, ["--connection", connection, "--supervisor", b, ...command]);
+      assert.equal(result.ok, false); assert.equal(result.error.code, "MANAGED_SUPERVISOR_STOPPED", command.join(" "));
+    }
+    if (connection === "shared") {
+      const bin = `${storage.home}/agent-bin`, launched = `${storage.home}/launched`;
+      await mkdir(bin); await writeFile(`${bin}/claude`, `#!/bin/sh\ntouch "${launched}"\n`, { mode: 0o700 });
+      const launch = await run(process.execPath, [BIN, "supervise", thread, "Observe only.", "--agent", "claude", "--use-path-cli"],
+        { env: { ...process.env, CODEX_HOME: storage.home, PATH: `${bin}:${process.env.PATH}` }, timeout: 10000 }).then(() => null, error => error);
+      assert.ok(launch, "supervise THREAD must fail"); assert.match(launch.stderr, /work start/);
+      await assert.rejects(readFile(launched), { code: "ENOENT" }, "no agent is launched for stopped project work");
+    }
+    assert.equal(await readFile(file, "utf8"), before, "the stopped record stays as it was");
+  });
+}
