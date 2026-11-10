@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { tempPrefix } from "../test-support/temp.mjs";
 import { legacyHead } from "../test-support/fixtures/project-sync-head-0.23.0.mjs";
 import { registerManagedThread, getManagedThread, listManagedThreads, managedMembershipDigest, updateManagedThreadCursor } from "../src/project-index.mjs";
@@ -247,4 +248,19 @@ test("settled work whose stop can no longer be confirmed is read again", async t
   assert.equal(invalid.complete, true); assert.equal(row(invalid, A).settled, undefined); assert.equal((await f.head()).settled, undefined);
   await removeRecord("supervisors", A, f.storage); await f.sync();
   assert.ok(f.calls.includes(A), "a missing binding is not a stop");
+});
+
+test("both CLIs reject excluding supervised work and combining the flag with --continue, without a backend", async t => {
+  const f = await fixture(t);
+  for (const connection of [[], ["--connection", "desktop-cloud"]]) {
+    const run = (...args) => spawnSync(process.execPath, ["bin/codexteer.mjs", ...connection, "project", "sync", ...args, "--json"],
+      { cwd: new URL("../", import.meta.url), env: { ...process.env, CODEX_HOME: f.storage.home }, encoding: "utf8" });
+    const supervised = run("--project", "P", "--exclude-unreadable", A, "--reason", "too large");
+    assert.notEqual(supervised.status, 0); assert.equal(JSON.parse(supervised.stdout).error.code, "PROJECT_SYNC_EXCLUDE_NOT_STOPPED");
+    const unpaired = run("--project", "P", "--exclude-unreadable", A);
+    assert.notEqual(unpaired.status, 0); assert.equal(JSON.parse(unpaired.stdout).error.code, "PROJECT_SYNC_INVALID");
+    const continued = run("--continue", uuid(9), "--exclude-unreadable", A, "--reason", "too large");
+    assert.notEqual(continued.status, 0); assert.match(JSON.parse(continued.stdout).error.code, /OPTIONS_INVALID$/);
+    assert.equal(await f.head(), null);
+  }
 });
