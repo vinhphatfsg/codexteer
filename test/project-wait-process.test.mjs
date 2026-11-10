@@ -85,17 +85,19 @@ test("real orchestrate launch: only its own wait permits Stop; another session i
 
 test("real CLI sync and wait report the calling session's Stop hook status beside the paged result", { timeout: 20000 }, async t => {
   const f = await fixture(t);
-  const sync = await f.cli(["project", "sync", "--project", "P", "--json"]);
-  assert.equal(sync.data.stop_hook, "configured"); assert.equal(sync.data.works[0].thread_id, ID);
-  const { stop_hook: _hook, ...page } = sync.data;
-  assert.equal(sync.data.output_bytes, Buffer.byteLength(JSON.stringify(page)), "the paged envelope keeps its own size");
-  const continued = await f.cli(["project", "sync", "--continue", sync.data.sync_token, "--json"]);
-  assert.equal(continued.data.stop_hook, "configured");
-  const waited = await f.cli(["project", "wait", "--project", "P", "--timeout-ms", "0", "--json"]);
-  assert.equal(waited.data.timed_out, true); assert.equal(waited.data.stop_hook, "configured");
-  for (const args of [["project", "sync", "--project", "P", "--json"], ["project", "wait", "--project", "P", "--timeout-ms", "0", "--json"]]) {
-    const foreign = await f.run(f.other, args);
-    assert.equal(foreign.code, 0, foreign.stderr); assert.equal(JSON.parse(foreign.stdout).data.stop_hook, "unverified");
+  for (const connection of [[], ["--connection", "desktop-cloud"]]) {
+    const sync = await f.cli([...connection, "project", "sync", "--project", "P", "--json"]);
+    assert.equal(sync.data.stop_hook, "configured", connection.join(" ")); assert.equal(sync.data.works[0].thread_id, ID);
+    const { stop_hook: _hook, ...page } = sync.data;
+    assert.equal(sync.data.output_bytes, Buffer.byteLength(JSON.stringify(page)), "the paged envelope keeps its own size");
+    const continued = await f.cli([...connection, "project", "sync", "--continue", sync.data.sync_token, "--json"]);
+    assert.equal(continued.data.stop_hook, "configured");
+    const waited = await f.cli([...connection, "project", "wait", "--project", "P", "--timeout-ms", "0", "--json"]);
+    assert.equal(waited.data.timed_out, true); assert.equal(waited.data.stop_hook, "configured");
+    for (const args of [["project", "sync", "--project", "P", "--json"], ["project", "wait", "--project", "P", "--timeout-ms", "0", "--json"]]) {
+      const foreign = await f.run(f.other, [...connection, ...args]);
+      assert.equal(foreign.code, 0, foreign.stderr); assert.equal(JSON.parse(foreign.stdout).data.stop_hook, "unverified");
+    }
   }
 });
 
