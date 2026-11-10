@@ -44,6 +44,11 @@ function success(command, data, json) {
   return data;
 }
 
+// Added beside hostFields, outside the paged sync envelope that output_bytes measures.
+async function withStopHook(data) {
+  return Object.assign(data, { stop_hook: (await projectGuardStatus(data.project_id)).stop_hook });
+}
+
 export function fail(error, json, argv = []) {
   const message = error instanceof Error ? error.message : String(error);
   const remedy = errorRemedy(argv, error.code);
@@ -248,9 +253,9 @@ async function mainOnTarget(argv) {
           return;
         }
         if (action === "guard") { console.log(JSON.stringify(await guardProject(project))); return; }
-        const data = await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
+        const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
           read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),
-        });
+        }));
         success("project.wait", data, json); if (!json) console.log(JSON.stringify(data, null, 2));
         if (data.reason === "observation_failed") process.exitCode = 1;
         return;
@@ -275,7 +280,7 @@ async function mainOnTarget(argv) {
         const project = takeOption(args, "--project", undefined), byteBudget = Number(takeOption(args, "--byte-budget", "16000"));
         const continuation = takeOption(args, "--continue", undefined), offset = Number(takeOption(args, "--offset", "0")), eventOffset = Number(takeOption(args, "--event-offset", "0"));
         if (args.length || (!project && !continuation)) throw usage("Expected: project sync --project ID, or project sync --continue TOKEN --offset N.");
-        const data = continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) });
+        const data = await withStopHook(continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) }));
         success("project.sync", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
       }
       if (action === "event") {
