@@ -535,7 +535,7 @@ export const topics = {
   },
 
   work: {
-    title: "managed担当を開始し、complete syncを基点に安全に指示する",
+    title: "managed担当を開始し、完全に読めた担当へ安全に指示する",
     when: "方針付き担当を立ち上げるとき、またはproject syncで確認済みの担当へcursor・finding・監督IDを手渡さず指示するとき。",
     usage: ["work start --project ID|NAME --title TITLE [--root PATH] <WORK-ORDER>|-", "work tell THREAD [--sync-token TOKEN] [--new-turn] <INSTRUCTION>|-", "--connection desktop-cloud work start --project NAME --environment ID|NAME --title TITLE --root PATH <WORK-ORDER>|-"],
     options: [
@@ -553,7 +553,7 @@ export const topics = {
       "方針は権限拡張や承認・質問への代理回答を許可しない。既存担当へ方針変更を自動送信しない。",
       "Desktop Cloudのprojectはローカルの調整用namespaceで、Desktop DBのproject所属を要求しない。ローカルcheckoutとCloud側の一致は自動保証しない。",
       "ローカルのwork startはDesktopの保存済み権限モードに揃え、未確認ならDESKTOP_PERMISSION_UNVERIFIEDで作成しない。work tell --new-turnは対象スレッド自身の権限設定を継承する。",
-      "work tellは最新のcomplete project syncを要求し、送信直前に差分をdrainする。新event、質問・承認待ち、attention不明、不完全syncでは送らない。",
+      "work tellは最新のproject syncで対象の担当が完全に読めていること（complete:true）を要求し、送信直前に差分をdrainする。対象の新event、質問・承認待ち、attention不明、不完全な観測では送らない。他の担当の未読・不完全は妨げず、receiptのother_work（incomplete・human_attention・membership_changed）で返す。--sync-tokenで以前のsyncを指定できるのは、対象がその後に完全に再読されていない間だけ。",
       "finding・source・kind・監督IDは内部化する。質問・承認への回答を代理生成するflagは提供しない。",
     ],
     errors: [OPTIONS_INVALID, supervisorForbiddenError, ...managedStoppedErrors,
