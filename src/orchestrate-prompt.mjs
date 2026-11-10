@@ -59,7 +59,7 @@ ${command} projects list --json
 ${canStart ? `${command} work start --project <PROJECT> --root <CHECKOUT> --title <TITLE> - --json < <ORDER-FILE>` : "このhost経路ではwork startは未対応です。新規作成が必要ならlocal Desktopのプロファイルで本文を生成し直し、自動で別経路へ切り替えません。"}
 作成結果の担当IDとreceiptを記録します。作成・初回配送が不明、部分成功、観測不能なら同じ発注を作り直さず、保存済みreceiptと同じ担当を読み取り照合します。
 ${command} project sync --project <PROJECT> --json
-再起動・要約の後もproject syncから再開します。続きがあれば返されたtokenとoffsetを使って同じsnapshotを読み切ります。未解決attentionの根拠を読み、未確認・history_gap・complete:falseの担当を変化なしと扱いません。読めない担当がいても、completeにするためにsyncやwaitを繰り返さず、読めた担当の対応を進めます。--exclude-unreadableは検収してstopした担当が読めない場合だけ使います。
+再起動・要約の後もproject syncから再開します。続きがあれば返されたtokenとoffsetを使って同じsnapshotを読み切ります。前のwaitの結果を読んだ記録がなければ、syncが返すwait_sync_tokenも--continueで読み切ります。そのwaitの変化は以後のsyncに出ません。未解決attentionの根拠を読み、未確認・history_gap・complete:falseの担当を変化なしと扱いません。読めない担当がいても、completeにするためにsyncやwaitを繰り返さず、読めた担当の対応を進めます。--exclude-unreadableは検収してstopした担当が読めない場合だけ使います。
 ${command} project sync --continue <TOKEN> --offset <OFFSET> --event-offset <EVENT-OFFSET> --json
 ${command} project event <EVENT-TOKEN> --json
 未完了の担当（pausedも含む）がいる間は、次を終了通知の届くバックグラウンドタスクとして動かし続けます。質問・承認・URLをユーザーへ伝えた後も監視を続け、waitが返ったら結果と続きのsyncを読み、検収・対応して再びwaitを開始します。読めない担当はunreadableに並び、waitは新しい失敗かエラーcodeの変化ごとに1回だけobservation_failedで返り、その後は読めた担当の変化を待ちます。stopしていない担当がunreadableにある間、waitはその担当の変化を監視していません。${command} status <THREAD>やそのbranchで別に確認してユーザーへ報告し、waitを静かにする目的でstopしません。timeout・エラーの終了後も監視があると扱いません。
