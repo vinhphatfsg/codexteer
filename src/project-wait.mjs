@@ -121,18 +121,28 @@ export async function withStopHook(data) {
   return Object.assign(data, { stop_hook: (await projectGuardStatus(data.project_id)).stop_hook });
 }
 
-function probeReason({ previous, membershipDigest, states, complete }, observedAttention) {
-  if (!complete) return "observation_failed";
+// The publication that last wrote a member's baseline entry; a 0.23.0 entry was
+// written with its whole baseline.
+const entryWriter = (baseline, id) => baseline.works[id] && (baseline.works[id].sync_token ?? baseline.sync_token);
+
+function probeReason({ previous, membershipDigest, states }, observedAttention, failures) {
   const baseline = previous?.wait_baseline;
   if (!baseline) return "initial_sync";
   if (baseline.membership_digest !== membershipDigest) return "membership_changed";
-  const generation = baseline.sync_token ?? createHash("sha256").update(JSON.stringify(baseline)).digest("hex");
-  if (observedAttention.baseline !== generation) {
-    observedAttention.baseline = generation; observedAttention.flags = {};
+  // Observed flags hold only while the entry they were compared with stands. A
+  // member left unread by a newer publication keeps its entry, so a clear seen
+  // before it still makes a reappearance new.
+  const entries = observedAttention.entries ?? {};
+  for (const id of Object.keys(observedAttention.flags)) {
+    if ((entries[id] ?? observedAttention.baseline) === entryWriter(baseline, id)) entries[id] = entryWriter(baseline, id);
+    else { delete observedAttention.flags[id]; delete entries[id]; }
   }
+  Object.assign(observedAttention, { baseline: baseline.sync_token, entries });
   for (const [id, state] of states) {
-    const before = baseline.works[id]?.signal, after = projectWaitSignal(state.latest);
-    if (!before) return "membership_changed";
+    if (!state.complete) continue;
+    // A member never read in full before is new to the orchestrator once it is.
+    if (!baseline.works[id]) return "work_changed";
+    const before = baseline.works[id].signal, after = projectWaitSignal(state.latest);
     // Web Cloud adapts each user-history node into a completed turn too. Its
     // typed backend IDs distinguish input from assistant execution without
     // changing public events/hashes and invalidating existing read cursors.
@@ -143,9 +153,11 @@ function probeReason({ previous, membershipDigest, states, complete }, observedA
     if ((executionTurn(after.turn_id) && ended.has(after.turn_status) && (after.turn_id !== before.turn_id || after.turn_status !== before.turn_status))
       || (failed.has(after.status) && after.status !== before.status)
       || after.attention.some(flag => !(observedAttention.flags[id] ?? before.attention ?? []).includes(flag))) return "work_changed";
-    observedAttention.flags[id] = after.attention;
+    observedAttention.flags[id] = after.attention; entries[id] = entryWriter(baseline, id);
   }
-  return null;
+  // A failure already returned stays quiet until its member's code changes.
+  const reported = previous.wait_reported_failures ?? {};
+  return Object.entries(failures).some(([id, error]) => reported[id] !== error) ? "observation_failed" : null;
 }
 
 export async function waitProject(projectId, { timeoutMs } = {}, dependencies = {}) {
@@ -166,29 +178,34 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
       await writeRecord("project-waits", key, record, storage);
       try {
         // Separate from reviewed cursors: retain observed clear/reappearance
-        // edges across bounded waits, keyed to the exact complete baseline.
+        // edges across bounded waits, keyed to each member's baseline entry.
         const observedAttention = await readRecord("project-wait-attention", key, storage)
           ?? { schema: 1, project_id: projectId, baseline: null, flags: {} };
+        const isMap = (value, valid) => !!value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every(valid);
         if (observedAttention.schema !== 1 || observedAttention.project_id !== projectId
           || !(observedAttention.baseline === null || typeof observedAttention.baseline === "string")
-          || !observedAttention.flags || typeof observedAttention.flags !== "object" || Array.isArray(observedAttention.flags)
-          || Object.values(observedAttention.flags).some(flags => !Array.isArray(flags) || flags.some(flag => typeof flag !== "string"))) {
+          || !isMap(observedAttention.flags, flags => Array.isArray(flags) && flags.every(flag => typeof flag === "string"))
+          || (observedAttention.entries !== undefined && !isMap(observedAttention.entries, token => typeof token === "string"))) {
           throw failure("Invalid project wait attention observations. Inspect local state before restarting wait.");
         }
-        let savedAttention = JSON.stringify(observedAttention);
+        let savedAttention = JSON.stringify(observedAttention), failures = {};
         const deadline = timeoutMs === undefined ? Infinity : performance.now() + timeoutMs;
         const members = await listManagedThreads(projectId, storage);
         const pollMs = dependencies.pollMs ?? (members.some(m => ["cloud", "desktop-cloud"].includes(m.connection)) ? 15000 : 1000);
+        // Outside the paged sync envelope, on every return: the members the last read could not complete.
+        const unreadable = () => Object.entries(failures).map(([thread_id, error]) => ({ thread_id, error }));
         for (;;) {
           let reason;
-          const sync = await syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => !!(reason = probeReason(snapshot, observedAttention)) });
-          if (sync) return { project_id: projectId, changed: reason !== "observation_failed" && sync.complete, timed_out: false,
-            reason: sync.complete ? reason : "observation_failed", sync };
+          const sync = await syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => {
+            failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete ? [] : [[id, state.error]]));
+            return !!(reason = probeReason(snapshot, observedAttention, failures));
+          } });
+          if (sync) return { project_id: projectId, changed: reason !== "observation_failed", timed_out: false, reason, unreadable: unreadable(), sync };
           const observed = JSON.stringify(observedAttention);
           if (observed !== savedAttention) {
             await writeRecord("project-wait-attention", key, observedAttention, storage); savedAttention = observed;
           }
-          if (performance.now() >= deadline) return { project_id: projectId, changed: false, timed_out: true, reason: "timeout", sync: null };
+          if (performance.now() >= deadline) return { project_id: projectId, changed: false, timed_out: true, reason: "timeout", unreadable: unreadable(), sync: null };
           await delay(Math.max(0, Math.min(pollMs, deadline - performance.now())));
         }
       } finally { await removeRecord("project-waits", key, storage); }

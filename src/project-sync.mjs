@@ -237,8 +237,8 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   }
   for (const { action, member } of plan.values()) {
     if (action !== "observe") continue;
-    // Wait probes start at the last complete project snapshot, even if a later
-    // partial sync advanced some individual membership cursors.
+    // Wait probes start where each member was last reviewed, even if a later
+    // partial sync advanced its membership cursor.
     const cursor = dependencies.waitProbe ? previous?.wait_baseline?.works?.[member.thread_id]?.cursor ?? member.sync_cursor : member.sync_cursor;
     states.set(member.thread_id, { member, cursor, events: [], observations: [], seen: new Set([cursor]), pages: 0, complete: false, history_gap: false, retry_after_ms: null, error: null, unreadable: false });
   }
@@ -332,10 +332,11 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     complete: observedComplete(), complete_work_ids: works.filter(w => w.complete).map(w => w.thread_id),
     unresolved_attention: unresolved, historical_attention: historical, created_at: createdAt,
     ...(Object.keys(carried).length ? { settled: carried } : {}),
-    ...(previous?.wait_baseline ? { wait_baseline: previous.wait_baseline } : {}) };
+    ...(previous?.wait_baseline ? { wait_baseline: previous.wait_baseline } : {}),
+    ...(previous?.wait_reported_failures ? { wait_reported_failures: previous.wait_reported_failures } : {}) };
   // A probe that sees only ordinary progress must not publish, consume events,
   // or replace the orchestrator's reviewed baseline.
-  if (dependencies.waitProbe && !dependencies.waitProbe({ previous, members, membershipDigest, states, complete: head.complete })) return null;
+  if (dependencies.waitProbe && !dependencies.waitProbe({ previous, members, membershipDigest, states })) return null;
   head.wait_sync_token = previous?.wait_sync_token ?? null;
   for (const work of observed) work.detail_token = randomUUID();
   // The existing project head lock protects only publication, never network I/O.
@@ -374,10 +375,22 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       }
       head.complete = observedComplete();
       head.complete_work_ids = works.filter(w => w.complete).map(w => w.thread_id);
-      if (head.complete) {
-        head.wait_baseline = { sync_token: syncToken, membership_digest: membershipDigest, works: Object.fromEntries([...states].map(([id, state]) => [id, {
-          cursor: state.cursor, signal: projectWaitSignal(state.latest),
-        }])) };
+      // The orchestrator reviews what a wait returns and what a complete sync
+      // shows; a partial sync is not a review. A member this publication could
+      // not read keeps the entry it was last reviewed against, stamped with the
+      // publication that wrote it.
+      if (dependencies.waitProbe || head.complete) {
+        const reviewed = previous?.wait_baseline, baseline = {}, failures = {};
+        for (const [id, state] of states) {
+          if (head.settled?.[id]) continue;
+          if (state.complete) baseline[id] = { cursor: state.cursor, signal: projectWaitSignal(state.latest), sync_token: syncToken };
+          else {
+            failures[id] = works.find(work => work.thread_id === id).error;
+            if (reviewed?.works?.[id]) baseline[id] = { sync_token: reviewed.sync_token, ...reviewed.works[id] };
+          }
+        }
+        head.wait_baseline = { sync_token: syncToken, membership_digest: membershipDigest, works: baseline };
+        if (Object.keys(failures).length) head.wait_reported_failures = failures; else delete head.wait_reported_failures;
         if (dependencies.waitProbe) head.wait_sync_token = syncToken;
       }
       // Save detail records before publishing a head that work tell may consume.

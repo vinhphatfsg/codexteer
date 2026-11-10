@@ -122,7 +122,7 @@ test("unknown attention stays distinct and fails observation without advancing w
   assert.equal(unknown.changed, false); assert.equal(unknown.timed_out, false); assert.equal(unknown.reason, "observation_failed");
   assert.equal(unknown.sync.complete, false); assert.equal(unknown.sync.works[0].error, "PROJECT_WAIT_ATTENTION_UNKNOWN");
   assert.deepEqual(await getManagedThread(f.id, f.storage), before);
-  assert.deepEqual((await listRecords("project-sync-heads", f.storage))[0].wait_baseline, head.wait_baseline);
+  assert.deepEqual((await listRecords("project-sync-heads", f.storage))[0].wait_baseline.works, head.wait_baseline.works);
   await syncProject("P", {}, f.dependencies);
   assert.equal((await listRecords("project-sync-heads", f.storage))[0].wait_baseline.works[f.id].signal.attention, null);
   f.thread.status.activeFlags = ["waitingOnApproval"];
