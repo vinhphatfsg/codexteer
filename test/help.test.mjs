@@ -27,6 +27,8 @@ test("help routes orchestration verbs to four operations and preserves low-level
     assert.doesNotMatch(notes, /Web Cloud|--connection cloud(?:\s|$)|Codex担当は調査/);
   }
   assert.match(helpData("project").usage.join(" "), /project control pause\|stop\|resume/);
+  assert.match(helpData("project").notes.join(" "), /syncとwaitのJSONもdata\.stop_hook/);
+  assert.match(helpData("project").notes.join(" "), /storage_bytes.*required_bytes.*limit_bytes/);
   assert.match(helpData("orchestrate prompt").returns, /cloud_command（Desktop Cloud/);
 });
 

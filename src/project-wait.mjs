@@ -116,6 +116,11 @@ export async function projectGuardStatus(projectId, dependencies = {}) {
   }
 }
 
+// Outside the paged sync envelope: output_bytes and the byte budget measure that alone.
+export async function withStopHook(data) {
+  return Object.assign(data, { stop_hook: (await projectGuardStatus(data.project_id)).stop_hook });
+}
+
 function probeReason({ previous, membershipDigest, states, complete }, observedAttention) {
   if (!complete) return "observation_failed";
   const baseline = previous?.wait_baseline;

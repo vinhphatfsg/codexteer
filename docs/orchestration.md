@@ -117,7 +117,7 @@ guardはClaude CodeのStop hook用の生JSONを返します（通常の`ok/data`
 
 macOSの起動識別は、起動日時とcommandのSHA-256だけを保存・比較します。ユーザーの目標を含むpromptやcommand全文は保存しません。wait自身にも同じ形式を使い、process titleのnonceによる区別を維持します。OSから読んだcommandはその場でhashにし、Linuxは従来どおりboot IDと起動tickで識別します。旧形式の識別を持つwaitは新しいguardと一致しないため、所有セッションで旧waitを終了してから、同じ新しいCLIでwaitとhookを実行してください。既存recordや稼働中の保存済みCLIを自動で書き換えません。
 
-開始時には受信したセッションで`project guard --project sample --status --json`を実行します。この形式は通常のenvelopeで`data.stop_hook`を返します。`configured`は、直接Claude起動が`CODEXTEER_STOP_GUARD`へ付けたproject・launcherのpid・起動識別の印を、現在の親プロセスと照合できた状態です。入れ子のCLIや別のlauncherへ引き継がれた印は認めません。本文の生成だけでは受信側の起動経路を知ることができず、環境変数も設定しません。
+開始時には受信したセッションで`project guard --project sample --status --json`を実行します。この形式は通常のenvelopeで`data.stop_hook`を返します。`project sync`と`project wait`のJSONも同じ判定を`data.stop_hook`に付けます。ページ本体の外に付くため、`output_bytes`とbyte予算には含まれません。`configured`は、直接Claude起動が`CODEXTEER_STOP_GUARD`へ付けたproject・launcherのpid・起動識別の印を、現在の親プロセスと照合できた状態です。入れ子のCLIや別のlauncherへ引き継がれた印は認めません。本文の生成だけでは受信側の起動経路を知ることができず、環境変数も設定しません。
 
 印のない手動起動、Codex起動、異なるproject、プロセス検査不能は`unverified`です。最初の報告で「監視漏れを止める仕組みがない（有効なStop hookを確認できない）」ことと、`help project`の設定例を案内してください。手動設定済みならセッションの有効なhook一覧（Claude Codeでは`/hooks`）で同じproject・CLI・接続経路のguardとhook無効化の有無を確認します。ファイルの存在だけで有効と判断しません。`configured`も設定時の印であり、その後の無効化、信頼設定、CLIの継続上限やhook実行そのものまでは保証しません。未完了の間はhookの状態にかかわらず自分のwaitを動かし続けます。
 
@@ -155,7 +155,7 @@ macOSの起動識別は、起動日時とcommandのSHA-256だけを保存・比�
 
 `CODEX_HOME`のhost namespaceごとに、`project-sync-events`・`project-sync-results`・`work-starts`のJSONファイル総量を256 MiBまでに制限します。work-startのreceipt・方針本文も含みます。最新headなど他の管理メタデータ、ジャーナルやバックエンド履歴はこの上限の対象外です。表示byte予算とは別の制限です。1担当1回の全文観測は16 MiBまでで、超過は`PROJECT_HISTORY_BATCH_LIMIT`としてcursorを進めません。
 
-保存はpublicationの一時データと複製分を保守的に予約するため、実ファイル総量が256 MiB未満でも`PROJECT_HISTORY_LIMIT`になる場合があります。エラーのstorage_bytes・required_bytes・limit_bytesを確認してください。上限を満たさない全文を黙って切ったり、自動削除したりしません。初回観測や作成段階の保存が失敗しても、同じ担当を自動で作り直しません。
+保存はpublicationの一時データと複製分を保守的に予約するため、実ファイル総量が256 MiB未満でも`PROJECT_HISTORY_LIMIT`になる場合があります。エラーのstorage_bytes（使用量）・required_bytes（今回必要な量）・limit_bytes（上限）を確認してください。`--json`のerrorとtext出力の両方に表示します。上限を満たさない全文を黙って切ったり、自動削除したりしません。初回観測や作成段階の保存が失敗しても、同じ担当を自動で作り直しません。
 
 ```sh
 codexteer project prune --project sample --json

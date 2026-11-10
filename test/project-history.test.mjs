@@ -8,9 +8,10 @@ import { readSnapshot } from "../src/observe.mjs";
 import { registerManagedThread, getManagedThread } from "../src/project-index.mjs";
 import { readRecord, writeRecord, listRecords, storePath, recordStats } from "../src/store.mjs";
 import { syncProject, projectEvent, continueProjectSync } from "../src/project-sync.mjs";
-import { pruneProjectHistory, withHistoryReservation, writeHistoryRecord, HISTORY_LIMIT_BYTES } from "../src/project-history.mjs";
+import { pruneProjectHistory, withHistoryReservation, writeHistoryRecord, assertHistoryBatch, HISTORY_LIMIT_BYTES, HISTORY_BATCH_BYTES } from "../src/project-history.mjs";
 import { startWork } from "../src/work-start.mjs";
 import { controlProject } from "../src/project-control.mjs";
+import { fail } from "../src/cli.mjs";
 
 const id = "11111111-1111-4111-8111-000000000001", other = "22222222-2222-4222-8222-000000000002";
 const key = name => createHash("sha256").update(name).digest("hex").slice(0,40);
@@ -92,7 +93,20 @@ test("history quota is checked before cursor publication and initial receipts ca
   const file = await open(storePath("project-sync-events", "filler", f.home), "w", 0o600), chunk = Buffer.alloc(1024 * 1024, 32);
   try { await file.write('{}'); for (let i = 0; i < 256; i++) await file.write(chunk); } finally { await file.close(); }
   f.thread.turns[0].items.push(message("new"));
-  await assert.rejects(f.sync(), { code: "PROJECT_HISTORY_LIMIT" });
+  const full = await f.sync().catch(error => error);
+  assert.equal(full.code, "PROJECT_HISTORY_LIMIT"); assert.equal(full.limit_bytes, HISTORY_LIMIT_BYTES);
+  assert(full.storage_bytes >= 256 * 1024 * 1024 && full.required_bytes > 1024 * 1024);
+  const numbers = { storage_bytes: full.storage_bytes, required_bytes: full.required_bytes, limit_bytes: full.limit_bytes };
+  const printed = (t, json) => {
+    const stream = t.mock.method(console, json ? "log" : "error", () => {}), priorExit = process.exitCode;
+    try { fail(full, json); } finally { stream.mock.restore(); process.exitCode = priorExit; }
+    return stream.mock.calls.map(call => call.arguments[0]);
+  };
+  const { error } = JSON.parse(printed(t, true)[0]);
+  assert.equal(error.code, "PROJECT_HISTORY_LIMIT");
+  assert.deepEqual({ storage_bytes: error.storage_bytes, required_bytes: error.required_bytes, limit_bytes: error.limit_bytes }, numbers);
+  const text = printed(t, false);
+  for (const [name, value] of Object.entries(numbers)) assert(text.includes(`${name}: ${value}`));
   assert.equal((await getManagedThread(id, f.storage)).sync_cursor, baseline);
   assert.equal((await listRecords("project-sync-results", f.storage)).length, 0);
   await assert.rejects(writeHistoryRecord("work-starts", "new", { initial_events: [message("x")] }, f.storage), { code: "PROJECT_HISTORY_LIMIT" });
@@ -149,6 +163,7 @@ test("oversized real observation does not advance the saved sync cursor", async 
   f.thread.turns[0].items.push(message("too-big", "x".repeat(17 * 1024 * 1024)));
   const result = await f.sync();
   assert.equal(result.complete, false); assert.equal(result.works[0].error, "PROJECT_HISTORY_BATCH_LIMIT");
+  assert.throws(() => assertHistoryBatch("x".repeat(HISTORY_BATCH_BYTES)), { code: "PROJECT_HISTORY_BATCH_LIMIT", required_bytes: HISTORY_BATCH_BYTES + 2, limit_bytes: HISTORY_BATCH_BYTES });
   assert.equal((await getManagedThread(id, f.storage)).sync_cursor, baseline);
   assert.equal((await listRecords("project-sync-events", f.storage)).some(row => row.event?.id === "too-big"), false);
 });

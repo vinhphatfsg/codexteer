@@ -11,7 +11,8 @@ const failure = (code, message, details = {}) => Object.assign(new Error(message
 const key = project => createHash("sha256").update(project).digest("hex").slice(0, 40);
 
 export function assertHistoryBatch(...values) {
-  if (values.reduce((sum, value) => sum + bytes(value), 0) > HISTORY_BATCH_BYTES) throw failure("PROJECT_HISTORY_BATCH_LIMIT", "The full observation exceeds the 16 MiB batch limit. No cursor was advanced.");
+  const required = values.reduce((sum, value) => sum + bytes(value), 0);
+  if (required > HISTORY_BATCH_BYTES) throw failure("PROJECT_HISTORY_BATCH_LIMIT", "The full observation exceeds the 16 MiB batch limit. No cursor was advanced.", { required_bytes: required, limit_bytes: HISTORY_BATCH_BYTES });
 }
 async function usage(storage) {
   const stats = await Promise.all(buckets.map(bucket => recordStats(bucket, storage)));

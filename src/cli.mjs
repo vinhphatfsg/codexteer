@@ -30,7 +30,7 @@ import { startWork } from "./work-start.mjs";
 import { tellWork } from "./work-tell.mjs";
 import { readRecord } from "./store.mjs";
 import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
-import { waitProject, guardProject, projectGuardStatus } from "./project-wait.mjs";
+import { waitProject, guardProject, projectGuardStatus, withStopHook } from "./project-wait.mjs";
 import { verifyProjectThread } from "./thread-verify.mjs";
 import { withDeviceAccount, prepareDevice, recoverDeviceKey, enrollDevice, pairDevice, verifyDevice, deviceStatus, deviceIdentityInfo, readPairingCode } from "./remote-device.mjs";
 import { readDevice } from "./remote-device-store.mjs";
@@ -71,11 +71,13 @@ export function fail(error, json, argv = []) {
     remote_process_id: error.remote_process_id,
     verification_checks: error.verification_checks,
     remote_control_auth: error.remote_control_auth,
+    storage_bytes: error.storage_bytes, required_bytes: error.required_bytes, limit_bytes: error.limit_bytes,
   } }));
   else {
     console.error(`codexteer: ${message}`);
     for (const line of remedy?.usage ?? []) console.error(`使い方: codexteer ${line}`);
     if (remedy?.action) console.error(`対処: ${remedy.action}`);
+    for (const key of ["storage_bytes", "required_bytes", "limit_bytes"]) if (Number.isSafeInteger(error[key])) console.error(`${key}: ${error[key]}`);
     if (error.execution_environment === "cloud" || (typeof error.code === "string" && error.code.startsWith("DESKTOP_CLOUD_"))) {
       // Recovery metadata must survive an uncertain submission or a stale
       // on-disk receipt. Never print the child error, prompt, or diagnostics.
@@ -246,9 +248,9 @@ async function mainOnTarget(argv) {
           return;
         }
         if (action === "guard") { console.log(JSON.stringify(await guardProject(project))); return; }
-        const data = await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
+        const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
           read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),
-        });
+        }));
         success("project.wait", data, json); if (!json) console.log(JSON.stringify(data, null, 2));
         if (data.reason === "observation_failed") process.exitCode = 1;
         return;
@@ -274,7 +276,7 @@ async function mainOnTarget(argv) {
         const continuation = takeOption(args, "--continue", undefined), offset = Number(takeOption(args, "--offset", "0")), eventOffset = Number(takeOption(args, "--event-offset", "0"));
         const excludeUnreadable = takeOption(args, "--exclude-unreadable", undefined), reason = takeOption(args, "--reason", undefined);
         if (args.length || (!project && !continuation) || (continuation && (excludeUnreadable !== undefined || reason !== undefined))) throw usage("Expected: project sync --project ID [--exclude-unreadable THREAD --reason TEXT], or project sync --continue TOKEN --offset N.");
-        const data = continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget, excludeUnreadable, reason }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) });
+        const data = await withStopHook(continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget, excludeUnreadable, reason }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) }));
         success("project.sync", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
       }
       if (action === "event") {
