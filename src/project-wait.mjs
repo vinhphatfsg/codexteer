@@ -167,7 +167,9 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
   const storage = dependencies.storage ?? {}, identity = dependencies.processIdentity ?? processIdentity;
   // A second waiter must not consume a change that the first is about to return.
   const key = createHash("sha256").update(projectId).digest("hex").slice(0, 40);
+  let owned = false;
   return withStoreLock(`project-wait-${key}`, async () => {
+    owned = true;
     const id = randomUUID(), originalTitle = process.title;
     process.title = `codexteer-wait-${id}`;
     try {
@@ -219,7 +221,8 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
       } finally { await removeRecord("project-waits", key, storage); }
     } finally { process.title = originalTitle; }
   }, storage).catch(error => {
-    if (error.code === "RECORD_BUSY") error.message = "Project wait is already owned by another operation. Use one orchestrator per CODEX_HOME, host and project. Do not adopt another session's wait or remove its lock; have the owning session finish/cancel its wait and hand off before retrying. A wait whose session has exited ends by itself at its next poll; after a resume, retry shortly.";
+    // A record busy inside a running wait is not another session's wait.
+    if (error.code === "RECORD_BUSY" && !owned) error.message = "Project wait is already owned by another operation. Use one orchestrator per CODEX_HOME, host and project. Do not adopt another session's wait or remove its lock; have the owning session finish/cancel its wait and hand off before retrying. A wait whose session has exited ends by itself at its next poll; after a resume, retry shortly.";
     throw error;
   });
 }

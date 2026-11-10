@@ -196,7 +196,7 @@ test("guard counts paused and missing bindings, checks start identity, and allow
   const unidentified = await guardProject("P", { ...f.dependencies, orchestratorIdentity: async () => null });
   assert.equal(unidentified.decision, undefined); assert.match(unidentified.systemMessage, /PROJECT_GUARD_OWNER_UNVERIFIED/);
   assert.deepEqual(await guard(), {});
-  await assert.rejects(waitProject("P", { timeoutMs: 0 }, f.dependencies), { code: "RECORD_BUSY" });
+  await assert.rejects(waitProject("P", { timeoutMs: 0 }, f.dependencies), { code: "RECORD_BUSY", message: /already owned by another operation/ });
   } finally { release(); await waiting; }
   assert.equal((await guard()).decision, "block");
   await controlSupervisor(f.id, "stop", f.storage); assert.deepEqual(await guard(), {});
@@ -287,4 +287,13 @@ test("a wait whose orchestrator exited ends without publishing and frees the pro
     const waited = await waitProject("P", { timeoutMs: 30 }, { ...f.dependencies, processIdentity: identity, orchestratorIdentity: orchestrator });
     assert.equal(waited.reason, "timeout", `${name} keeps waiting`);
   }
+});
+
+test("a record busy inside a running wait keeps its own message, not another session's ownership", async t => {
+  const f = await fixture(t);
+  const busy = Object.assign(new Error("Another operation owns this local record. Retry after it finishes."), { code: "RECORD_BUSY" });
+  const error = await waitProject("P", { timeoutMs: 0 }, { ...f.dependencies, orchestratorIdentity: async () => { throw busy; } }).then(() => null, e => e);
+  assert.equal(error?.code, "RECORD_BUSY");
+  assert.doesNotMatch(error.message, /already owned|another session|hand off/i);
+  await assert.doesNotReject(waitProject("P", { timeoutMs: 0 }, f.dependencies), "the wait lock was released");
 });
