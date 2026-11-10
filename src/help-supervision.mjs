@@ -220,7 +220,7 @@ export const topics = {
       "起動したオーケストレーターはwork startで担当とbindingを作り、project syncで観測し、work tellで介入する。",
       "プロジェクト用の監督IDは作らない。work startが担当別に登録し、project controlが既存のbindingを制御する。",
       "Claude起動時はproject guardをStop hookとして--settingsへ追加する。checkoutの設定ファイルは編集しない。自分で起動するセッションの.claude/settings.json設定例はhelp projectを参照。Codexのhookは手動設定する（docs/orchestration.md）。",
-      "Stop hookと設定印は起動したプロセスにだけ付き、セッションには保存されない。素のclaude --resumeで再開したセッションはhookなしで動き、guard --statusはunverifiedになる。再開はorchestrate resumeで行う。",
+      "Stop hookと設定印は起動したプロセスにだけ付き、セッションには保存されない。素のclaude --resumeや--continueで再開したセッションはhookなしで動き、guard --statusはunverifiedになる。再開はorchestrate resumeで行う。",
       "受信セッションでproject guard --project ID --status --jsonを実行する。configuredは直接起動の設定印と親プロセスを照合済み、unverifiedは有効なStop hookを未確認。未確認なら最初の報告で監視漏れを止める仕組みがないこととhelp projectの設定例を案内する。同じCODEX_HOME・host・projectは1オーケストレーターとし、未完了の間は自分のwaitを動かし続ける。",
       "本文の委任範囲と役割分担はhelp orchestrate prompt、手順の詳細はdocs/orchestration.md。",
     ],

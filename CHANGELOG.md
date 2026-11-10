@@ -13,7 +13,7 @@
 - `project wait`は読めない担当があっても、読めた担当の変化を`work_changed`で返します。読めない担当は全ての結果の`unreadable`に載り、`observation_failed`は新しい失敗かエラーcodeの変化ごとに1回だけ返します。同じ失敗の間は、間に通常のsyncを実行しても、何も保存せずに待ち続けます。別のsyncとの公開競合に負けたwaitは、従来どおり`observation_failed`・`changed:false`で返ります。公開されなかった結果は`publication_conflict`にエラーcodeを持ちます。
 - `project wait`は、開始したClaude/Codex CLIセッションが異常終了すると、次の照会の前に`reason:"owner_exited"`・終了値1で終わり、wait記録とlockを解放します。再開したセッションのwaitが`RECORD_BUSY`になり続け、Stop hookが停止を拒否し続けることはなくなりました。セッションを特定できないwaitは従来どおり待ち続けます。
 - `project sync`と`project wait`のJSONに`stop_hook`（`configured`|`unverified`）を追加しました。Desktop Cloud接続でも返します。
-- `orchestrate resume SESSION_ID --project ID`を追加しました。`orchestrate`で起動したClaude Codeセッションを、同じStop hookと設定印を付けて`claude --resume`で再開し、新しい本文は送りません。素の`claude --resume`ではhookが付かず、未完了の担当があってもwaitなしで停止できました。Claude向けの本文は、後のsync・waitで`stop_hook`が`unverified`になった場合も報告し、この再開コマンドを案内します。
+- `orchestrate resume SESSION_ID --project ID`を追加しました。`orchestrate`で起動したClaude Codeセッションを、同じStop hookと設定印を付けて`claude --resume`で再開し、新しい本文は送りません。素の`claude --resume`や`claude --continue`ではhookが付かず、未完了の担当があってもwaitなしで停止できました。Claude向けの本文は、`stop_hook`が`unverified`なら最初の報告でも途中でも、この再開コマンドを案内します。
 - 履歴容量のエラーは`storage_bytes`・`required_bytes`・`limit_bytes`をJSONとtextの両方で返します。受信上限を超えた応答のメッセージは、失敗した接続の上限（Desktop Cloudは16 MiB、共有App Serverは64 MiB）を示します。
 
 ## 0.23.0 — 2026-11-05公開
