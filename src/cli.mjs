@@ -272,8 +272,9 @@ async function mainOnTarget(argv) {
         if (supervisor) throw Object.assign(new Error("A bound supervisor cannot sync an entire project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         const project = takeOption(args, "--project", undefined), byteBudget = Number(takeOption(args, "--byte-budget", "16000"));
         const continuation = takeOption(args, "--continue", undefined), offset = Number(takeOption(args, "--offset", "0")), eventOffset = Number(takeOption(args, "--event-offset", "0"));
-        if (args.length || (!project && !continuation)) throw usage("Expected: project sync --project ID, or project sync --continue TOKEN --offset N.");
-        const data = continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) });
+        const excludeUnreadable = takeOption(args, "--exclude-unreadable", undefined), reason = takeOption(args, "--reason", undefined);
+        if (args.length || (!project && !continuation) || (continuation && (excludeUnreadable !== undefined || reason !== undefined))) throw usage("Expected: project sync --project ID [--exclude-unreadable THREAD --reason TEXT], or project sync --continue TOKEN --offset N.");
+        const data = continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget, excludeUnreadable, reason }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) });
         success("project.sync", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
       }
       if (action === "event") {

@@ -65,7 +65,7 @@ ${command} work tell <THREAD> - --json < <INSTRUCTION-FILE>
 ${command} project control pause --project <PROJECT> --work <THREAD> --json
 ${command} project control resume --project <PROJECT> --work <THREAD> --json
 ${command} project control stop --project <PROJECT> --all --json
-制御はrequested・changed・already・failedと各code、対象集合のdigestを確認します。busyは未完了であり成功ではありません。明示された再開だけresumeし、stoppedは再開も別IDへの自動置換もしません。停止指示を受けたら新規作成と追加送信を止め、対象をstopし、失敗した担当を報告します。これは受付済みの担当プロセスを終了する操作ではありません。`,
+制御はrequested・changed・already・failedと各code、対象集合のdigestを確認します。busyは未完了であり成功ではありません。明示された再開だけresumeし、stoppedは再開も別IDへの自動置換もしません。停止指示を受けたら新規作成と追加送信を止め、対象をstopし、失敗した担当を報告します。これは受付済みの担当プロセスを終了する操作ではありません。stopした担当は、静止を確認したsyncを最後に読まれなくなり（observation:settled）、Desktopから再開されても検知しません。検収後にだけstopし、読めない担当をsyncから外す目的ではstopしません。`,
     ...(cloudCommand ? [`5. Desktop Cloud
 ${cloudCommand} environments list --json
 Desktop Cloudのwork startではprojectは調整用namespaceで、Desktop DBへの所属ではありません。公開済み構成IDまたは完全一致名と、方針を読むローカルcheckoutを指定します。

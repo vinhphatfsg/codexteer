@@ -10,6 +10,7 @@ import { readRecord, writeRecord, listRecords, storePath, recordStats } from "..
 import { syncProject, projectEvent, continueProjectSync } from "../src/project-sync.mjs";
 import { pruneProjectHistory, withHistoryReservation, writeHistoryRecord, HISTORY_LIMIT_BYTES } from "../src/project-history.mjs";
 import { startWork } from "../src/work-start.mjs";
+import { controlProject } from "../src/project-control.mjs";
 
 const id = "11111111-1111-4111-8111-000000000001", other = "22222222-2222-4222-8222-000000000002";
 const key = name => createHash("sha256").update(name).digest("hex").slice(0,40);
@@ -51,6 +52,24 @@ test("prune preserves unpresented initial results and removes the duplicate payl
   const receipt = (await listRecords("work-starts", f.storage))[0];
   assert.equal(receipt.initial_events, undefined); assert.ok(receipt.sync_cursor); assert.ok(receipt.prompt_sha256);
   assert.equal((await projectEvent(token, f.storage)).event.text, "result".repeat(5000));
+});
+
+test("prune removes the duplicate initial payload of work that settled syncs ago and keeps no record for it but its receipt", async t => {
+  const f = await fixture(t); await writeFile(`${f.home}/CODEXTEER.md`, "Keep scope.\n");
+  const thread = { id: other, status: { type: "idle" }, turns: [{ id: "short", status: "completed", items: [message("initial", "result".repeat(5000))] }] };
+  const read = async (target, options) => readSnapshot(target === other ? thread : f.thread, options);
+  await startWork({ project: "history", title: "short", order: "inspect", root: f.home }, { storage: f.storage, create: async () => ({ thread_id: other }), read });
+  await controlProject("history", "stop", { work: other }, f.storage);
+  const settling = await syncProject("history", {}, { storage: f.storage, read }), token = settling.works.find(w => w.thread_id === other).events.find(e => e.event_id === "initial").token;
+  assert.equal(settling.works.find(w => w.thread_id === other).settled.basis, "observed");
+  for (let i = 0; i < 2; i++) await syncProject("history", {}, { storage: f.storage, read });
+  await pruneProjectHistory("history", f.storage);
+  const receipt = (await listRecords("work-starts", f.storage))[0];
+  assert.equal(receipt.initial_events, undefined); assert.ok(receipt.sync_cursor);
+  await assert.rejects(projectEvent(token, f.storage), { code: "PROJECT_EVENT_NOT_FOUND" });
+  assert.equal((await listRecords("project-sync-events", f.storage)).some(record => record.thread_id === other), false);
+  const next = await syncProject("history", {}, { storage: f.storage, read });
+  assert.equal(next.complete, true); assert.equal(next.works.find(w => w.thread_id === other).observation, "settled");
 });
 
 test("prune keeps an interrupted publication generation and does not affect another project", async t => {
