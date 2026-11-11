@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { performance } from "node:perf_hooks";
-import { syncProject, projectWaitSignal } from "./project-sync.mjs";
+import { syncProject, projectWaitSignal, changedSinceBaseline } from "./project-sync.mjs";
 import { listManagedThreads } from "./project-index.mjs";
 import { getSupervisor } from "./supervision.mjs";
 import { readRecord, listRecords, writeRecord, removeRecord, withStoreLock } from "./store.mjs";
@@ -13,8 +13,6 @@ import path from "node:path";
 
 const exec = promisify(execFile);
 const failure = (message, code = "PROJECT_WAIT_INVALID") => Object.assign(new Error(message), { code });
-const ended = new Set(["completed", "failed", "cancelled", "interrupted", "error"]);
-const failed = new Set(["failed", "systemError"]);
 
 // Include boot identity/start ticks on Linux. On macOS ps supplies the process
 // start date and a per-wait nonce in its process title, so even PID reuse within
@@ -141,19 +139,9 @@ function probeReason({ previous, membershipDigest, states }, observedAttention, 
   for (const [id, state] of states) {
     if (!state.complete) continue;
     // A member never read in full before is new to the orchestrator once it is.
-    if (!baseline.works[id]) return "work_changed";
-    const before = baseline.works[id].signal, after = projectWaitSignal(state.latest);
-    // Web Cloud adapts each user-history node into a completed turn too. Its
-    // typed backend IDs distinguish input from assistant execution without
-    // changing public events/hashes and invalidating existing read cursors.
-    const executionTurn = turnId => state.member.connection !== "cloud"
-      || (typeof turnId === "string" && turnId.startsWith(`${id}~assttrn_`));
-    if (state.events.some(event => (event.type === "turn" && executionTurn(event.id) && ended.has(event.status))
-      || (event.questions?.length && !["answered", "resolved"].includes(event.status)))) return "work_changed";
-    if ((executionTurn(after.turn_id) && ended.has(after.turn_status) && (after.turn_id !== before.turn_id || after.turn_status !== before.turn_status))
-      || (failed.has(after.status) && after.status !== before.status)
-      || after.attention.some(flag => !(observedAttention.flags[id] ?? before.attention ?? []).includes(flag))) return "work_changed";
-    observedAttention.flags[id] = after.attention; entries[id] = entryWriter(baseline, id);
+    const entry = baseline.works[id];
+    if (!entry || changedSinceBaseline(state, entry, observedAttention.flags[id] ?? entry.signal.attention ?? [])) return "work_changed";
+    observedAttention.flags[id] = projectWaitSignal(state.latest).attention; entries[id] = entryWriter(baseline, id);
   }
   // A failure already returned stays quiet until its member's code changes or
   // the member is read in full. The recovery holds only until the next wait

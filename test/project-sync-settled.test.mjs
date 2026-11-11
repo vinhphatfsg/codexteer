@@ -272,6 +272,100 @@ test("project wait does not read settled work and treats neither settling nor ex
   assert.deepEqual([...new Set(f.calls)], [C]);
 });
 
+const wait = (f, timeoutMs = 0) => { f.calls.length = 0; return waitProject("P", { timeoutMs }, { storage: f.storage, read: f.read, pollMs: 5,
+  processIdentity: async pid => pid === 123 ? "owner-start" : "same-start", orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) }); };
+const endTurn = (f, id, turn) => {
+  Object.assign(f.works.get(id), { status: "idle", turn, turnStatus: "completed", activeTurns: 0 }); f.works.get(id).events.push({ id: turn, type: "turn", status: "completed" });
+};
+const unreadable = { code: "PAYLOAD_TOO_LARGE" };
+
+test("a turn that ends after a stop is returned by the next wait, not settled by a partial sync", async t => {
+  const f = await fixture(t); f.works.get(B).error = unreadable;
+  Object.assign(f.works.get(A), { status: "idle", turnStatus: "inProgress", activeTurns: 1 }); await f.stop(A);
+  const running = await wait(f);
+  assert.equal(running.reason, "initial_sync"); assert.equal(row(running.sync, A).settled, undefined);
+  endTurn(f, A, "turn-final");
+  for (const attempt of [1, 2]) {
+    const partial = await f.sync();
+    assert.equal(partial.complete, false); assert.ok(f.calls.includes(A));
+    assert.equal(row(partial, A).settled, undefined, `partial sync ${attempt} leaves the turn end to wait`);
+  }
+  const returned = await wait(f, 1000);
+  assert.equal(returned.reason, "work_changed");
+  assert.ok(row(returned.sync, A).events.some(event => event.event_id === "turn-final"), "wait returns the turn end");
+  assert.equal(row(returned.sync, A).settled.basis, "observed", "the wait that returns it settles the work");
+  assert.equal((await wait(f, 30)).reason, "timeout"); assert.equal(f.calls.includes(A), false);
+});
+
+test("a stopped work with nothing new since the last wait return settles in a partial sync", async t => {
+  const f = await fixture(t); f.works.get(B).error = unreadable;
+  assert.equal((await wait(f)).reason, "initial_sync");
+  endTurn(f, A, "turn-done");
+  assert.equal((await wait(f, 1000)).reason, "work_changed");
+  assert.equal((await f.sync()).complete, false, "an unchanged read before the stop");
+  await f.stop(A);
+  const partial = await f.sync();
+  assert.equal(partial.complete, false); assert.equal(row(partial, A).settled.basis, "observed");
+  assert.equal((await wait(f, 30)).reason, "timeout"); assert.equal(f.calls.includes(A), false);
+});
+
+test("a stopped work whose cursor moved without anything new since the last wait return settles in a partial sync", async t => {
+  const f = await fixture(t); f.works.get(B).error = unreadable;
+  assert.equal((await wait(f)).reason, "initial_sync");
+  // A real cursor also encodes status and title, so a reload moves it without an event.
+  f.works.get(A).status = "notLoaded";
+  const read = async (id, options) => { const page = await f.read(id, options); return id === A ? { ...page, cursor: `${page.cursor}0` } : page; };
+  assert.equal((await f.sync({}, { read })).complete, false);
+  assert.notEqual((await getManagedThread(A, f.storage)).sync_cursor, (await f.head()).wait_baseline.works[A].cursor);
+  await f.stop(A);
+  const partial = await f.sync({}, { read });
+  assert.equal(partial.complete, false); assert.deepEqual(row(partial, A).events, []);
+  assert.equal(row(partial, A).settled.basis, "observed");
+  assert.equal((await wait(f, 30)).reason, "timeout"); assert.equal(f.calls.includes(A), false);
+});
+
+test("an exclusion that completes the sync settles a stopped work whose turn end wait has not returned", async t => {
+  const f = await fixture(t); f.works.get(B).error = unreadable; await f.stop(B);
+  Object.assign(f.works.get(A), { status: "idle", turnStatus: "inProgress", activeTurns: 1 }); await f.stop(A);
+  assert.equal((await wait(f)).reason, "initial_sync");
+  endTurn(f, A, "turn-final");
+  const excluded = await f.sync({ excludeUnreadable: B, reason: "history exceeds the receive limit" });
+  assert.equal(excluded.complete, true); assert.ok(row(excluded, A).events.some(event => event.event_id === "turn-final"));
+  assert.equal(row(excluded, A).settled.basis, "observed", "a sync the exclusion completes is a review");
+  assert.equal((await wait(f, 30)).reason, "timeout"); assert.deepEqual(f.calls, []);
+});
+
+test("a complete sync settles a stopped work even when wait has not returned its turn end", async t => {
+  const f = await fixture(t);
+  Object.assign(f.works.get(A), { status: "idle", turnStatus: "inProgress", activeTurns: 1 }); await f.stop(A);
+  assert.equal((await wait(f)).reason, "initial_sync");
+  endTurn(f, A, "turn-final");
+  const complete = await f.sync();
+  assert.equal(complete.complete, true); assert.ok(row(complete, A).events.some(event => event.event_id === "turn-final"));
+  assert.equal(row(complete, A).settled.basis, "observed", "a complete sync is a review");
+  assert.equal((await wait(f, 30)).reason, "timeout"); assert.equal(f.calls.includes(A), false);
+});
+
+test("a partial sync settles a stopped work when no wait has published a baseline", async t => {
+  const f = await fixture(t); f.works.get(B).error = unreadable; await f.stop(A); endTurn(f, A, "turn-final");
+  const partial = await f.sync();
+  assert.equal(partial.complete, false); assert.equal(row(partial, A).settled.basis, "observed");
+  const first = await wait(f);
+  assert.equal(first.reason, "initial_sync"); assert.equal(row(first.sync, A).observation, "settled"); assert.equal(f.calls.includes(A), false);
+});
+
+test("a stopped work the last wait return could not read is returned by wait before it settles", async t => {
+  const f = await fixture(t, { count: 3 }); f.works.get(A).error = unreadable; f.works.get(B).error = unreadable;
+  assert.equal((await wait(f)).reason, "initial_sync");
+  f.works.get(A).error = null; await f.stop(A);
+  const partial = await f.sync();
+  assert.equal(partial.complete, false); assert.equal(row(partial, A).complete, true);
+  assert.equal(row(partial, A).settled, undefined, "work the wait never read in full is new to it");
+  const returned = await wait(f, 1000);
+  assert.equal(returned.reason, "work_changed"); assert.equal(row(returned.sync, A).settled.basis, "observed");
+  assert.equal((await wait(f, 30)).reason, "timeout"); assert.equal(f.calls.includes(A), false);
+});
+
 test("settled work whose stop can no longer be confirmed is read again", async t => {
   const f = await fixture(t); await f.stop(A); await f.sync(); await f.sync(); assert.equal(f.calls.includes(A), false);
   await writeRecord("supervisors", A, { schema: 1, thread_id: A, state: "broken" }, f.storage);
