@@ -95,7 +95,7 @@ test("history quota is checked before cursor publication and initial receipts ca
   f.thread.turns[0].items.push(message("new"));
   const full = await f.sync().catch(error => error);
   assert.equal(full.code, "PROJECT_HISTORY_LIMIT"); assert.equal(full.limit_bytes, HISTORY_LIMIT_BYTES);
-  assert(full.storage_bytes >= 256 * 1024 * 1024 && full.required_bytes > 1024 * 1024);
+  assert(full.storage_bytes >= 256 * 1024 * 1024 && full.required_bytes > 0 && full.required_bytes < 16 * 1024, `one short message needs ${full.required_bytes} bytes`);
   const numbers = { storage_bytes: full.storage_bytes, required_bytes: full.required_bytes, limit_bytes: full.limit_bytes };
   const printed = (t, json) => {
     const stream = t.mock.method(console, json ? "log" : "error", () => {}), priorExit = process.exitCode;
