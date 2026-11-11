@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 
 // Bounded model of start publication, sync publication and pruning, explicit or
 // by a writer that meets the quota. Each operation may stop at any durable
@@ -72,4 +72,13 @@ test("publication and cleanup source use the modeled history boundary", async ()
   assert.doesNotMatch(start, /\bwriteRecord\("work-starts"/);
   assert.match(history, /pruneProjectHistory[\s\S]*?withStoreLock\("project-history"/);
   assert.doesNotMatch(history, /withStoreLock\(`(?:project-sync|project-index|work-start)-/);
+});
+
+test("the history limit is set only through the storage argument, which no command builds from user input", async () => {
+  const sources = await Promise.all(["src", "bin", "scripts"].map(async dir => (await readdir(dir, { recursive: true })).filter(name => /\.m?js$/.test(name)).map(name => `${dir}/${name}`)));
+  const naming = [];
+  for (const file of sources.flat()) if ((await readFile(file, "utf8")).includes("historyLimitBytes")) naming.push(file);
+  assert.deepEqual(naming, ["src/project-history.mjs"]);
+  // The commands call history, sync, wait and work start with the default storage.
+  for (const file of ["src/cli.mjs", "src/cloud-cli.mjs"]) assert.doesNotMatch((await readFile(file, "utf8")).replace(/storage_bytes/g, ""), /storage/);
 });
