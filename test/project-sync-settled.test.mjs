@@ -133,6 +133,7 @@ test("an excluded unreadable work keeps its unresolved attention through later s
     assert.equal(carried.attention, "human"); assert.equal(carried.group, "対応が必要"); assert.equal(carried.attention_repeated, true);
     assert.equal(carried.settled.reason, "history exceeds the receive limit"); assert.equal(carried.settled.error, "PAYLOAD_TOO_LARGE");
     assert.equal(next.works[0].thread_id, A, "unresolved attention still sorts first");
+    assert.deepEqual(carried.events.map(event => event.token), [token], "the carried row still cites the unresolved question");
     assert.deepEqual((await f.head()).unresolved_attention[A], attention);
     await pruneProjectHistory("P", f.storage);
     assert.equal((await projectEvent(token, f.storage)).event.id, "question", "prune keeps the evidence the head still cites");
