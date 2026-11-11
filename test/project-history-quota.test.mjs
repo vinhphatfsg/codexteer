@@ -1,14 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { tempPrefix } from "../test-support/temp.mjs";
 import { registerManagedThread, getManagedThread, updateManagedThreadCursor } from "../src/project-index.mjs";
 import { syncProject, projectEvent, continueProjectSync } from "../src/project-sync.mjs";
 import { waitProject } from "../src/project-wait.mjs";
+import { startWork } from "../src/work-start.mjs";
+import { readSnapshot } from "../src/observe.mjs";
 import { readRecord, writeRecord, recordStats } from "../src/store.mjs";
 
-const MiB = 1024 * 1024, A = "11111111-1111-4111-8111-000000000001", project = "P";
+const MiB = 1024 * 1024, A = "11111111-1111-4111-8111-000000000001", B = "22222222-2222-4222-8222-000000000002", project = "P";
 const headKey = createHash("sha256").update(project).digest("hex").slice(0, 40);
 const buckets = ["project-sync-events", "project-sync-results", "work-starts"];
 // A member whose cursor another sync advances mid-publication keeps a row that
@@ -21,12 +23,12 @@ const shapes = {
 
 async function fixture(t, events = []) {
   const home = await mkdtemp(tempPrefix("ct-quota-")); t.after(() => rm(home, { recursive: true, force: true }));
-  const storage = { home }, f = { home, storage, events: [...events], onRead: null };
+  const storage = { home }, f = { home, storage, events: [...events], onRead: null, turn: "turn-1" };
   await registerManagedThread(A, { projectId: project, connection: "shared", syncCursor: "c0" }, storage);
   f.read = async (id, options) => {
     await f.onRead?.(options);
     return { thread_id: id, cursor: `c${f.events.length}`, events: f.events.slice(Number(options.since.slice(1))), has_more: false, title: "work",
-      status: "idle", attention: [], latest_turn_id: "turn-1", latest_turn_status: "completed", active_turn_count: 0 };
+      status: "idle", attention: [], latest_turn_id: f.turn, latest_turn_status: "completed", active_turn_count: 0 };
   };
   f.dependencies = { storage, read: f.read, pollMs: 5, processIdentity: async pid => pid === 123 ? "owner-start" : "same-start",
     orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) };
@@ -121,4 +123,103 @@ test("a publication is published in full or not at all when another sync moves a
     }
   }
   assert.ok(fits >= 1, "the publication fits once its larger form does");
+});
+
+const batch = (name, count) => Array.from({ length: count }, (_, i) => ({ id: `${name}-${i}`, turn_id: "turn-1", type: "commandExecution", command: "make test", status: "completed", exit_code: 0, output: name.repeat(256 * 1024) }));
+const none = { deleted: { events: 0, results: 0, initial_payloads: 0 }, reclaimed_bytes: 0 };
+const tokens = page => page.works.flatMap(work => [work.detail_token, ...work.events.map(event => event.token)]);
+async function readable(f, page) {
+  assert.equal((await continueProjectSync(page.sync_token, {}, f.storage)).sync_token, page.sync_token);
+  assert.ok(tokens(page).length > 1);
+  for (const token of tokens(page)) assert.equal((await projectEvent(token, f.storage)).token, token);
+}
+async function gone(f, page) {
+  await assert.rejects(continueProjectSync(page.sync_token, {}, f.storage), { code: "PROJECT_SYNC_CONTINUATION_NOT_FOUND" });
+  for (const token of tokens(page)) await assert.rejects(projectEvent(token, f.storage), { code: "PROJECT_EVENT_NOT_FOUND" });
+}
+const wait = f => waitProject(project, { timeoutMs: 0 }, f.dependencies);
+
+test("the next sync and the next wait prune a quota full of this project's superseded history and report it", async t => {
+  const f = await fixture(t, batch("a", 4)), first = await f.sync();
+  f.events.push(...batch("b", 2)); f.turn = "turn-2";
+  const waited = (await wait(f)).sync;
+  f.events.push(...batch("c", 2));
+  const latest = await f.sync();
+  f.events.push(...batch("d", 2)); await f.free(1024);
+  const used = await f.used(), next = await f.sync();
+  assert.equal(next.complete, true); assert.equal((await getManagedThread(A, f.storage)).sync_cursor, "c10");
+  assert.deepEqual(next.history_pruned.deleted, { events: 5, results: 1, initial_payloads: 0 });
+  assert.ok(next.history_pruned.reclaimed_bytes > MiB && await f.used() < used);
+  assert.equal((await continueProjectSync(next.sync_token, {}, f.storage)).output_bytes, next.output_bytes, "the report is outside the paged envelope");
+  await gone(f, first);
+  for (const page of [waited, latest, next]) await readable(f, page);
+
+  f.events.push(...batch("e", 2)); f.turn = "turn-3"; await f.free(1024);
+  const result = await wait(f);
+  assert.equal(result.reason, "work_changed"); assert.equal(result.sync.complete, true);
+  assert.deepEqual(result.sync.history_pruned.deleted, { events: 3, results: 1, initial_payloads: 0 });
+  await gone(f, latest);
+  for (const page of [waited, next, result.sync]) await readable(f, page);
+  assert.equal((await f.sync()).history_pruned, undefined, "a publication that fits prunes nothing");
+});
+
+test("a quota filled by another project's history and by protected evidence still refuses, and refusing twice changes nothing", async t => {
+  const f = await fixture(t, batch("a", 4)); await f.fill(2 * MiB);
+  const latest = await f.sync();
+  f.events.push(...batch("b", 2)); f.turn = "turn-2"; await f.free(1024);
+  const before = await f.state();
+  for (const run of [f.sync, f.sync, () => wait(f)]) {
+    const error = await run().catch(error => error);
+    assert.equal(error.code, "PROJECT_HISTORY_LIMIT");
+    assert.equal(error.storage_bytes, before.used); assert.equal(error.limit_bytes, before.used + 1024);
+    assert.ok(error.required_bytes > 2 * 256 * 1024 && error.required_bytes < 3 * 256 * 1024);
+    assert.deepEqual(error.history_pruned, none);
+    assert.deepEqual(await f.state(), before, "no record, cursor or head changed");
+  }
+  await readable(f, latest);
+  await f.free(MiB);
+  const next = await f.sync();
+  assert.equal(next.complete, true); assert.equal(next.history_pruned, undefined);
+});
+
+test("a publication larger than the quota holds after pruning is refused and names what the prune removed", async t => {
+  const f = await fixture(t, batch("a", 1)), first = await f.sync();
+  f.events.push(...batch("b", 1));
+  const latest = await f.sync();
+  f.events.push(...batch("c", 8)); await f.free(1024);
+  const used = await f.used(), error = await f.sync().catch(error => error);
+  assert.equal(error.code, "PROJECT_HISTORY_LIMIT");
+  assert.deepEqual(error.history_pruned.deleted, { events: 2, results: 1, initial_payloads: 0 });
+  assert.equal(error.storage_bytes, used - error.history_pruned.reclaimed_bytes); assert.equal(error.storage_bytes, await f.used());
+  assert.ok(error.required_bytes > 8 * 256 * 1024);
+  await gone(f, first); await readable(f, latest);
+  const after = await f.state();
+  assert.equal(after.member.sync_cursor, "c2"); assert.equal(after.head.sync_token, latest.sync_token);
+  assert.deepEqual((await f.sync().catch(error => error)).history_pruned, none);
+  assert.deepEqual(await f.state(), after);
+});
+
+test("a sync that loses the publication to a newer one still reports its prune", async t => {
+  const f = await fixture(t, batch("a", 4)), first = await f.sync();
+  f.events.push(...batch("b", 2)); await f.free(600 * 1024);
+  let reads = 0, winner;
+  f.onRead = async () => { if (++reads === 2) { f.onRead = null; winner = await f.sync(); } };
+  const page = await f.sync();
+  assert.equal(winner.complete, true); assert.equal(winner.history_pruned, undefined);
+  assert.equal(page.publication_conflict, "SYNC_CURSOR_CONFLICT");
+  assert.deepEqual(page.history_pruned.deleted, { events: 5, results: 1, initial_payloads: 0 });
+  await gone(f, first); await readable(f, winner);
+});
+
+test("a work start at a quota full of this project's superseded history prunes it and says so", async t => {
+  const f = await fixture(t, batch("a", 4)), first = await f.sync();
+  f.events.push(...batch("b", 1));
+  const latest = await f.sync();
+  await writeFile(`${f.home}/CODEXTEER.md`, "Keep scope.\n"); await f.free(64);
+  const thread = { id: B, status: { type: "idle" }, turns: [{ id: "turn", status: "completed", items: [{ id: "report", type: "agentMessage", text: "done" }] }] };
+  const started = await startWork({ project, title: "next", order: "inspect", root: f.home },
+    { storage: f.storage, create: async () => ({ thread_id: B }), read: async (_id, options) => readSnapshot(thread, options) });
+  assert.equal(started.observed, true);
+  assert.deepEqual(started.history_pruned.deleted, { events: 5, results: 1, initial_payloads: 0 });
+  await gone(f, first); await readable(f, latest);
 });
