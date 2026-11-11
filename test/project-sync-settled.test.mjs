@@ -358,6 +358,7 @@ test("a question a complete sync showed stays on the row of its stopped work, wh
     assert.deepEqual(next.works.map(work => work.thread_id), [C, B, A], "the settled row follows every row still being read");
     assert.equal(carried.observation, "settled"); assert.equal(carried.attention, "human"); assert.equal(carried.group, "対応が必要");
     assert.equal(carried.attention_repeated, true); assert.deepEqual(carried.events.map(event => event.token), [token]);
+    assert.deepEqual(carried.reason, settling.reason); assert.equal(carried.reason.evidence[0].question_event, true);
     assert.deepEqual((await f.head()).unresolved_attention[A], attention);
     await pruneProjectHistory("P", f.storage);
     assert.equal((await projectEvent(token, f.storage)).event.id, "question-1", "prune keeps the evidence the head still cites");
