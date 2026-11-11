@@ -59,6 +59,8 @@ codexteer project event <EVENT-TOKEN> --json
 
 質問・承認・失敗が未解決の担当と、ターン実行中の担当は、停止済みでも読み続けます。解消またはidleを完全な観測で確認した回に`settled`になります。
 
+読めない担当が残り`complete:false`になる通常のsyncは、オーケストレーターが確認した観測ではありません。このsyncでは、waitの基準（最後にwaitが返した観測か完全なsyncで示した観測）から新しいターン終了・質問・バックエンド失敗のない担当だけを`settled`にします。停止時に実行中だったターンがその後に終わった担当や、基準を作ったときに読めなかった担当は、次のwaitが変化として返し、そのwaitの回に`settled`になります。waitの回と完全なsyncの回は、この確認なしに`settled`にします。waitも完全なsyncも一度も公開していないprojectでは、通常のsyncだけで`settled`になります。
+
 `settled`の担当は読まないため、その後にDesktopから直接ターンを再開しても、syncもwaitも検知しません。stopは検収を終えた担当だけに使ってください。停止済みの担当は、新しい監督IDでも`supervise THREAD`・`supervise register`・同じ発注の`work start`で再び監督できず、`MANAGED_SUPERVISOR_STOPPED`で拒否します。続きの作業は新しい題名か発注の`work start`で別の担当として始めます。
 
 `settled`の行には`detail_token`がありません。予算に収まらない行は次のページの先頭へ送ります。1行だけで予算を超える場合は`details_omitted:true`の短い行を返し、その`settled`は`basis`と`settled_at`だけになります。全体は同じoffsetを大きい`--byte-budget`で読み直します。

@@ -29,6 +29,34 @@ export function projectWaitSignal(page) {
     attention: Array.isArray(page?.attention) ? [...page.attention].sort() : null };
 }
 
+const endedTurn = new Set(["completed", "failed", "cancelled", "interrupted", "error"]);
+
+// What project wait returns a fully read member for, against its baseline entry.
+// Settlement asks the same question, so a stopped member is never settled while
+// wait still owes the orchestrator a change from it.
+export function changedSinceBaseline(state, entry, knownFlags = entry.signal.attention ?? []) {
+  const id = state.member.thread_id, before = entry.signal, after = projectWaitSignal(state.latest);
+  // Web Cloud adapts each user-history node into a completed turn too. Its
+  // typed backend IDs distinguish input from assistant execution without
+  // changing public events/hashes and invalidating existing read cursors.
+  const executionTurn = turnId => state.member.connection !== "cloud"
+    || (typeof turnId === "string" && turnId.startsWith(`${id}~assttrn_`));
+  return state.events.some(event => (event.type === "turn" && executionTurn(event.id) && endedTurn.has(event.status))
+      || (event.questions?.length && !["answered", "resolved"].includes(event.status)))
+    || (executionTurn(after.turn_id) && endedTurn.has(after.turn_status) && (after.turn_id !== before.turn_id || after.turn_status !== before.turn_status))
+    || (["failed", "systemError"].includes(after.status) && after.status !== before.status)
+    || after.attention.some(flag => !knownFlags.includes(flag));
+}
+
+// A partial ordinary sync is not a review. Without any baseline, no review has
+// promised the orchestrator a delta yet; a member without an entry is new to wait.
+// An earlier partial sync may have advanced the read past the baseline, so the
+// signal, not this read's events alone, carries a turn end wait has not returned.
+const owedToWait = (baseline, state) => {
+  const entry = baseline?.works?.[state.member.thread_id];
+  return !!baseline && (!entry || changedSinceBaseline(state, entry));
+};
+
 function classify(observation, complete, connection) {
   const status = observation?.status ?? "unknown", flags = observation?.attention;
   const events = observation?.events ?? [], questions = events.some(event => Array.isArray(event.questions) && event.questions.length);
@@ -376,9 +404,11 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       }
       // Settle only on what this publication commits. The pending head above
       // must not skip a member whose last delta was never presented.
-      for (const work of observed) {
-        const entry = settlement(plan.get(work.thread_id), work, states.get(work.thread_id), unresolved[work.thread_id], createdAt);
-        if (entry) { head.settled = { ...head.settled, [work.thread_id]: entry }; work.settled = settledMarker(entry); }
+      const settlements = new Map(observed.map(work => [work, settlement(plan.get(work.thread_id), work, states.get(work.thread_id), unresolved[work.thread_id], createdAt)]));
+      const reviewed = !!dependencies.waitProbe || observed.every(work => work.complete || settlements.get(work));
+      for (const [work, entry] of settlements) {
+        if (!entry || (entry.basis === "observed" && !reviewed && owedToWait(previous?.wait_baseline, states.get(work.thread_id)))) continue;
+        head.settled = { ...head.settled, [work.thread_id]: entry }; work.settled = settledMarker(entry);
       }
       head.complete = observedComplete();
       head.complete_work_ids = works.filter(w => w.complete).map(w => w.thread_id);
@@ -389,7 +419,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       // partial sync settles it. Only wait reports failures: a member that fails
       // only the wait probe must not be returned again after every ordinary sync.
       let { wait_baseline: baseline, wait_reported_failures: failures = {} } = head;
-      if (dependencies.waitProbe || head.complete) {
+      if (reviewed) {
         const entries = {};
         if (dependencies.waitProbe) failures = {};
         for (const [id, state] of states) {
