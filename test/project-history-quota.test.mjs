@@ -160,6 +160,7 @@ test("the next sync and the next wait prune a quota full of this project's super
   assert.deepEqual(result.sync.history_pruned.deleted, { events: 3, results: 1, initial_payloads: 0 });
   await gone(f, latest);
   for (const page of [waited, next, result.sync]) await readable(f, page);
+  await f.free(MiB);
   assert.equal((await f.sync()).history_pruned, undefined, "a publication that fits prunes nothing");
 });
 

@@ -71,13 +71,14 @@ export function fail(error, json, argv = []) {
     remote_process_id: error.remote_process_id,
     verification_checks: error.verification_checks,
     remote_control_auth: error.remote_control_auth,
-    storage_bytes: error.storage_bytes, required_bytes: error.required_bytes, limit_bytes: error.limit_bytes,
+    storage_bytes: error.storage_bytes, required_bytes: error.required_bytes, limit_bytes: error.limit_bytes, history_pruned: error.history_pruned,
   } }));
   else {
     console.error(`codexteer: ${message}`);
     for (const line of remedy?.usage ?? []) console.error(`使い方: codexteer ${line}`);
     if (remedy?.action) console.error(`対処: ${remedy.action}`);
     for (const key of ["storage_bytes", "required_bytes", "limit_bytes"]) if (Number.isSafeInteger(error[key])) console.error(`${key}: ${error[key]}`);
+    if (error.history_pruned) console.error(`history_pruned: ${JSON.stringify(error.history_pruned)}`);
     if (error.execution_environment === "cloud" || (typeof error.code === "string" && error.code.startsWith("DESKTOP_CLOUD_"))) {
       // Recovery metadata must survive an uncertain submission or a stale
       // on-disk receipt. Never print the child error, prompt, or diagnostics.

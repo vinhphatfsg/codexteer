@@ -113,7 +113,7 @@ test("history quota is checked before cursor publication and initial receipts ca
   assert.equal(await readRecord("work-starts", "new", f.storage), null);
 });
 
-test("quota also bounds actual publication writes independently of conservative reservation", async t => {
+test("quota also bounds a write the reservation did not list", async t => {
   const f = await fixture(t);
   await assert.rejects(withHistoryReservation({}, async write => write("project-sync-results", "too-large", { text: "x".repeat(HISTORY_LIMIT_BYTES) }), f.storage), { code: "PROJECT_HISTORY_LIMIT" });
   assert.equal(await readRecord("project-sync-results", "too-large", f.storage), null);

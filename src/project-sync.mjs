@@ -412,9 +412,10 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     resultRecord(works.map(work => reserved.get(work) ?? work), { wait_sync_token: dependencies.waitProbe ? syncToken : head.wait_sync_token, complete: false })];
   // The existing project head lock protects only publication, never network I/O.
   // A stale reader must not replace a newer attention head, even after a CAS miss.
-  let conflict = null;
+  let conflict = null, pruned;
   try {
-    await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => withHistoryReservation({ records }, async (historyWrite) => {
+    await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => withHistoryReservation({ projectId, records }, async (historyWrite, report) => {
+      pruned = report;
       const current = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage);
       if (hash(current ?? null) !== hash(previous ?? null)) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");
       // Persist attention evidence before advancing any cursor. A crash during
@@ -484,7 +485,8 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     conflict = error.code; head.complete = false;
     for (const work of observed) { work.complete = false; work.cursor = null; work.error ??= error.code === "SYNC_CURSOR_CONFLICT" ? "SYNC_CURSOR_CONFLICT" : "PROJECT_SYNC_CONFLICT"; work.observation = "incomplete"; }
     const records = [resultRecord(works, { complete: false }), ...eventRecords.map(eventRecord), ...observed.map(work => detailRecord(work))];
-    await withHistoryReservation({ records }, async (historyWrite) => {
+    await withHistoryReservation({ projectId, records, pruned }, async (historyWrite, report) => {
+      pruned = report;
       for (const record of records) await historyWrite(...record, storage);
     }, storage);
   }
@@ -492,6 +494,8 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   // Outside the paged envelope, whose byte count is already final. Only this
   // marker tells a result that was never published from one where every read failed.
   if (conflict) page.publication_conflict = conflict;
+  // Tokens of results older than the latest sync and the latest wait result no longer resolve.
+  if (pruned) page.history_pruned = pruned;
   if (!exclusion) return page;
   const id = exclusion.member.thread_id, row = works.find(w => w.thread_id === id);
   page.exclude_unreadable = { thread_id: id, ...(exclusion.action === "carry" ? { outcome: "already_settled" }
