@@ -204,15 +204,16 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
             && (streak.wait_sync_token === null || typeof streak.wait_sync_token === "string")))) {
           throw failure("Invalid project wait attention observations. Inspect local state before restarting wait.");
         }
-        let savedAttention = JSON.stringify(observedAttention), failures = {};
+        let savedAttention = JSON.stringify(observedAttention), failures = {}, reported = new Set();
         // A recovery that an earlier version recorded is no longer used.
         delete observedAttention.recovered;
         const deadline = timeoutMs === undefined ? Infinity : performance.now() + timeoutMs;
         const members = await listManagedThreads(projectId, storage);
         const pollMs = dependencies.pollMs ?? (members.some(m => ["cloud", "desktop-cloud"].includes(m.connection)) ? 15000 : 1000);
         const graceMs = dependencies.unreadGraceMs ?? UNREAD_GRACE_MS;
-        // Outside the paged sync envelope, on every return: the members the last read could not complete.
-        const unreadable = () => Object.entries(failures).map(([thread_id, error]) => ({ thread_id, error }));
+        // Outside the paged sync envelope, on every return: the members the last read
+        // could not complete, and whether the head holds each as reported.
+        const unreadable = () => Object.entries(failures).map(([thread_id, error]) => ({ thread_id, error, reported: reported.has(thread_id) }));
         // A wait that outlives its session would hold the project lock forever and
         // publish changes nobody reads. An inspection error is not proof of exit.
         const ownerExited = async () => !!owner && await identity(owner.pid).then(start => start !== owner.process_start, () => false);
@@ -222,11 +223,16 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
           const sync = await syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => {
             failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete ? [] : [[id, state.error]]));
             const { lasting, report } = unreadStreaks(snapshot.previous, observedAttention, failures, graceMs);
+            // A quiet poll adds no member, so this is also what the head holds.
+            reported = report;
             return (reason = probeReason(snapshot, observedAttention, lasting)) ? report : null;
           } });
           if (sync) {
             // A newer sync won the head: nothing this wait read was published or reviewed.
-            if (sync.publication_conflict) reason = "observation_failed";
+            if (sync.publication_conflict) {
+              reason = "observation_failed";
+              reported = new Set(Object.keys((await readRecord("project-sync-heads", key, storage))?.wait_reported_failures ?? {}));
+            }
             return { project_id: projectId, changed: reason !== "observation_failed", timed_out: false, reason, unreadable: unreadable(), sync };
           }
           const observed = JSON.stringify(observedAttention);
