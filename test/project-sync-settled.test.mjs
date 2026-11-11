@@ -31,7 +31,7 @@ async function fixture(t, { count = 2, project = "P" } = {}) {
     calls.push(id); const work = works.get(id);
     if (work.error) throw Object.assign(new Error("unreadable"), work.error);
     return { thread_id: id, cursor: `c${work.events.length}`, events: work.events.slice(Number(options.since.slice(1))), has_more: false, title: `work ${id.slice(-1)}`,
-      status: work.status, attention: work.attention, latest_turn_id: work.turn, latest_turn_status: work.turnStatus, active_turn_count: work.status === "active" ? 1 : 0 };
+      status: work.status, attention: work.attention, latest_turn_id: work.turn, latest_turn_status: work.turnStatus, active_turn_count: "activeTurns" in work ? work.activeTurns : work.status === "active" ? 1 : 0 };
   };
   const sync = (options = {}, dependencies = {}) => { calls.length = 0; return syncProject(project, options, { storage, read, ...dependencies }); };
   return { storage, works, calls, read, sync, stop: id => controlSupervisor(id, "stop", storage), head: () => readRecord("project-sync-heads", headKey(project), storage) };
@@ -81,6 +81,18 @@ test("a stopped work with a running turn is not settled until it is idle", async
   Object.assign(f.works.get(A), { status: "idle", turnStatus: "completed" });
   assert.equal(row(await f.sync(), A).settled.basis, "observed");
 });
+
+for (const [status, activeTurns] of [["idle", 1], ["notLoaded", 1], ["idle", null]]) {
+  test(`a stopped work reported ${status} with ${activeTurns === null ? "unprovable" : "running"} turns is not settled`, async t => {
+    const f = await fixture(t); Object.assign(f.works.get(A), { status, turnStatus: activeTurns ? "inProgress" : "completed", activeTurns }); await f.stop(A);
+    for (const attempt of [1, 2]) {
+      const result = await f.sync();
+      assert.ok(f.calls.includes(A), `sync ${attempt} reads the stopped work`); assert.equal(row(result, A).settled, undefined);
+    }
+    Object.assign(f.works.get(A), { status: "idle", turnStatus: "completed", activeTurns: 0 });
+    assert.equal(row(await f.sync(), A).settled.basis, "observed");
+  });
+}
 
 test("work that is not stopped is read on every sync, paused work included", async t => {
   const f = await fixture(t); await controlSupervisor(B, "pause", f.storage);

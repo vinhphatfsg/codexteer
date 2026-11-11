@@ -203,7 +203,9 @@ const settledMarker = ({ row, ...marker }) => marker;
 // needs no further reads. An unreadable one settles only on the operator's word.
 function settlement(decision, work, state, unresolvedAttention, settledAt) {
   if (!decision.stopped) return null;
-  if (work.complete) return ["idle", "terminal"].includes(work.execution) && !unresolvedAttention ? { basis: "observed", settled_at: settledAt, row: settledRow(work) } : null;
+  // A coarse idle or notLoaded status with a running or unprovable turn is not quiet.
+  const quiet = work.execution === "terminal" || (work.execution === "idle" && state.latest?.active_turn_count === 0);
+  if (work.complete) return quiet && !unresolvedAttention ? { basis: "observed", settled_at: settledAt, row: settledRow(work) } : null;
   return decision.excludeReason && state.unreadable ? { basis: "excluded", reason: decision.excludeReason, error: state.error, settled_at: settledAt, row: settledRow(work) } : null;
 }
 
