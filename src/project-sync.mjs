@@ -33,7 +33,7 @@ const endedTurn = new Set(["completed", "failed", "cancelled", "interrupted", "e
 
 // What project wait returns a fully read member for, against its baseline entry.
 // Settlement asks the same question, so a stopped member is never settled while
-// wait still owes the orchestrator a change from it.
+// wait still owes the orchestrator a change from it. Unknown flags count as a change.
 export function changedSinceBaseline(state, entry, knownFlags = entry.signal.attention ?? []) {
   const id = state.member.thread_id, before = entry.signal, after = projectWaitSignal(state.latest);
   // Web Cloud adapts each user-history node into a completed turn too. Its
@@ -45,7 +45,7 @@ export function changedSinceBaseline(state, entry, knownFlags = entry.signal.att
       || (event.questions?.length && !["answered", "resolved"].includes(event.status)))
     || (executionTurn(after.turn_id) && endedTurn.has(after.turn_status) && (after.turn_id !== before.turn_id || after.turn_status !== before.turn_status))
     || (["failed", "systemError"].includes(after.status) && after.status !== before.status)
-    || after.attention.some(flag => !knownFlags.includes(flag));
+    || !Array.isArray(after.attention) || after.attention.some(flag => !knownFlags.includes(flag));
 }
 
 // A partial ordinary sync is not a review. Without any baseline, no review has
