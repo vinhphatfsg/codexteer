@@ -17,6 +17,14 @@
 - waitの基準があるprojectの`complete:false`のsyncは、未解決attentionが残る担当を従来どおり`settled`にしません。その担当は、次にwaitが返した回か完全なsyncの回に、質問・失敗を示した行で`settled`になります。waitに返すべき質問を、読めない担当が残るsyncが先に消費することはありません。
 - `settled`の担当の行は、「対応が必要」でも、今回読んだ全ての担当の行の後に並びます。読まなくなった担当の行が結果の最初のページを占めることはなくなりました。
 
+履歴の上限（256 MiB）の確認が、観測したデータの8倍と1 MiBの空きを求めていました。実際に書く量の数倍にあたり、使用量が上限よりずっと少なくてもsyncとwaitが`PROJECT_HISTORY_LIMIT`で拒否されました。拒否されるとcursorが進まないため、次の実行は同じ履歴を読み直していました。上限に達した後は、人が`project prune`を実行するまで保存できませんでした。
+
+- 上限の確認は、今回書くrecord（イベント・sync結果・担当詳細）の保存後のサイズを使います。recordが空きに収まるpublicationは保存されます。sync結果と担当詳細はcursorの更新後に確定するため、完全に読めた担当の行はcursorを進めた場合と更新が拒否された場合の大きい方で数え、確認を通ったpublicationが途中で容量不足になることはありません。
+- recordが収まらない場合、sync・wait・`work start`はそのprojectの古い履歴を`project prune`と同じ基準で自動的に削除し、もう一度確認します。最新sync、最新のwait結果、未提示の初回結果、未解決attentionの根拠とそれらの参照先は、`project prune`と同じく保持します。他projectの履歴は削除しません。
+- 自動削除をした結果は`history_pruned`を持ちます。`deleted`（`events`・`results`・`initial_payloads`の件数）と`reclaimed_bytes`で、syncとwaitではページ本体の外に付き、`output_bytes`とbyte予算には含まれません。自動削除の後、その時点の最新syncと最新のwait結果より古い結果のcontinuation tokenとevent tokenは使えません。
+- `PROJECT_HISTORY_LIMIT`は、自動削除の後も収まらない場合に返ります。1回のpublicationが残りの空きより大きい場合と、同じ`CODEX_HOME`のhost namespaceにある他projectの履歴や保護対象が上限を占めている場合です。エラーの`storage_bytes`は自動削除後の使用量で、行った自動削除を`history_pruned`で返します。従来どおり何も保存せず、cursorも進めません。
+- `project prune`の動作と結果は変わりません。
+
 ## 0.24.2 — 2026-11-11公開
 
 読めない担当が残るprojectで、停止済みの担当のターン終了を`project wait`が返さないことがありました。

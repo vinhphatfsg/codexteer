@@ -113,7 +113,7 @@ waitは担当ごとに、最後にwaitが返した観測か完全なproject sync
 
 承認・質問のフラグは、読了済みcursorとは別に、各担当の基準に対応する直近の観測を保存します。同じフラグが立ち続ける間は通知せず、消えたことを観測した後の再出現は同じ実行turnでも通知します。この観測はtimeout後のwait再起動にも引き継ぎ、その担当の基準が更新されたときに初期化します。`attention:null`など現在のフラグが不明な場合は空配列と区別し、`PROJECT_WAIT_ATTENTION_UNKNOWN`の読み取り失敗として扱います。その担当のcursorと基準は進めません。
 
-wait終了後に出力を失った場合、次の`project sync`が返す`wait_sync_token`を`project sync --continue TOKEN`へ渡すと、最新のwait結果を復元できます。最新のwait snapshotとその全文参照はpruneでも保持します。プロセス終了や出力配送は読了の証明にはならないため、オーケストレーター自身がsnapshotを読み切って検収します。
+wait終了後に出力を失った場合、次の`project sync`が返す`wait_sync_token`を`project sync --continue TOKEN`へ渡すと、最新のwait結果を復元できます。最新のwait snapshotとその全文参照は、pruneでも上限到達時の自動削除でも保持します。プロセス終了や出力配送は読了の証明にはならないため、オーケストレーター自身がsnapshotを読み切って検収します。
 
 同じCODEX_HOMEで0.22.0など旧版のsyncを併用すると、旧版がheadの`wait_baseline`など未対応フィールドを保存せず、次のwaitが`initial_sync`を返す場合があります。`settled`、`--exclude-unreadable`の除外、報告済みの失敗も保存されないため、停止済みの担当を読み直し、読めない停止済みの担当は除外し直す必要があります。基準不明を変化なしと扱わず、そのwaitの結果で基準を作り直す動作です。結果を読んでwaitを再開してください。以後は新しい基準で待機しますが、旧syncを再び使うと再初期化が必要になります。基準と復元tokenを維持する運用では、生成した同じ保存済みCLIを一貫して使います。
 
@@ -165,12 +165,21 @@ macOSの起動識別は、起動日時とcommandのSHA-256だけを保存・比�
 
 `CODEX_HOME`のhost namespaceごとに、`project-sync-events`・`project-sync-results`・`work-starts`のJSONファイル総量を256 MiBまでに制限します。work-startのreceipt・方針本文も含みます。最新headなど他の管理メタデータ、ジャーナルやバックエンド履歴はこの上限の対象外です。表示byte予算とは別の制限です。1担当1回の全文観測は16 MiBまでで、超過は`PROJECT_HISTORY_BATCH_LIMIT`としてcursorを進めません。
 
-保存はpublicationの一時データと複製分を保守的に予約するため、実ファイル総量が256 MiB未満でも`PROJECT_HISTORY_LIMIT`になる場合があります。エラーのstorage_bytes（使用量）・required_bytes（今回必要な量）・limit_bytes（上限）を確認してください。`--json`のerrorとtext出力の両方に表示します。上限を満たさない全文を黙って切ったり、自動削除したりしません。初回観測や作成段階の保存が失敗しても、同じ担当を自動で作り直しません。
+保存の前に、今回書くrecord（イベント・sync結果・担当詳細）の保存後のサイズを合計し、置き換えるrecordの分を引いて、上限に収まるかを確認します。recordが空きに収まるpublicationは保存されます。sync結果と担当詳細はcursorの更新後に確定するため、完全に読めた担当の行は、cursorを進めた場合と更新が拒否された場合の大きい方で数えます。確認する量は実際に保存する量と同じか、その差の分だけ大きくなります。確認を通ったpublicationが途中で容量不足になることはありません。
+
+収まらない場合は、そのprojectの古い履歴を`project prune`と同じ基準で自動的に削除し、もう一度だけ確認します。保持する対象も`project prune`と同じです。自動削除をしたsyncとwaitの結果は、ページ本体の外に`history_pruned`を持ちます。`deleted`（`events`・`results`・`initial_payloads`の件数）と`reclaimed_bytes`で、`output_bytes`とbyte予算には含まれません。公開競合（`publication_conflict`）で返った結果にも付きます。`work start`の保存も同じ確認と自動削除を行い、削除した場合は結果に`history_pruned`が付きます。自動削除の後、その時点の最新syncと最新のwait結果より古い結果のcontinuation tokenとevent tokenは使えません。
+
+それでも収まらなければ`PROJECT_HISTORY_LIMIT`で拒否し、何も保存せずcursorも進めません。これが起きるのは次の場合です。
+
+- 1回のpublicationが、自動削除の後に残る空きより大きい。
+- 同じ`CODEX_HOME`のhost namespaceにある他projectの履歴や、保護対象が上限を占めている。他projectの履歴は、そのprojectの`project prune`で整理します。
+
+エラーはstorage_bytes（自動削除後の使用量）・required_bytes（今回必要な量）・limit_bytes（上限）と、行った自動削除の`history_pruned`を返します。`--json`のerrorとtext出力の両方に表示します。上限を満たさない全文を黙って切ることはありません。初回観測や作成段階の保存が失敗しても、同じ担当を自動で作り直しません。
 
 ```sh
 codexteer project prune --project sample --json
 ```
 
-整理は明示したprojectの古いsync結果・担当詳細・イベントを削除し、最新syncとその参照先、未解決attentionの根拠、未提示の初回結果を保持します。途中で中断したpublicationの世代も保持します。`settled`の担当の行はheadが持つため、その担当の古いイベントと詳細を削除した後も結果に残ります。提示済み初回結果は最新syncとの対応を確認してwork-startの重複全文だけを削除し、作成receiptと再送防止情報は残します。他projectの履歴は削除しません。
+整理は明示したprojectの古いsync結果・担当詳細・イベントを削除し、最新syncと最新のwait結果、それらの参照先、未解決attentionの根拠、未提示の初回結果を保持します。途中で中断したpublicationの世代も保持します。`settled`の担当の行はheadが持つため、その担当の古いイベントと詳細を削除した後も結果に残ります。提示済み初回結果は最新syncとの対応を確認してwork-startの重複全文だけを削除し、作成receiptと再送防止情報は残します。他projectの履歴は削除しません。
 
-自動失効や常駐GCはなく、整理を実行するまで保存します。削除したtokenはeventなら`PROJECT_EVENT_NOT_FOUND`、continuationなら`PROJECT_SYNC_CONTINUATION_NOT_FOUND`になります。古いtokenが必要なら整理前に取得してください。保護対象だけで上限に達した場合は整理で解放できず、新しい保存は拒否されます。整理結果のdeleted・reclaimed_bytes・storage_bytesとprotected_sync_tokenで確認できます。保存・整理の競合は`RECORD_BUSY`として拒否します。
+期限による失効や常駐GCはありません。履歴は、整理を実行するか、保存が上限に達して自動削除が行われるまで残ります。削除したtokenはeventなら`PROJECT_EVENT_NOT_FOUND`、continuationなら`PROJECT_SYNC_CONTINUATION_NOT_FOUND`になります。古いtokenが必要なら、次のsync・waitより前に取得してください。保護対象だけで上限に達した場合は整理で解放できず、新しい保存は拒否されます。整理結果のdeleted・reclaimed_bytes・storage_bytesとprotected_sync_tokenで確認できます。保存・整理の競合は`RECORD_BUSY`として拒否します。
