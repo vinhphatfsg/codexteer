@@ -155,9 +155,18 @@ function probeReason({ previous, membershipDigest, states }, observedAttention, 
       || after.attention.some(flag => !(observedAttention.flags[id] ?? before.attention ?? []).includes(flag))) return "work_changed";
     observedAttention.flags[id] = after.attention; entries[id] = entryWriter(baseline, id);
   }
-  // A failure already returned stays quiet until its member's code changes.
-  const reported = previous.wait_reported_failures ?? {};
-  return Object.entries(failures).some(([id, error]) => reported[id] !== error) ? "observation_failed" : null;
+  // A failure already returned stays quiet until its member's code changes or
+  // the member is read in full. The recovery holds only until the next wait
+  // publication rewrites the reported failures.
+  const reported = previous.wait_reported_failures ?? {}, recovered = observedAttention.recovered ?? {};
+  for (const id of Object.keys(recovered)) {
+    if (recovered[id].wait_sync_token !== (previous.wait_sync_token ?? null) || recovered[id].error !== reported[id]) delete recovered[id];
+  }
+  for (const [id, state] of states) {
+    if (state.complete && reported[id]) recovered[id] = { error: reported[id], wait_sync_token: previous.wait_sync_token ?? null };
+  }
+  if (Object.keys(recovered).length) observedAttention.recovered = recovered; else delete observedAttention.recovered;
+  return Object.entries(failures).some(([id, error]) => reported[id] !== error || recovered[id]) ? "observation_failed" : null;
 }
 
 export async function waitProject(projectId, { timeoutMs } = {}, dependencies = {}) {
@@ -187,7 +196,9 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
         if (observedAttention.schema !== 1 || observedAttention.project_id !== projectId
           || !(observedAttention.baseline === null || typeof observedAttention.baseline === "string")
           || !isMap(observedAttention.flags, flags => Array.isArray(flags) && flags.every(flag => typeof flag === "string"))
-          || (observedAttention.entries !== undefined && !isMap(observedAttention.entries, token => typeof token === "string"))) {
+          || (observedAttention.entries !== undefined && !isMap(observedAttention.entries, token => typeof token === "string"))
+          || (observedAttention.recovered !== undefined && !isMap(observedAttention.recovered, entry => !!entry && typeof entry === "object"
+            && typeof entry.error === "string" && (entry.wait_sync_token === null || typeof entry.wait_sync_token === "string")))) {
           throw failure("Invalid project wait attention observations. Inspect local state before restarting wait.");
         }
         let savedAttention = JSON.stringify(observedAttention), failures = {};

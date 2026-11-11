@@ -84,6 +84,31 @@ test("a member that recovers without a change does not wake wait", async t => {
   assert.equal(recovered.reason, "timeout"); assert.deepEqual(recovered.unreadable, []);
 });
 
+test("a reported failure that returns after a recovery without a change is returned again, once", async t => {
+  const f = await fixture(t); await f.sync();
+  f.works.get(A).error = "CONNECTION_FAILED";
+  assert.equal((await f.wait()).reason, "observation_failed");
+  f.works.get(A).error = null;
+  assert.equal((await f.wait(30)).reason, "timeout", "the recovery alone is not a change");
+  const ordinary = await f.sync();
+  assert.equal(ordinary.complete, true);
+  f.works.get(A).error = "CONNECTION_FAILED";
+  const again = await f.wait(1000);
+  assert.equal(again.reason, "observation_failed"); assert.deepEqual(again.unreadable, [{ thread_id: A, error: "CONNECTION_FAILED" }]);
+  assert.equal((await f.wait(30)).reason, "timeout", "the recurrence is returned once");
+});
+
+test("a recovery and a recurrence inside one wait return the failure", async t => {
+  const f = await fixture(t); await f.sync();
+  f.works.get(A).error = "CONNECTION_FAILED";
+  assert.equal((await f.wait()).reason, "observation_failed");
+  f.works.get(A).error = null;
+  let reads = 0; const read = f.dependencies.read;
+  f.dependencies.read = async (id, options) => { if (id === A && ++reads === 3) f.works.get(A).error = "CONNECTION_FAILED"; return read(id, options); };
+  const result = await f.wait(2000);
+  assert.ok(reads >= 3); assert.equal(result.reason, "observation_failed");
+});
+
 test("a partial ordinary sync does not consume a change wait has not returned", async t => {
   const f = await fixture(t); f.works.get(A).error = "PAYLOAD_TOO_LARGE";
   assert.equal((await f.wait()).reason, "initial_sync");
