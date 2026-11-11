@@ -342,6 +342,30 @@ for (const [what, evidence, attention, end] of ends) {
   });
 }
 
+for (const review of ["wait return", "complete sync"]) {
+  test(`a question that arrives without a turn end is not settled by a partial sync and settles at the next ${review}`, async t => {
+    const f = await fixture(t); f.works.get(B).error = unreadable;
+    assert.equal((await wait(f)).reason, "initial_sync");
+    await f.stop(A); f.works.get(A).events.push(message("question", { questions: ["Which?"] }));
+    for (const attempt of [1, 2]) {
+      const partial = await f.sync();
+      assert.equal(partial.complete, false); assert.ok(cites(row(partial, A), "question"));
+      assert.equal(row(partial, A).settled, undefined, `partial sync ${attempt} leaves the question to wait`);
+    }
+    if (review === "wait return") {
+      const returned = await wait(f, 1000);
+      assert.equal(returned.reason, "work_changed"); assert.ok(cites(row(returned.sync, A), "question"), "wait returns the question");
+      assert.equal(row(returned.sync, A).settled.basis, "observed");
+    } else {
+      f.works.get(B).error = null;
+      const complete = await f.sync();
+      assert.equal(complete.complete, true); assert.ok(cites(row(complete, A), "question"), "the complete sync shows the question");
+      assert.equal(row(complete, A).attention, "human"); assert.equal(row(complete, A).settled.basis, "observed");
+    }
+    assert.equal((await wait(f, 30)).reason, "timeout"); assert.equal(f.calls.includes(A), false);
+  });
+}
+
 test("a question a complete sync showed stays on the row of its stopped work, which settles and is not read again", async t => {
   const f = await fixture(t, { count: 3 });
   for (const id of [A, C]) f.works.get(id).events.push(message(`question-${id.slice(-1)}`, { questions: ["Which?"] }));
