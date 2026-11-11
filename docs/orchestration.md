@@ -55,9 +55,11 @@ codexteer project event <EVENT-TOKEN> --json
 
 ### 停止済みの担当を読むのを終える
 
-`project control stop`した担当は、停止を確認した後のsyncでもう一度完全に読みます。実行が終了済みか、idleで実行中のターンがないと確かめられ、承認・質問のフラグが空と分かり、未解決attentionがなければ、その回の担当行に通常の観測結果と`settled`（`basis:"observed"`と`settled_at`）を付け、次のsyncからその担当を読みません。以後の行は`observation:"settled"`・`events:[]`で結果の末尾に並び、最後に読んだときの題名・状態・cursorを示します。cursor・イベント・詳細recordは増えません。`complete`は今回読んだ担当だけで決まり、`membership_count`とmembership digestは全担当のままです。
+`project control stop`した担当は、停止を確認した後のsyncでもう一度完全に読みます。実行が終了済みか、idleで実行中のターンがないと確かめられ、承認・質問のフラグが空と分かれば、その回の担当行に通常の観測結果と`settled`（`basis:"observed"`と`settled_at`）を付け、次のsyncからその担当を読みません。以後の行は`observation:"settled"`で、今回読んだ全ての担当の後に並び、最後に読んだときの題名・状態・cursorを示します。cursor・イベント・詳細recordは増えません。`complete`は今回読んだ担当だけで決まり、`membership_count`とmembership digestは全担当のままです。
 
-質問・承認・失敗が未解決の担当と、ターン実行中の担当は、停止済みでも読み続けます。解消またはidleを完全な観測で確認した回に`settled`になります。
+最後のターンが未回答の質問や失敗で終わった担当も、同じ条件で`settled`になります。停止済みの担当には誰も回答しないため、その質問や失敗は解消しないからです。`settled`にする回の担当行は、その質問・失敗を`attention`と`events`で示します。以後の行も同じ`attention`と根拠のイベントを再掲し、「対応が必要」のまま残ります。未解決attentionは消えません。未解決attentionのない`settled`の行は`events:[]`です。
+
+承認・質問のフラグが立っている担当、ターン実行中の担当、フラグが不明な担当は、停止済みでも読み続けます。フラグの解消とidleを完全な観測で確認した回に`settled`になります。
 
 読めない担当が残り`complete:false`になる通常のsyncは、オーケストレーターが確認した観測ではありません。このsyncでは、waitの基準（最後にwaitが返した観測か完全なsyncで示した観測）から新しいターン終了・質問・バックエンド失敗のない担当だけを`settled`にします。停止時に実行中だったターンがその後に終わった担当や、基準を作ったときに読めなかった担当は、次のwaitが変化として返し、そのwaitの回に`settled`になります。waitの回と完全なsyncの回は、この確認なしに`settled`にします。waitも完全なsyncも一度も公開していないprojectでは、通常のsyncだけで`settled`になります。
 
@@ -80,7 +82,7 @@ codexteer project sync --project sample --exclude-unreadable <THREAD> --reason '
 | `already_settled` | 既に`settled`だった。読まず、保存済みの理由も変えない。 |
 | `not_applied` | 除外しなかった。429など再試行を求める応答、ページ上限、読み取り中の更新、cursorやheadの競合が該当する。`error`のcodeを確認して再実行する。 |
 
-除外した担当の未解決attentionは解消しません。以後のsyncでも「対応が必要」として先頭に残ります。除外を取り消す操作はありません。Desktopが起動していないなど接続全体の失敗も読み取り失敗として扱うため、同じエラーが続くことと、他の担当は読めることを確認してから実行してください。
+除外した担当の未解決attentionは解消しません。以後のsyncでも「対応が必要」として、今回読んだ担当の後に残ります。除外を取り消す操作はありません。Desktopが起動していないなど接続全体の失敗も読み取り失敗として扱うため、同じエラーが続くことと、他の担当は読めることを確認してから実行してください。
 
 停止していない担当は除外できません（`PROJECT_SYNC_EXCLUDE_NOT_STOPPED`）。読めない担当がまだ作業中なら不完全のまま扱い、原因を調べます。syncを完全にする目的で、検収前の担当をstopしないでください。stopは取り消せず、その担当へは二度と指示を送れません。
 

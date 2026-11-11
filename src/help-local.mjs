@@ -520,7 +520,7 @@ export const topics = {
       "guardは接続・sync・送信を行わず、stop_hook_activeでも条件を再確認する。ローカル状態の読取りやプロセス検査が不能ならsystemMessageで警告して停止を許す。ユーザーの中断・hook無効化・CLI側の継続上限は阻止できない。",
       "自分のオーケストレーターを特定できない場合もPROJECT_GUARD_OWNER_UNVERIFIEDのsystemMessageで監視未確認を警告して停止を許す。別セッションのwaitを認めた状態とは区別する。hookとwaitを同じ対応CLIから実行し、親プロセスの経路を確認する。macOSのprocess_startは起動日時とcommandのSHA-256だけを保存し、prompt全文を含めない。旧形式のwaitは所有セッションで終了し、新しいCLIでwaitとhookを揃える。",
       "未解決の質問・承認・失敗は解消を完全な観測で確認するまで再掲する。429は再試行せず、取得済み結果とretry_after_msを返す。",
-      "control stop済みの担当は、停止後のsyncで完全に読み、終了済みか実行中ターンのないidleで、フラグが空と分かり未解決attentionがなければ、その回を最後に読まない（settled）。行は結果の末尾に残るがイベント・詳細record・cursorは増えず、completeは今回読んだ担当だけで決まる。settledの担当がDesktopから再開されてもsync・waitは検知しない。質問・承認・失敗が未解決の担当と実行中の担当は読み続ける。complete:falseのsyncは、waitの基準以後に新しいターン終了・質問・失敗がある担当や基準に載っていない担当をsettledにせず、次のwaitが返した回にsettledにする。",
+      "control stop済みの担当は、停止後のsyncで完全に読み、終了済みか実行中ターンのないidleで、フラグが空と分かれば、その回を最後に読まない（settled）。行は今回読んだ全ての担当の後に残るがイベント・詳細record・cursorは増えず、completeは今回読んだ担当だけで決まる。settledの担当がDesktopから再開されてもsync・waitは検知しない。最後のターンが未回答の質問や失敗で終わった担当も同じ条件でsettledになり、settledにする回の行がその質問・失敗を示し、以後の行も未解決attentionと根拠を再掲する。承認・質問のフラグが立っている担当、実行中の担当、フラグ不明の担当は読み続ける。complete:falseのsyncは、waitの基準以後に新しいターン終了・質問・失敗がある担当や基準に載っていない担当をsettledにせず、次のwaitが返した回にsettledにする。",
       "停止済みなのに読めない担当だけ--exclude-unreadableで除外できる。同じエラーが続き他の担当は読めると確認してから使う。再試行を求める応答・読み取り中の更新・cursorの競合では除外しない（not_applied）。除外した担当の未解決attentionは残り続ける。読めない担当が作業中なら不完全のまま扱い、除外するために検収前の担当をstopしない。",
       "project prune --project IDで過去のsync履歴を整理する。最新sync・未提示初回結果・参照中の根拠は保持する。保存総量はCODEX_HOMEのhost namespaceごとに256 MiB、全文観測は1担当1回16 MiBまで。容量不足では省略保存せず拒否する。",
       "PROJECT_HISTORY_LIMITのエラーはstorage_bytes（使用量）・required_bytes（今回必要な量）・limit_bytes（上限）を返し、text出力にも表示する。",
