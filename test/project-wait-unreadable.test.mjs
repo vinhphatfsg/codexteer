@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { tempPrefix } from "../test-support/temp.mjs";
 import { legacyHead } from "../test-support/fixtures/project-sync-head-0.23.0.mjs";
 import { registerManagedThread, listManagedThreads, managedMembershipDigest, updateManagedThreadCursor } from "../src/project-index.mjs";
@@ -16,9 +17,11 @@ const key = project => createHash("sha256").update(project).digest("hex").slice(
 const approval = ["waitingOnApproval"];
 
 // A scripted backend: each work's cursor is the number of its events already read.
-async function fixture(t, { count = 2, project = "P" } = {}) {
+// grace null leaves the product's own grace in place; hold is how long a failing read takes.
+async function fixture(t, { count = 2, project = "P", grace = 0, hold = 0 } = {}) {
   const home = await mkdtemp(tempPrefix("ct-wait-unreadable-")); t.after(() => rm(home, { recursive: true, force: true }));
-  const storage = { home }, works = new Map(), calls = [];
+  const storage = { home }, works = new Map(), calls = [], failed = [];
+  let polls = 0;
   for (let n = 1; n <= count; n++) {
     await registerManagedThread(uuid(n), { projectId: project, connection: "shared", syncCursor: "c0" }, storage);
     await registerSupervisor(uuid(n), session(n), storage);
@@ -26,16 +29,27 @@ async function fixture(t, { count = 2, project = "P" } = {}) {
   }
   const read = async (id, options) => {
     calls.push(id); const work = works.get(id);
-    if (work.error) throw Object.assign(new Error("unreadable"), { code: work.error });
+    if (work.error) { failed.push({ poll: polls, thread_id: id, error: work.error }); await delay(hold); throw Object.assign(new Error("unreadable"), { code: work.error }); }
     return { thread_id: id, cursor: `c${work.events.length}`, events: work.events.slice(Number(options.since.slice(1))), has_more: false,
       status: work.status, attention: work.attention, latest_turn_id: work.turn, latest_turn_status: work.turnStatus, active_turn_count: work.status === "active" ? 1 : 0 };
   };
-  const dependencies = { storage, read, pollMs: 5, processIdentity: async pid => pid === 123 ? "owner-start" : "same-start", orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) };
+  // A wait checks its owner once before each poll, so that check numbers the polls and lets a test script the backend per poll.
+  const f = { script: null }, owner = async pid => { if (pid === 123) await f.script?.(++polls); return pid === 123 ? "owner-start" : "same-start"; };
+  const dependencies = { storage, read, pollMs: 5, ...(grace === null ? {} : { unreadGraceMs: grace }), processIdentity: owner, orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) };
   const finishTurn = id => { const work = works.get(id), turn = `next-${work.events.length + 1}`; Object.assign(work, { turn, status: "idle", turnStatus: "completed" }); work.events.push({ id: turn, type: "turn", status: "completed" }); };
-  return { storage, works, calls, finishTurn, dependencies, sync: (options = {}) => syncProject(project, options, dependencies),
+  const history = async () => (await Promise.all(["project-sync-events", "project-sync-results"].map(bucket => recordStats(bucket, storage)))).flat().reduce((sum, record) => sum + record.bytes, 0);
+  const head = () => readRecord("project-sync-heads", key(project), storage);
+  return Object.assign(f, { storage, works, calls, failed, polls: () => polls, finishTurn, dependencies, sync: (options = {}) => syncProject(project, options, dependencies),
     wait: (timeoutMs = 0) => { calls.length = 0; return waitProject(project, { timeoutMs }, dependencies); },
-    head: () => readRecord("project-sync-heads", key(project), storage),
-    history: async () => (await Promise.all(["project-sync-events", "project-sync-results"].map(bucket => recordStats(bucket, storage)))).flat().reduce((sum, record) => sum + record.bytes, 0) };
+    // Waits until something other than a timeout comes back; a restarted wait makes one poll per call.
+    until: async restarted => { for (;;) { const result = await f.wait(restarted ? 0 : 10000); if (result.reason !== "timeout") return result; } },
+    head, history, saved: async () => ({ history: await history(), head: await head() }) });
+}
+
+// Freezes the wall clock; the returned function moves it to an offset from the start.
+function clock(t) {
+  const start = Date.now(); t.mock.timers.enable({ apis: ["Date"], now: start });
+  return ms => t.mock.timers.setTime(start + ms);
 }
 
 test("a permanently unreadable member is returned once, then wait stays quiet and saves nothing until something changes", async t => {
@@ -237,4 +251,106 @@ test("a member that fails only the wait probe is returned once, however many ord
   await removeRecord("project-index", createHash("sha256").update(B).digest("hex").slice(0, 40), f.storage);
   await f.sync();
   assert.deepEqual((await f.head()).wait_reported_failures, { [A]: "RPC_REJECTED" }, "work no longer in the project is forgotten");
+});
+
+for (const restarted of [false, true]) test(`members that each fail one poll at different times are never returned as a failure (${restarted ? "restarted waits" : "one wait"})`, async t => {
+  const f = await fixture(t, { count: 5, grace: 10, hold: 30 }); await f.sync();
+  const codes = ["TIMEOUT", "RPC_REJECTED", "CONNECTION_FAILED", "TIMEOUT", "RPC_REJECTED"], failing = [3, 4, 5, 9, 14];
+  const before = await f.saved(); let quiet;
+  // Each failing read outlasts the grace. A turn that ends at poll 17 is the first thing worth returning.
+  f.script = async poll => {
+    failing.forEach((at, n) => { f.works.get(uuid(n + 1)).error = poll === at ? codes[n] : null; });
+    if (poll === 17) { quiet = await f.saved(); f.finishTurn(B); }
+  };
+  const result = await f.until(restarted);
+  assert.equal(result.reason, "work_changed"); assert.equal(f.polls(), 17); assert.deepEqual(result.unreadable, []);
+  assert.deepEqual(f.failed, failing.map((poll, n) => ({ poll, thread_id: uuid(n + 1), error: codes[n] })), "every scripted failure was read");
+  assert.deepEqual(quiet, before, "the failed polls saved nothing");
+});
+
+test("a member that fails every poll is returned once, after two failed polls and the grace", async t => {
+  const f = await fixture(t, { count: 3, grace: 60 }); await f.sync();
+  f.works.get(A).error = "TIMEOUT";
+  const started = Date.now(), failed = await f.wait(10000);
+  assert.equal(failed.reason, "observation_failed"); assert.equal(failed.changed, false); assert.equal(failed.timed_out, false); assert.equal(failed.sync.complete, false);
+  assert.deepEqual(failed.unreadable, [{ thread_id: A, error: "TIMEOUT" }]);
+  assert.ok(Date.now() - started >= 60, "not before the grace"); assert.ok(f.failed.length > 2, "after more than two failed polls");
+  const saved = await f.saved(), quiet = await f.wait(150);
+  assert.equal(quiet.reason, "timeout", "the member is returned once"); assert.deepEqual(quiet.unreadable, [{ thread_id: A, error: "TIMEOUT" }]);
+  assert.deepEqual(await f.saved(), saved, "the quiet wait saves nothing");
+});
+
+test("a member that fails every poll is returned by a restarted wait, two failed polls and one minute after its first failure", async t => {
+  const f = await fixture(t, { count: 3, grace: null }), at = clock(t); await f.sync();
+  f.works.get(A).error = "TIMEOUT";
+  const first = await f.wait();
+  assert.equal(first.reason, "timeout", "one failed poll"); assert.deepEqual(first.unreadable, [{ thread_id: A, error: "TIMEOUT" }]);
+  at(59999); assert.equal((await f.wait()).reason, "timeout", "two failed polls inside the grace");
+  at(60000); const failed = await f.wait();
+  assert.equal(failed.reason, "observation_failed"); assert.deepEqual(failed.unreadable, [{ thread_id: A, error: "TIMEOUT" }]);
+  assert.equal((await f.wait()).reason, "timeout");
+  at(3600000); assert.equal((await f.wait()).reason, "timeout", "the member is returned once");
+});
+
+for (const restarted of [false, true]) test(`a reported member that fails with another code, or reads fine for some polls and fails again, is not returned again (${restarted ? "restarted waits" : "one wait"})`, async t => {
+  const f = await fixture(t, { count: 3 }); await f.sync();
+  f.works.get(A).error = "TIMEOUT";
+  assert.equal((await f.until(restarted)).reason, "observation_failed");
+  const from = f.polls();
+  // Two polls with another code, three readable, then failing again. A turn that ends at the tenth poll is the next thing worth returning.
+  f.script = poll => {
+    f.works.get(A).error = poll - from < 3 ? "RPC_REJECTED" : poll - from < 6 ? null : "CONNECTION_FAILED";
+    if (poll - from === 10) f.finishTurn(B);
+  };
+  const result = await f.until(restarted);
+  assert.equal(result.reason, "work_changed"); assert.equal(f.polls(), from + 10);
+  assert.deepEqual(result.unreadable, [{ thread_id: A, error: "CONNECTION_FAILED" }]);
+});
+
+for (const shown of ["wait return", "complete sync"]) test(`after a ${shown} showed a reported member readable, a new failure is returned once it lasts`, async t => {
+  const f = await fixture(t, { count: 3, grace: null }), at = clock(t); await f.sync();
+  f.works.get(A).error = "TIMEOUT";
+  assert.equal((await f.wait()).reason, "timeout"); at(60000); assert.equal((await f.wait()).reason, "observation_failed");
+  f.works.get(A).error = null;
+  if (shown === "complete sync") assert.equal((await f.sync()).complete, true);
+  else { f.finishTurn(B); const changed = await f.wait(); assert.equal(changed.reason, "work_changed"); assert.deepEqual(changed.unreadable, []); }
+  f.works.get(A).error = "TIMEOUT";
+  at(70000); assert.equal((await f.wait()).reason, "timeout", "the first failed poll after the member was shown readable");
+  at(129999); assert.equal((await f.wait()).reason, "timeout");
+  at(130000); const again = await f.wait();
+  assert.equal(again.reason, "observation_failed"); assert.deepEqual(again.unreadable, [{ thread_id: A, error: "TIMEOUT" }]);
+  at(3600000); assert.equal((await f.wait()).reason, "timeout"); assert.equal((await f.wait()).reason, "timeout", "the new failure is returned once");
+});
+
+test("a change in a readable member is returned while another member has not failed long enough, and lists that member as unreadable", async t => {
+  const f = await fixture(t, { count: 3, grace: null }), at = clock(t); await f.sync();
+  f.works.get(A).error = "TIMEOUT";
+  const quiet = await f.wait(30);
+  assert.equal(quiet.reason, "timeout"); assert.deepEqual(quiet.unreadable, [{ thread_id: A, error: "TIMEOUT" }]);
+  f.finishTurn(B);
+  const changed = await f.wait(1000);
+  assert.equal(changed.reason, "work_changed"); assert.equal(changed.changed, true); assert.equal(changed.sync.complete, false);
+  assert.deepEqual(changed.unreadable, [{ thread_id: A, error: "TIMEOUT" }]);
+  assert.ok(changed.sync.works.find(work => work.thread_id === B).events.some(event => event.event_id === "next-1"));
+  at(3600000); assert.equal((await f.wait()).reason, "timeout"); assert.equal((await f.wait()).reason, "timeout", "that return already listed the member");
+});
+
+test("a wall clock that moved backwards delays the return by one grace, not until the old time comes back", async t => {
+  const f = await fixture(t, { grace: null }), at = clock(t); await f.sync();
+  f.works.get(A).error = "TIMEOUT";
+  assert.equal((await f.wait()).reason, "timeout");
+  at(-3600000); assert.equal((await f.wait()).reason, "timeout");
+  at(-3600000 + 59999); assert.equal((await f.wait()).reason, "timeout");
+  at(-3600000 + 60000); assert.equal((await f.wait()).reason, "observation_failed");
+});
+
+test("a wait record that an earlier version saved with an observed recovery loads, and that recovery no longer returns the failure", async t => {
+  const f = await fixture(t); await f.sync();
+  f.works.get(A).error = "TIMEOUT";
+  assert.equal((await f.wait(10000)).reason, "observation_failed");
+  const head = await f.head();
+  await writeRecord("project-wait-attention", key("P"), { schema: 1, project_id: "P", baseline: head.wait_baseline.sync_token, flags: {},
+    recovered: { [A]: { error: "TIMEOUT", wait_sync_token: head.wait_sync_token } } }, f.storage);
+  assert.equal((await f.wait(60)).reason, "timeout");
+  assert.equal((await readRecord("project-wait-attention", key("P"), f.storage)).recovered, undefined, "the unused field is dropped");
 });
