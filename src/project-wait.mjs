@@ -129,22 +129,25 @@ const UNREAD_GRACE_MS = 60000;
 // everything since the cursor. So a failure is reported only once it has lasted
 // two polls and the grace. A wait publication keeps as reported the members it
 // reported before that still fail, and adds those whose streak has lasted. A
-// member that merely fails in a publication is listed there, not reported: the
-// new token restarts its streak. A reported member keeps no streak, so a quiet
-// wait stops writing and a member shown readable since starts from one poll.
+// member that merely fails in a publication is listed there, not reported. Its
+// streak runs on: only a full read or being reported ends one, so returns closer
+// together than the grace cannot keep a member from being reported. A reported
+// member keeps no streak, so a quiet wait stops writing and a member shown
+// readable since starts from one poll.
+const setStreaks = (observedAttention, unread) => { if (Object.keys(unread).length) observedAttention.unread = unread; else delete observedAttention.unread; };
+
 function unreadStreaks(previous, observedAttention, failures, graceMs) {
-  const reported = previous?.wait_reported_failures ?? {}, token = previous?.wait_sync_token ?? null, now = Date.now(), unread = {};
+  const reported = previous?.wait_reported_failures ?? {}, now = Date.now(), unread = {};
   const report = new Set(Object.keys(failures).filter(id => Object.hasOwn(reported, id)));
   let lasting = false;
   for (const id of Object.keys(failures)) {
     if (report.has(id)) continue;
     const streak = observedAttention.unread?.[id];
     // A wall clock that moved backwards restarts the grace, never the streak.
-    unread[id] = streak?.wait_sync_token === token ? { since: Math.min(streak.since, now), polls: Math.min(streak.polls + 1, 2), wait_sync_token: token }
-      : { since: now, polls: 1, wait_sync_token: token };
+    unread[id] = streak ? { since: Math.min(streak.since, now), polls: Math.min(streak.polls + 1, 2) } : { since: now, polls: 1 };
     if (unread[id].polls >= 2 && now - unread[id].since >= graceMs) { report.add(id); lasting = true; }
   }
-  if (Object.keys(unread).length) observedAttention.unread = unread; else delete observedAttention.unread;
+  setStreaks(observedAttention, unread);
   return { lasting, report };
 }
 
@@ -200,8 +203,7 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
           || !isMap(observedAttention.flags, flags => Array.isArray(flags) && flags.every(flag => typeof flag === "string"))
           || (observedAttention.entries !== undefined && !isMap(observedAttention.entries, token => typeof token === "string"))
           || (observedAttention.unread !== undefined && !isMap(observedAttention.unread, streak => !!streak && typeof streak === "object"
-            && Number.isFinite(streak.since) && Number.isSafeInteger(streak.polls) && streak.polls > 0
-            && (streak.wait_sync_token === null || typeof streak.wait_sync_token === "string")))) {
+            && Number.isFinite(streak.since) && Number.isSafeInteger(streak.polls) && streak.polls > 0))) {
           throw failure("Invalid project wait attention observations. Inspect local state before restarting wait.");
         }
         let savedAttention = JSON.stringify(observedAttention), failures = {}, reported = new Set();
@@ -227,18 +229,18 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
             reported = report;
             return (reason = probeReason(snapshot, observedAttention, lasting)) ? report : null;
           } });
-          if (sync) {
-            // A newer sync won the head: nothing this wait read was published or reviewed.
-            if (sync.publication_conflict) {
-              reason = "observation_failed";
-              reported = new Set(Object.keys((await readRecord("project-sync-heads", key, storage))?.wait_reported_failures ?? {}));
-            }
-            return { project_id: projectId, changed: reason !== "observation_failed", timed_out: false, reason, unreadable: unreadable(), sync };
-          }
+          // A newer sync won the head: nothing this wait read was published or reviewed.
+          if (sync?.publication_conflict) {
+            reason = "observation_failed";
+            reported = new Set(Object.keys((await readRecord("project-sync-heads", key, storage))?.wait_reported_failures ?? {}));
+          // The publication reported these members, which ends their streaks.
+          } else if (sync) setStreaks(observedAttention, Object.fromEntries(Object.entries(observedAttention.unread ?? {}).filter(([id]) => !reported.has(id))));
+          // Also before a return, so the saved streaks always describe the last poll.
           const observed = JSON.stringify(observedAttention);
           if (observed !== savedAttention) {
             await writeRecord("project-wait-attention", key, observedAttention, storage); savedAttention = observed;
           }
+          if (sync) return { project_id: projectId, changed: reason !== "observation_failed", timed_out: false, reason, unreadable: unreadable(), sync };
           if (performance.now() >= deadline) return { project_id: projectId, changed: false, timed_out: true, reason: "timeout", unreadable: unreadable(), sync: null };
           await delay(Math.max(0, Math.min(pollMs, deadline - performance.now())));
         }
