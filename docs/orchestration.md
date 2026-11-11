@@ -53,7 +53,36 @@ codexteer project event <EVENT-TOKEN> --json
 
 出力は既定16000 UTF-8 bytes、指定範囲4096〜1048576です。同じ担当内のイベントも分割します。続きは返されたtokenと両offsetを使い、`details_omitted:true`ならeventのtokenまたは担当行のdetail_tokenから詳細を取得します。
 
-tellは最新のcomplete syncから送信直前まで再照合し、新しいイベント、質問・承認待ち、attention不明、履歴欠落、不完全な観測では拒否します。サーバーが観測版と送信を原子的に照合する保証はなく、最終観測の後に起きる競合は残ります。代理回答はせず、同じ意図やunknownを自動再送しません。検収待ちでもidleなら`--new-turn`が必要です。同じ委任の未完了作業がある場合だけ続け、受付後に新turnがactiveになれば動作中へ戻ります。検収待ちは成果の受入や全体の完了認定ではありません。
+### 停止済みの担当を読むのを終える
+
+`project control stop`した担当は、停止を確認した後のsyncでもう一度完全に読みます。実行が終了済みか、idleで実行中のターンがないと確かめられ、承認・質問のフラグが空と分かり、未解決attentionがなければ、その回の担当行に通常の観測結果と`settled`（`basis:"observed"`と`settled_at`）を付け、次のsyncからその担当を読みません。以後の行は`observation:"settled"`・`events:[]`で結果の末尾に並び、最後に読んだときの題名・状態・cursorを示します。cursor・イベント・詳細recordは増えません。`complete`は今回読んだ担当だけで決まり、`membership_count`とmembership digestは全担当のままです。
+
+質問・承認・失敗が未解決の担当と、ターン実行中の担当は、停止済みでも読み続けます。解消またはidleを完全な観測で確認した回に`settled`になります。
+
+`settled`の担当は読まないため、その後にDesktopから直接ターンを再開しても、syncもwaitも検知しません。stopは検収を終えた担当だけに使ってください。停止済みの担当は、新しい監督IDでも`supervise THREAD`・`supervise register`・同じ発注の`work start`で再び監督できず、`MANAGED_SUPERVISOR_STOPPED`で拒否します。続きの作業は新しい題名か発注の`work start`で別の担当として始めます。
+
+`settled`の行には`detail_token`がありません。予算に収まらない行は次のページの先頭へ送ります。1行だけで予算を超える場合は`details_omitted:true`の短い行を返し、その`settled`は`basis`と`settled_at`だけになります。全体は同じoffsetを大きい`--byte-budget`で読み直します。
+
+### 読めなくなった停止済みの担当を除外する
+
+```sh
+codexteer project sync --project sample --exclude-unreadable <THREAD> --reason '履歴が受信上限を超える' --json
+```
+
+停止済みなのに読めない担当（履歴が受信上限を超えたDesktop Cloudタスクなど）は、そのままではsyncを不完全にし続けます。理由を付けてこの指定を実行すると、syncはその担当をもう一度読み、結果を`exclude_unreadable.outcome`で返します。
+
+| outcome | 意味 |
+| --- | --- |
+| `excluded` | 読み取りが失敗したので除外した。行の`settled`は`basis:"excluded"`で、理由とエラーcodeを持つ。以後は読まない。 |
+| `unnecessary` | 読めた。通常の規則に従い、条件を満たせば`basis:"observed"`で`settled`になる。 |
+| `already_settled` | 既に`settled`だった。読まず、保存済みの理由も変えない。 |
+| `not_applied` | 除外しなかった。429など再試行を求める応答、ページ上限、読み取り中の更新、cursorやheadの競合が該当する。`error`のcodeを確認して再実行する。 |
+
+除外した担当の未解決attentionは解消しません。以後のsyncでも「対応が必要」として先頭に残ります。除外を取り消す操作はありません。Desktopが起動していないなど接続全体の失敗も読み取り失敗として扱うため、同じエラーが続くことと、他の担当は読めることを確認してから実行してください。
+
+停止していない担当は除外できません（`PROJECT_SYNC_EXCLUDE_NOT_STOPPED`）。読めない担当がまだ作業中なら不完全のまま扱い、原因を調べます。syncを完全にする目的で、検収前の担当をstopしないでください。stopは取り消せず、その担当へは二度と指示を送れません。
+
+tellの可否は対象の担当だけで決まります。最新のsyncで対象が完全に読めていること（`complete:true`、履歴欠落なし）を基点に送信直前まで再照合し、対象の新しいイベント、質問・承認待ち、attention不明、履歴欠落、不完全な観測では拒否します。他の担当が未読・不完全でも、対象への指示は妨げません。receiptの`other_work`は、未読の担当を`incomplete`、質問・承認待ちの担当を`human_attention`、sync後のmembership変更を`membership_changed`で返します。空でなければ、送信後もその担当への対応を続けます。`--sync-token`で以前のsyncを基点にできるのは、その後に対象が完全に再読されていない間だけです。質問・承認待ちは常に最新のsyncで判定します。サーバーが観測版と送信を原子的に照合する保証はなく、最終観測の後に起きる競合は残ります。代理回答はせず、同じ意図やunknownを自動再送しません。検収待ちでもidleなら`--new-turn`が必要です。同じ委任の未完了作業がある場合だけ続け、受付後に新turnがactiveになれば動作中へ戻ります。検収待ちは成果の受入や全体の完了認定ではありません。
 
 controlはproject全体の新しい監督IDを作らず、各担当の既存recordを制御します。`--all`と`--work`はどちらか一方を指定します。返り値のrequested・changed・already・failed、各code、membership_digestを確認してください。部分失敗でも全担当の結果を返し、CLIは終了値1（JSONはok:false）です。busyは未完了、binding不在は失敗、同じ状態への再実行はalreadyです。stop済みはresumeできません。対象集合は呼出し開始時のsnapshotで、新しく追加された担当は含まれません。
 
@@ -70,15 +99,19 @@ codexteer project guard --project sample --status --json
 
 未停止の担当がいる間は、waitを終了通知の届くバックグラウンドタスクとして実行します。単にシェルの`&`で切り離すだけでは親セッションへ通知される保証がありません。返ったら結果を読み、必要な検収・対応の後に再びwaitを開始します。質問・承認・URLをユーザーへ伝えた後も続けます。timeout・接続失敗で終了したwaitは監視中ではありません。検収済みの担当は`project control stop`で終了し、ユーザーがオーケストレーションの終了を求めた場合も対象の制御を明示的にstopします。
 
-waitは最後に完全に公開されたproject syncを基準に、新しいターン終了（成功・失敗・取消・中断）、質問、承認待ち、バックエンド失敗、membership変更を待ちます。既にidleの担当や、既に確認した質問・承認待ちだけでは返りません。ユーザーがDesktopで直接次のターンを開始・完了した場合も検知します。通常の進捗だけではcursorや基準を更新しません。sharedは既定1秒、Cloudを含む集合は15秒間隔で照会します。`--timeout-ms`は0以上の整数で、省略時は無期限です。開始済みの観測は完了まで待つため、指定時間を超えて返る場合があります。
+waitは担当ごとに、最後にwaitが返した観測か完全なproject syncで示した観測を基準に、新しいターン終了（成功・失敗・取消・中断）、質問、承認待ち、バックエンド失敗、membership変更を待ちます。既にidleの担当や、既に確認した質問・承認待ちだけでは返りません。ユーザーがDesktopで直接次のターンを開始・完了した場合も検知します。通常の進捗だけではcursorや基準を更新しません。`settled`の担当は読まず、`settled`になったことや除外そのものは変化として返しません。sharedは既定1秒、Cloudを含む集合は15秒間隔で照会します。`--timeout-ms`は0以上の整数で、省略時は無期限です。開始済みの観測は完了まで待つため、指定時間を超えて返る場合があります。
 
-返り値の`changed:true`と`sync`に、syncと同じsnapshot・詳細token・continuationを返します。完全な結果の永続化を基準更新点とし、同じ変化を繰り返し通知しません。基準が未作成（旧版のsnapshotを含む）なら`reason:initial_sync`として最初のsyncを返します。timeoutは`changed:false, timed_out:true, reason:timeout, sync:null`です。観測失敗は`reason:observation_failed, timed_out:false`と不完全なsyncを返し、終了値1になります。最後の完全な基準は保持します。通常のsyncでも全体が不完全なら、waitの完全な基準は進めません。projectごとにwaitは1つで、重複起動は`RECORD_BUSY`です。送信や担当制御は行いません。
+返り値の`changed:true`と`sync`に、syncと同じsnapshot・詳細token・continuationを返します。waitが返した時点と完全なsyncの公開時点を基準更新点とし、同じ変化を繰り返し通知しません。更新するのは読めた担当の基準だけで、読めなかった担当は前の基準を保持します。基準が未作成（旧版のsnapshotを含む）なら`reason:initial_sync`として最初のsyncを返します。timeoutは`changed:false, timed_out:true, reason:timeout, sync:null`です。通常のsyncでも全体が不完全なら、waitの基準は進めません。projectごとにwaitは1つで、重複起動は`RECORD_BUSY`です。waitは各照会の前に、開始時に特定した自分のClaude/Codex CLIセッションが生きているかを確かめます。そのセッションが異常終了していれば、照会も公開もせずに`reason:owner_exited, changed:false, timed_out:false, sync:null`で終わり、終了値1になります。照会の途中で終了した場合は、その照会の結果を通常どおり返してから終わります。wait記録とlockも解放するため、再開したセッションはその後に新しいwaitを開始できます。それまでの`RECORD_BUSY`は少し待って再実行してください。セッションを特定できなかったwaitと、プロセスを一時的に調べられなかった照会は、従来どおり待ち続けます。送信や担当制御は行いません。
 
-承認・質問のフラグは、読了済みcursorとは別に、現在の基準に対応する直近の観測を保存します。同じフラグが立ち続ける間は通知せず、消えたことを観測した後の再出現は同じ実行turnでも通知します。この観測はtimeout後のwait再起動にも引き継ぎ、新しい完全なsyncでは基準に合わせて初期化します。`attention:null`など現在のフラグが不明な場合は空配列と区別し、`PROJECT_WAIT_ATTENTION_UNKNOWN`の不完全観測として返します。担当cursorと最後の完全な基準は進めません。
+読めない担当がいても、waitは読めた担当の変化を待ち、`sync.complete:false`のままでも`changed:true`と`work_changed`などで返します。返り値はtimeoutを含めて常に`unreadable:[{thread_id, error}]`を持ち、直近の観測で読めなかった担当とエラーcodeを示します。読み取り失敗だけの場合は、新しく読めなくなった担当か、エラーcodeが変わった担当があるときに一度だけ`reason:observation_failed, changed:false, timed_out:false`と不完全なsyncを返し、終了値1になります。同じ失敗が続く間は返らず、syncの履歴も保存しません。報告した担当をwaitかsyncが一度完全に読めた後に再び失敗した場合は、同じcodeでも新しい失敗として一度返します。返した失敗はwaitだけが記録し直すため、間に通常の`project sync`を実行しても同じ失敗を再び返しません。waitの公開より先に別のsyncがheadを更新した場合は、何も公開されていないため、読めた変化があっても`reason:observation_failed, changed:false`で返り、終了値1になります。このときの`sync`は`publication_conflict`にエラーcodeを持ちます。`project sync`も同じ場合に`publication_conflict`を返し、その結果はheadになりません。このwaitは基準を進めていません。先に公開されたsyncが完全なら変化はそのsyncの結果に含まれて基準も更新されているため、waitは同じ変化を再通知しません。不完全なsyncだった場合は、waitを再開すると同じ変化を返します。最新の`project sync`を読んでからwaitを再開してください。completeにする目的でsyncやwaitを繰り返し実行しないでください。他の返り値と同じく結果を読んでwaitを再開します。
+
+stopしていない担当が`unreadable`に載っている間、waitはその担当を監視していません。読めない間に起きたターン終了・質問・承認待ちは返らず、同じエラーが続く限り一度報告した後は何も返しません。その担当は`codexteer status <THREAD>`やその担当のbranchで別に確認し、読めないことと確認結果をユーザーへ報告します。waitを静かにする目的でその担当をstopしないでください。stopは検収後の終了操作で、stop後に`--exclude-unreadable`で除外した担当の作業は以後どこからも検知されません。読めない担当が検収してstop済みなら`--exclude-unreadable`で除外し、作業中なら原因を調べます。
+
+承認・質問のフラグは、読了済みcursorとは別に、各担当の基準に対応する直近の観測を保存します。同じフラグが立ち続ける間は通知せず、消えたことを観測した後の再出現は同じ実行turnでも通知します。この観測はtimeout後のwait再起動にも引き継ぎ、その担当の基準が更新されたときに初期化します。`attention:null`など現在のフラグが不明な場合は空配列と区別し、`PROJECT_WAIT_ATTENTION_UNKNOWN`の読み取り失敗として扱います。その担当のcursorと基準は進めません。
 
 wait終了後に出力を失った場合、次の`project sync`が返す`wait_sync_token`を`project sync --continue TOKEN`へ渡すと、最新のwait結果を復元できます。最新のwait snapshotとその全文参照はpruneでも保持します。プロセス終了や出力配送は読了の証明にはならないため、オーケストレーター自身がsnapshotを読み切って検収します。
 
-同じCODEX_HOMEで0.22.0など旧版のsyncを併用すると、旧版がheadの`wait_baseline`など未対応フィールドを保存せず、次のwaitが`initial_sync`を返す場合があります。基準不明を変化なしと扱わず、完全なsyncで再初期化する動作です。結果を読んでwaitを再開してください。以後は新しい基準で待機しますが、旧syncを再び使うと再初期化が必要になります。基準と復元tokenを維持する運用では、生成した同じ保存済みCLIを一貫して使います。
+同じCODEX_HOMEで0.22.0など旧版のsyncを併用すると、旧版がheadの`wait_baseline`など未対応フィールドを保存せず、次のwaitが`initial_sync`を返す場合があります。`settled`、`--exclude-unreadable`の除外、報告済みの失敗も保存されないため、停止済みの担当を読み直し、読めない停止済みの担当は除外し直す必要があります。基準不明を変化なしと扱わず、そのwaitの結果で基準を作り直す動作です。結果を読んでwaitを再開してください。以後は新しい基準で待機しますが、旧syncを再び使うと再初期化が必要になります。基準と復元tokenを維持する運用では、生成した同じ保存済みCLIを一貫して使います。
 
 guardはClaude CodeのStop hook用の生JSONを返します（通常の`ok/data` envelopeは使いません）。停止済み以外の担当がいて自分のセッションに属する生存waitがなければ、終了値0で`{"decision":"block","reason":"…"}`を返します。条件を満たす場合とmanaged workがない場合は`{}`です。pausedは介入を一時停止するだけで未完了であり、Desktopからの実行も止めないため監視対象に数えます。binding不在も未完了として扱います。waitは本人専用のlocal storeへpidと起動識別、最も近いClaude/Codex CLI親プロセスのpidと起動識別を保存し、guardは自分の親プロセスと一致する所有者のwaitだけを数えます。macOSでは起動日時に加えprocess titleのwait固有nonce、Linuxではboot IDと起動tickを照合し、死んだ・停止した・zombieのプロセスを認めません。対応OSはmacOSとLinuxです。
 
@@ -88,7 +121,7 @@ guardはClaude CodeのStop hook用の生JSONを返します（通常の`ok/data`
 
 macOSの起動識別は、起動日時とcommandのSHA-256だけを保存・比較します。ユーザーの目標を含むpromptやcommand全文は保存しません。wait自身にも同じ形式を使い、process titleのnonceによる区別を維持します。OSから読んだcommandはその場でhashにし、Linuxは従来どおりboot IDと起動tickで識別します。旧形式の識別を持つwaitは新しいguardと一致しないため、所有セッションで旧waitを終了してから、同じ新しいCLIでwaitとhookを実行してください。既存recordや稼働中の保存済みCLIを自動で書き換えません。
 
-開始時には受信したセッションで`project guard --project sample --status --json`を実行します。この形式は通常のenvelopeで`data.stop_hook`を返します。`configured`は、直接Claude起動が`CODEXTEER_STOP_GUARD`へ付けたproject・launcherのpid・起動識別の印を、現在の親プロセスと照合できた状態です。入れ子のCLIや別のlauncherへ引き継がれた印は認めません。本文の生成だけでは受信側の起動経路を知ることができず、環境変数も設定しません。
+開始時には受信したセッションで`project guard --project sample --status --json`を実行します。この形式は通常のenvelopeで`data.stop_hook`を返します。`project sync`と`project wait`のJSONも同じ判定を`data.stop_hook`に付けます。ページ本体の外に付くため、`output_bytes`とbyte予算には含まれません。`configured`は、直接Claude起動が`CODEXTEER_STOP_GUARD`へ付けたproject・launcherのpid・起動識別の印を、現在の親プロセスと照合できた状態です。入れ子のCLIや別のlauncherへ引き継がれた印は認めません。本文の生成だけでは受信側の起動経路を知ることができず、環境変数も設定しません。
 
 印のない手動起動、Codex起動、異なるproject、プロセス検査不能は`unverified`です。最初の報告で「監視漏れを止める仕組みがない（有効なStop hookを確認できない）」ことと、`help project`の設定例を案内してください。手動設定済みならセッションの有効なhook一覧（Claude Codeでは`/hooks`）で同じproject・CLI・接続経路のguardとhook無効化の有無を確認します。ファイルの存在だけで有効と判断しません。`configured`も設定時の印であり、その後の無効化、信頼設定、CLIの継続上限やhook実行そのものまでは保証しません。未完了の間はhookの状態にかかわらず自分のwaitを動かし続けます。
 
@@ -126,12 +159,12 @@ macOSの起動識別は、起動日時とcommandのSHA-256だけを保存・比�
 
 `CODEX_HOME`のhost namespaceごとに、`project-sync-events`・`project-sync-results`・`work-starts`のJSONファイル総量を256 MiBまでに制限します。work-startのreceipt・方針本文も含みます。最新headなど他の管理メタデータ、ジャーナルやバックエンド履歴はこの上限の対象外です。表示byte予算とは別の制限です。1担当1回の全文観測は16 MiBまでで、超過は`PROJECT_HISTORY_BATCH_LIMIT`としてcursorを進めません。
 
-保存はpublicationの一時データと複製分を保守的に予約するため、実ファイル総量が256 MiB未満でも`PROJECT_HISTORY_LIMIT`になる場合があります。エラーのstorage_bytes・required_bytes・limit_bytesを確認してください。上限を満たさない全文を黙って切ったり、自動削除したりしません。初回観測や作成段階の保存が失敗しても、同じ担当を自動で作り直しません。
+保存はpublicationの一時データと複製分を保守的に予約するため、実ファイル総量が256 MiB未満でも`PROJECT_HISTORY_LIMIT`になる場合があります。エラーのstorage_bytes（使用量）・required_bytes（今回必要な量）・limit_bytes（上限）を確認してください。`--json`のerrorとtext出力の両方に表示します。上限を満たさない全文を黙って切ったり、自動削除したりしません。初回観測や作成段階の保存が失敗しても、同じ担当を自動で作り直しません。
 
 ```sh
 codexteer project prune --project sample --json
 ```
 
-整理は明示したprojectの古いsync結果・担当詳細・イベントを削除し、最新syncとその参照先、未解決attentionの根拠、未提示の初回結果を保持します。途中で中断したpublicationの世代も保持します。提示済み初回結果は最新syncとの対応を確認してwork-startの重複全文だけを削除し、作成receiptと再送防止情報は残します。他projectの履歴は削除しません。
+整理は明示したprojectの古いsync結果・担当詳細・イベントを削除し、最新syncとその参照先、未解決attentionの根拠、未提示の初回結果を保持します。途中で中断したpublicationの世代も保持します。`settled`の担当の行はheadが持つため、その担当の古いイベントと詳細を削除した後も結果に残ります。提示済み初回結果は最新syncとの対応を確認してwork-startの重複全文だけを削除し、作成receiptと再送防止情報は残します。他projectの履歴は削除しません。
 
 自動失効や常駐GCはなく、整理を実行するまで保存します。削除したtokenはeventなら`PROJECT_EVENT_NOT_FOUND`、continuationなら`PROJECT_SYNC_CONTINUATION_NOT_FOUND`になります。古いtokenが必要なら整理前に取得してください。保護対象だけで上限に達した場合は整理で解放できず、新しい保存は拒否されます。整理結果のdeleted・reclaimed_bytes・storage_bytesとprotected_sync_tokenで確認できます。保存・整理の競合は`RECORD_BUSY`として拒否します。

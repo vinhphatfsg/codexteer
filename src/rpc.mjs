@@ -21,9 +21,12 @@ function connectionCode(error) {
   return "PROTOCOL_ERROR";
 }
 
-function connectionMessage(error, fallback) {
+export const RECEIVE_LIMIT_BYTES = 64 * 1024 * 1024;
+
+// Each transport sets its own maxPayload; name that one, not this module's.
+function connectionMessage(error, fallback, limitBytes) {
   return error?.code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH"
-    ? "App Server response exceeded the 64 MiB receive limit. Use paginated history access; the receive limit remains enforced."
+    ? `App Server response exceeded the ${Number.isSafeInteger(limitBytes) ? `${limitBytes / (1024 * 1024)} MiB ` : ""}receive limit. Use paginated history access; the receive limit remains enforced.`
     : fallback;
 }
 
@@ -33,7 +36,7 @@ export function connectSocket(socketPath, { timeoutMs = 8000, signal } = {}) {
     const socket = new WebSocket("ws://localhost/rpc", {
       createConnection: () => net.createConnection(socketPath),
       perMessageDeflate: false,
-      maxPayload: 64 * 1024 * 1024,
+      maxPayload: RECEIVE_LIMIT_BYTES,
     });
     let settled = false;
     const finish = error => {
@@ -48,7 +51,7 @@ export function connectSocket(socketPath, { timeoutMs = 8000, signal } = {}) {
     const timer = setTimeout(() => finish(new RpcFailure("App Server connection timed out.", { code: "TIMEOUT" })), timeoutMs);
     // Keep an error listener even after connection so a peer reset never throws globally.
     socket.on("error", () => {});
-    socket.once("error", error => finish(new RpcFailure(connectionMessage(error, "Could not connect to the shared App Server."), { code: connectionCode(error) })));
+    socket.once("error", error => finish(new RpcFailure(connectionMessage(error, "Could not connect to the shared App Server.", RECEIVE_LIMIT_BYTES), { code: connectionCode(error) })));
     socket.once("close", () => finish(new RpcFailure("App Server connection closed before initialization.")));
     socket.once("open", () => finish());
     signal?.addEventListener("abort", cancel, { once: true });
@@ -57,7 +60,7 @@ export function connectSocket(socketPath, { timeoutMs = 8000, signal } = {}) {
 }
 
 export class RpcClient extends EventEmitter {
-  constructor(socket, { timeoutMs = 8000 } = {}) {
+  constructor(socket, { timeoutMs = 8000, receiveLimitBytes } = {}) {
     super();
     this.socket = socket;
     this.timeoutMs = timeoutMs;
@@ -98,11 +101,11 @@ export class RpcClient extends EventEmitter {
       }
     });
     socket.on("close", () => this.rejectPending("App Server connection closed."));
-    socket.on("error", error => this.abort(connectionMessage(error, "App Server connection failed."), connectionCode(error)));
+    socket.on("error", error => this.abort(connectionMessage(error, "App Server connection failed.", receiveLimitBytes), connectionCode(error)));
   }
 
   static async connect(socketPath, options = {}) {
-    const client = new RpcClient(await connectSocket(socketPath, options), options);
+    const client = new RpcClient(await connectSocket(socketPath, options), { ...options, receiveLimitBytes: RECEIVE_LIMIT_BYTES });
     const cancel = () => client.abort("App Server initialization cancelled.", "CANCELLED");
     options.signal?.addEventListener("abort", cancel, { once: true });
     try {

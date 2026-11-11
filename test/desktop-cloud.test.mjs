@@ -50,6 +50,20 @@ test("bearer subprotocol exceptions are redacted and transport rejects redirects
   class Socket { constructor(url, protocols, options) { assert.equal(options.followRedirects, false); assert.equal(options.perMessageDeflate, false); assert(protocols.includes("openai-bearer.fixture-sensitive")); throw Error("openai-bearer.fixture-sensitive"); } }
   await assert.rejects(connectDesktopCloud({}, { credentials: async () => auth, Socket }), error => error.code === "CONNECTION_FAILED" && !error.message.includes("fixture-sensitive")); assert.equal(auth.token, "");
 });
+test("an oversized Desktop Cloud response names this connection's 16 MiB receive limit", async () => {
+  class Socket extends EventEmitter {
+    constructor(url, protocols, options) { super(); this.maxPayload = options.maxPayload; this.readyState = 1; queueMicrotask(() => this.emit("open")); }
+    send(bytes) {
+      const request = JSON.parse(bytes);
+      if (request.method === "initialize") queueMicrotask(() => this.emit("message", JSON.stringify({ id: request.id, result: {} }), false));
+      else if (request.id) queueMicrotask(() => this.emit("error", Object.assign(new Error("Max payload size exceeded"), { code: "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH" })));
+    }
+    terminate() {} close() {}
+  }
+  const cloud = await connectDesktopCloud({}, { credentials: async () => ({ token: "fixture-token", accountId: "fixture" }), Socket });
+  assert.equal(cloud.client.socket.maxPayload, 16 * 1024 * 1024);
+  await assert.rejects(cloud.client.request("thread/turns/list", {}), error => error.code === "PAYLOAD_TOO_LARGE" && error.message.includes("the 16 MiB receive limit") && !error.message.includes("64"));
+});
 test("Cloud history does not require backwards bookmarks and shares aggregate cursors", async () => {
   const calls = []; let pages = 0;
   const rpc = { close() {}, async request(method, params) { calls.push({ method, params });

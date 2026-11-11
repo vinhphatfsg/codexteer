@@ -257,6 +257,8 @@ codexteer supervise stop <thread-id>
 
 停止済みIDは交代後も監督記録の履歴に保持し、登録前の`doctor`・再登録・観測・送信を`SUPERVISOR_STOPPED`で拒否します。更新前の停止済み記録も、交代時に履歴へ引き継ぎます。更新前にすでに上書きされて失われた停止履歴は復元できません。保存済み旧CLIには修正が反映されないため、更新後のCLIでプロンプトを生成し直してください。
 
+managed projectの担当は、`project control stop`などで停止すると新しい監督IDでも`supervise THREAD`・`supervise register`で再開できず、`MANAGED_SUPERVISOR_STOPPED`で拒否します。続きは新しい題名か発注の`work start`で別の担当として始めます。単独タスクの監督は、停止後も新しいIDで開始し直せます。
+
 同じ`CODEX_HOME`・接続先ホストの中では、監督IDを別タスクへ登録できません（`SUPERVISOR_CONFLICT`。停止済みなら`SUPERVISOR_STOPPED`）。旧版で同じIDを複数タスクに登録したデータも、`supervise list --json`は全件を返し、該当項目の`session_conflict.thread_ids`に衝突先を示します。他タスクの観測記録は`observation: null`と`observation_error`で明示し、そのタスクの観測として扱いません。重複したIDでの観測・送信は拒否されます。ユーザーの端末から各タスクを`supervise stop`し、新しいIDの監督を開始してください。
 
 送信中の`pause`/`stop`は`RECORD_BUSY`で失敗します。配送結果を確認して制御を再実行し、成功するまでは停止したと扱わないでください。監督役が自分で`resume`したり、生成コマンドから`--supervisor`を外して回避したりしないよう、必須テンプレートにも指示します。

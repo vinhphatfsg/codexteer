@@ -31,7 +31,7 @@ import { acquireResource, resourceStatus, renewResource, releaseResource, listRe
 import { startWork } from "./work-start.mjs";
 import { tellWork } from "./work-tell.mjs";
 import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
-import { waitProject, guardProject } from "./project-wait.mjs";
+import { waitProject, guardProject, withStopHook } from "./project-wait.mjs";
 import { observationConnection } from "./connection.mjs";
 
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code, execution_environment: "cloud" });
@@ -99,10 +99,10 @@ export async function mainCloud(argv) {
       if (supervisor) throw failure("A bound supervisor cannot wait for or guard an entire project.", "SUPERVISOR_CONTROL_FORBIDDEN");
       const project = option(args, "--project"), timeout = action === "wait" ? option(args, "--timeout-ms") : undefined; exact(args, 0);
       if (action === "guard") { console.log(JSON.stringify(await guardProject(project))); return; }
-      const data = await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
+      const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
         read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),
-      });
-      output("project.wait", data); if (data.reason === "observation_failed") process.exitCode = 1; return;
+      }));
+      output("project.wait", data); if (["observation_failed", "owner_exited"].includes(data.reason)) process.exitCode = 1; return;
     }
     if (action === "control") {
       if (supervisor) throw failure("A bound supervisor cannot control project supervision.", "SUPERVISOR_CONTROL_FORBIDDEN");
@@ -117,8 +117,10 @@ export async function mainCloud(argv) {
     }
     if (action === "sync") {
       if (supervisor) throw failure("A bound supervisor cannot sync an entire project.", "SUPERVISOR_CONTROL_FORBIDDEN");
-      const project = option(args, "--project"), byteBudget = Number(option(args, "--byte-budget", "16000")), continuation = option(args, "--continue"), offset = Number(option(args, "--offset", "0")), eventOffset = Number(option(args, "--event-offset", "0")); exact(args, 0);
-      output("project.sync", continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) })); return;
+      const project = option(args, "--project"), byteBudget = Number(option(args, "--byte-budget", "16000")), continuation = option(args, "--continue"), offset = Number(option(args, "--offset", "0")), eventOffset = Number(option(args, "--event-offset", "0"));
+      const excludeUnreadable = option(args, "--exclude-unreadable"), reason = option(args, "--reason"); exact(args, 0);
+      if (continuation && (excludeUnreadable !== undefined || reason !== undefined)) throw failure("--exclude-unreadable applies to project sync --project ID, not to --continue.");
+      output("project.sync", await withStopHook(continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget, excludeUnreadable, reason }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) }))); return;
     }
     if (action === "event") { exact(args, 1); output("project.event", await projectEvent(args[0])); return; }
     throw failure("Expected project sync|wait|guard|control|event|prune.");

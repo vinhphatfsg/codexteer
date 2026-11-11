@@ -4,7 +4,7 @@ import { lstat, open } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { readRecord, withStoreLock, storePath } from "./store.mjs";
-import { getSupervisor, registerSupervisor } from "./supervision.mjs";
+import { registerSupervisor } from "./supervision.mjs";
 import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
 import { repositorySource } from "./repository-source.mjs";
 import { validateSyncPage } from "./sync-page.mjs";
@@ -131,11 +131,9 @@ export async function startWork(input, dependencies = {}) {
       record.indexed = true; record.stage = "indexed"; await writeHistoryRecord("work-starts", key, record, storage); await hook("index_updated", record);
     }
     if (!record.supervisor_registered) {
-      const existing = await getSupervisor(record.thread_id, storage);
-      if (existing?.state === "stopped") throw fail("A stopped managed task cannot be reactivated by work start. A human must explicitly establish new supervision.", "MANAGED_SUPERVISOR_STOPPED");
       await hook("before_supervisor_registration", record);
       record.supervisor_session_id ??= randomUUID();
-      await registerSupervisor(record.thread_id, record.supervisor_session_id, { ...storage, owner: "codexteer-orchestrator", connection, rejectStopped: true });
+      await registerSupervisor(record.thread_id, record.supervisor_session_id, { ...storage, owner: "codexteer-orchestrator", connection });
       record.supervisor_registered = true; record.stage = "supervisor_registered"; await writeHistoryRecord("work-starts", key, record, storage); await hook("supervisor_registered", record);
     }
     try {

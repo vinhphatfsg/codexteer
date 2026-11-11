@@ -1,4 +1,4 @@
-import { OPTIONS_INVALID, RUNTIME_NOT_READY, RUNTIME_UNAVAILABLE } from "./help-errors.mjs";
+import { MANAGED_SUPERVISOR_STOPPED, OPTIONS_INVALID, RUNTIME_NOT_READY, RUNTIME_UNAVAILABLE } from "./help-errors.mjs";
 const RESTART_SHARED = "ユーザーが作業を終えてDesktopを終了し、codexteer desktop startで起動し直す。codexteerは自動で起動・再起動しない。";
 
 const sharedRuntimeErrors = [
@@ -18,11 +18,7 @@ const managedStoppedErrors = [
     when: "project control stopで停止済みの担当へwork tellした。",
     action: "送信しない。停止済みの担当は再開も別担当への置換もしない。続けるのはユーザーが明示的に指示したときだけで、そのときは新しい題名か発注でwork startを実行し、別の担当として立ち上げる。",
   },
-  {
-    code: "MANAGED_SUPERVISOR_STOPPED",
-    when: "停止済みの担当と同じ題名・発注・方針でwork startを再実行した。",
-    action: "停止済みの担当は再開しない。続けるのはユーザーが明示的に指示したときだけで、そのときは新しい題名か発注でwork startを実行し、別の担当として立ち上げる。",
-  },
+  MANAGED_SUPERVISOR_STOPPED,
 ];
 
 const supervisorForbiddenError = {
@@ -498,38 +494,47 @@ export const topics = {
   project: {
     title: "managed projectの全担当を差分同期・制御する",
     when: "オーケストレーターの再起動後や定期確認時に、全担当の進行・失敗・質問・承認待ちを一度に把握するとき。",
-    usage: ["project control pause|stop|resume --project ID --all", "project control pause|stop|resume --project ID --work THREAD", "project sync --project ID [--byte-budget N]", "project sync --continue TOKEN [--offset N] [--event-offset N] [--byte-budget N]", "project wait --project ID [--timeout-ms N] [--json]", "project guard --project ID", "project guard --project ID --status [--json]", "project event TOKEN", "project prune --project ID"],
+    usage: ["project control pause|stop|resume --project ID --all", "project control pause|stop|resume --project ID --work THREAD", "project sync --project ID [--byte-budget N]", "project sync --project ID --exclude-unreadable THREAD --reason TEXT", "project sync --continue TOKEN [--offset N] [--event-offset N] [--byte-budget N]", "project wait --project ID [--timeout-ms N] [--json]", "project guard --project ID", "project guard --project ID --status [--json]", "project event TOKEN", "project prune --project ID"],
     options: [
       { name: "--project", text: "work startで登録したproject指定文字列。名前で作成した場合は同じ名前を使い、IDへ置き換えない。" },
       { name: "--all / --work THREAD", text: "project controlの対象。project全体か個別担当のどちらか一方を必ず指定する。" },
       { name: "--byte-budget", default: "16000", text: "構文的に完全なJSON出力へ使うUTF-8 byte予算（4096〜1048576）。" },
       { name: "--continue / --offset", text: "省略された担当を同じsync snapshotから取り出すtokenと開始位置。" },
+      { name: "--exclude-unreadable THREAD / --reason TEXT", text: "停止済みで読めなくなった担当を、理由を付けてsyncの対象から外す。もう一度読み、失敗した場合だけ除外する。取り消せない。" },
       { name: "--timeout-ms", text: "waitの待機時間（0以上の整数）。省略時は変化まで待機する。開始済みの観測は完了まで待つ。" },
       { name: "--status", text: "guardの停止判定の代わりに、受信セッションのStop hook設定印を親プロセスと照合する。--jsonで通常のenvelopeを返す。" },
     ],
-    returns: "controlはrequested・changed・already・failedとcode、対象membership_digest。syncはcomplete、4群表示、3軸状態、history_gap、retry_after_ms、省略数、continuation_token、wait_sync_token。waitはchanged・timed_out・reasonとsync（syncと同じsnapshot、続きのtoken付き）。timeoutではsync:null。観測失敗はreason:observation_failed・終了値1。guardは--jsonの有無によらずhook用の生JSON（許可は{}、拒否はdecision:blockとreason）を返し、正常な判定は終了値0。guard --statusは通常のenvelopeでstop_hook:configured|unverified（検査不能ならerrorも）を返す。event tokenは長文をproject eventで全文取得できる。",
+    returns: "controlはrequested・changed・already・failedとcode、対象membership_digest。syncはcomplete、4群表示、3軸状態、history_gap、retry_after_ms、省略数、continuation_token、wait_sync_token。読むのを終えた停止済み担当の行はobservation:settledとsettled（basis:observed|excluded、settled_at、除外時はreasonとerror）。--exclude-unreadableの結果はexclude_unreadable.outcome（excluded・unnecessary・already_settled・not_applied）。waitはchanged・timed_out・reason・unreadable（直近の観測で読めなかった担当のthread_idとerror。timeoutでも返す）とsync（syncと同じsnapshot、続きのtoken付き）。timeoutではsync:null。開始時に特定した自分のエージェントセッションが終了したwaitは、次の照会の前にreason:owner_exited・changed:false・sync:null・終了値1で終わり、記録とlockを解放する。読み取り失敗だけならreason:observation_failed・終了値1。別のsyncが先にheadを更新して公開されなかった結果はpublication_conflict（code）を持ち、waitではreason:observation_failed・changed:false・終了値1。guardは--jsonの有無によらずhook用の生JSON（許可は{}、拒否はdecision:blockとreason）を返し、正常な判定は終了値0。guard --statusは通常のenvelopeでstop_hook:configured|unverified（検査不能ならerrorも）を返す。event tokenは長文をproject eventで全文取得できる。",
     examples: ["codexteer project sync --project sample --json", "codexteer project wait --project sample --timeout-ms 30000 --json", "codexteer project guard --project sample", "codexteer project guard --project sample --status --json", 'Claude Code .claude/settings.json: {"hooks":{"Stop":[{"hooks":[{"type":"command","command":"codexteer project guard --project sample","timeout":10}]}]}}', "codexteer project event <TOKEN> --json", "codexteer --connection desktop-cloud project sync --project sample --json"],
     notes: [
       "controlは既存の担当別bindingを使い、部分失敗時も全結果を返す（終了値1・ok:false）。busyとbinding不在はfailed、同じ状態への再実行はalready。stop済みをresumeしない。受付済みプロセス自体は終了しない。",
-      "syncは一巡してからbacklogをdrainし、completeな担当だけcursorを進める。waitは最後のcomplete project syncを基準に新しいturn終了・質問・承認待ち・失敗、またはmembership変更を待つ。idleだけでは返らず、通常進捗では基準も進めない。",
-      "waitの基準は完全なsync結果の永続化時に更新する。最初の基準がなければinitial_syncを返す。waitはprojectごとに1つ。同じ変化を再通知せず、最新waitの結果は次のsyncのwait_sync_tokenからsync --continueで復元できる。",
-      "フラグの解除・再出現は読了済みcursorと別に保存し、timeout後も再要求を検知する。attention:nullなど現在のフラグ不明はPROJECT_WAIT_ATTENTION_UNKNOWNとして返し、担当cursorと完全な基準を進めない。",
+      "syncは一巡してからbacklogをdrainし、completeな担当だけcursorを進める。waitは担当ごとに最後にwaitが返した観測か完全なsyncの観測を基準に、新しいturn終了・質問・承認待ち・失敗、またはmembership変更を待つ。idleだけでは返らず、通常進捗では基準も進めない。",
+      "waitの基準はwaitが返した時と完全なsyncの公開時に、読めた担当だけ更新する。読めない担当は前の基準を保つ。通常のsyncが不完全なら基準を進めない。最初の基準がなければinitial_syncを返す。waitはprojectごとに1つ。同じ変化を再通知せず、最新waitの結果は次のsyncのwait_sync_tokenからsync --continueで復元できる。",
+      "読めない担当がいてもwaitは読めた担当の変化を返す（sync.complete:falseでもchanged:true）。失敗だけなら、新しく読めなくなった担当かエラーcodeが変わった担当があるときに1回だけobservation_failedを返す。同じ失敗が続く間は返らず、履歴も保存しない。waitかsyncが一度完全に読めた後の再発は、同じcodeでも1回返す。間にsyncを実行しても同じ失敗は再び返さない。completeにするためにsyncやwaitを繰り返さず、結果を読んだらwaitを再開する。stopしていない担当がunreadableにある間、waitはその担当のターン終了・質問・承認待ちを検知しない。status THREADやその担当のbranchで別に確認してユーザーへ報告し、waitを静かにするためにstopしない。--exclude-unreadableは検収してstopした担当にだけ使う。",
+      "フラグの解除・再出現は読了済みcursorと別に保存し、timeout後も再要求を検知する。attention:nullなど現在のフラグ不明はPROJECT_WAIT_ATTENTION_UNKNOWNの読み取り失敗として扱い、その担当のcursorと基準を進めない。",
       "未完了の担当（paused・binding不在も含む）がいる間、waitを終了通知のあるバックグラウンドタスクとして動かし、終了後は結果を読んで再開する。質問・承認・URLの伝達後も続け、検収後にcontrol stopする。guardはpidと起動の同一性を照合し、異常終了記録を許可に使わない。macOS/Linux対応。",
       "同じCODEX_HOME・host・projectは1オーケストレーターで扱う。guardは最も近いClaude/Codex CLI親プロセスのpid・起動識別が一致するwaitだけを数える。所有者不明・旧版のwaitは許可に使わない。別セッションのwaitが生きていても停止は拒否し、重複waitはRECORD_BUSYのまま引継ぎを案内する。所有セッションでwaitを終了してから再開し、lock削除やcontrol stopで競合を迂回しない。",
       "guard --statusのstop_hook:configuredは直接Claude起動の設定印を検証できた状態。prompt生成・手動起動・Codex起動・検査不能はunverified。最初の報告で監視漏れを止める仕組みがない（有効なhookを確認できない）ことと、このtopicの設定例を伝える。手動設定はセッションの有効なhook一覧で確認する。ファイルの存在や設定印は実行中の無効化・信頼設定・継続上限を保証しない。",
+      "syncとwaitのJSONもdata.stop_hook（configured|unverified、guard --statusと同じ判定）を返す。ページ本体の外に付くため、output_bytesとbyte予算には含まれない。",
       "guardは接続・sync・送信を行わず、stop_hook_activeでも条件を再確認する。ローカル状態の読取りやプロセス検査が不能ならsystemMessageで警告して停止を許す。ユーザーの中断・hook無効化・CLI側の継続上限は阻止できない。",
       "自分のオーケストレーターを特定できない場合もPROJECT_GUARD_OWNER_UNVERIFIEDのsystemMessageで監視未確認を警告して停止を許す。別セッションのwaitを認めた状態とは区別する。hookとwaitを同じ対応CLIから実行し、親プロセスの経路を確認する。macOSのprocess_startは起動日時とcommandのSHA-256だけを保存し、prompt全文を含めない。旧形式のwaitは所有セッションで終了し、新しいCLIでwaitとhookを揃える。",
       "未解決の質問・承認・失敗は解消を完全な観測で確認するまで再掲する。429は再試行せず、取得済み結果とretry_after_msを返す。",
+      "control stop済みの担当は、停止後のsyncで完全に読み、終了済みか実行中ターンのないidleで、フラグが空と分かり未解決attentionがなければ、その回を最後に読まない（settled）。行は結果の末尾に残るがイベント・詳細record・cursorは増えず、completeは今回読んだ担当だけで決まる。settledの担当がDesktopから再開されてもsync・waitは検知しない。質問・承認・失敗が未解決の担当と実行中の担当は読み続ける。",
+      "停止済みなのに読めない担当だけ--exclude-unreadableで除外できる。同じエラーが続き他の担当は読めると確認してから使う。再試行を求める応答・読み取り中の更新・cursorの競合では除外しない（not_applied）。除外した担当の未解決attentionは残り続ける。読めない担当が作業中なら不完全のまま扱い、除外するために検収前の担当をstopしない。",
       "project prune --project IDで過去のsync履歴を整理する。最新sync・未提示初回結果・参照中の根拠は保持する。保存総量はCODEX_HOMEのhost namespaceごとに256 MiB、全文観測は1担当1回16 MiBまで。容量不足では省略保存せず拒否する。",
+      "PROJECT_HISTORY_LIMITのエラーはstorage_bytes（使用量）・required_bytes（今回必要な量）・limit_bytes（上限）を返し、text出力にも表示する。",
       "idleかつ最新turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ち。開始前idleや情報不足は未確認。検収待ちは全体の完了認定ではない。",
-      "未確認・history_gap・complete:falseを変化なしとして扱わない。既存read/watchは引き続き利用できる。",
+      "未確認・history_gap・complete:falseの担当を変化なしとして扱わない。既存read/watchは引き続き利用できる。",
     ],
-    errors: [OPTIONS_INVALID, supervisorForbiddenError],
+    errors: [OPTIONS_INVALID, supervisorForbiddenError,
+      { code: "PROJECT_SYNC_EXCLUDE_NOT_STOPPED", when: "--exclude-unreadableに、control stopしていない担当を指定した。", action: "除外しない。作業中の担当が読めないなら不完全として扱い、原因を調べる。検収して停止した担当だけを除外できる。除外のためにstopしない。" },
+      { code: "PROJECT_SYNC_EXCLUDE_UNMANAGED", when: "--exclude-unreadableに、そのprojectの担当ではないIDを指定した。", action: "project syncの担当行にあるthread_idと、work startと同じ--projectを指定する。" },
+    ],
     see: ["work", "read", "watch", "cloud"],
   },
 
   work: {
-    title: "managed担当を開始し、complete syncを基点に安全に指示する",
+    title: "managed担当を開始し、完全に読めた担当へ安全に指示する",
     when: "方針付き担当を立ち上げるとき、またはproject syncで確認済みの担当へcursor・finding・監督IDを手渡さず指示するとき。",
     usage: ["work start --project ID|NAME --title TITLE [--root PATH] <WORK-ORDER>|-", "work tell THREAD [--sync-token TOKEN] [--new-turn] <INSTRUCTION>|-", "--connection desktop-cloud work start --project NAME --environment ID|NAME --title TITLE --root PATH <WORK-ORDER>|-"],
     options: [
@@ -547,7 +552,7 @@ export const topics = {
       "方針は権限拡張や承認・質問への代理回答を許可しない。既存担当へ方針変更を自動送信しない。",
       "Desktop Cloudのprojectはローカルの調整用namespaceで、Desktop DBのproject所属を要求しない。ローカルcheckoutとCloud側の一致は自動保証しない。",
       "ローカルのwork startはDesktopの保存済み権限モードに揃え、未確認ならDESKTOP_PERMISSION_UNVERIFIEDで作成しない。work tell --new-turnは対象スレッド自身の権限設定を継承する。",
-      "work tellは最新のcomplete project syncを要求し、送信直前に差分をdrainする。新event、質問・承認待ち、attention不明、不完全syncでは送らない。",
+      "work tellは最新のproject syncで対象の担当が完全に読めていること（complete:true）を要求し、送信直前に差分をdrainする。対象の新event、質問・承認待ち、attention不明、不完全な観測では送らない。他の担当の未読・不完全は妨げず、receiptのother_work（incomplete・human_attention・membership_changed）で返す。--sync-tokenで以前のsyncを指定できるのは、対象がその後に完全に再読されていない間だけ。",
       "finding・source・kind・監督IDは内部化する。質問・承認への回答を代理生成するflagは提供しない。",
     ],
     errors: [OPTIONS_INVALID, supervisorForbiddenError, ...managedStoppedErrors,

@@ -74,6 +74,9 @@ export async function assertSupervisor(threadInput, sessionInput, { sending = fa
 // repeats it under the task lock; a successful doctor does not reserve an ID.
 export async function assertSupervisorRegistration(threadInput, sessionInput, { connection, ...storage } = {}) {
   const threadId = normalizeTaskId(threadInput), sessionId = supervisorId(sessionInput), current = await getSupervisor(threadId, storage);
+  // Project sync and wait stop reading stopped members, so a revived one would
+  // be invisible to both.
+  if (current?.state === "stopped" && await getManagedThread(threadId, storage)) throw failure("Stopped project work cannot be supervised again. Continue it as new work with work start.", "MANAGED_SUPERVISOR_STOPPED");
   assertNotStopped(current, sessionId);
   await assertSessionBinding(threadId, sessionId, storage);
   if (current?.session_id === sessionId) return assertSupervisor(threadInput, sessionId, { connection, ...storage });
@@ -81,7 +84,7 @@ export async function assertSupervisorRegistration(threadInput, sessionInput, { 
   return current;
 }
 
-export async function registerSupervisor(threadInput, sessionInput, { owner = "external", launcherPid = null, connection = "shared", rejectStopped = false, ...storage } = {}) {
+export async function registerSupervisor(threadInput, sessionInput, { owner = "external", launcherPid = null, connection = "shared", ...storage } = {}) {
   const threadId = normalizeTaskId(threadInput), sessionId = supervisorId(sessionInput);
   if (typeof owner !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(owner)) throw failure("Supervisor owner must be a short agent name.", "SUPERVISOR_INVALID");
   if (launcherPid !== null && (!Number.isSafeInteger(launcherPid) || launcherPid <= 0)) throw failure("Invalid supervisor launcher PID.", "SUPERVISOR_INVALID");
@@ -89,7 +92,6 @@ export async function registerSupervisor(threadInput, sessionInput, { owner = "e
   // Registrations take the namespace-wide lock before the task lock. Stop,
   // pause and sends only take the task lock and never acquire in reverse order.
   return withStoreLock("supervisor-registration", () => withStoreLock(`supervisor-${threadId}`, async () => {
-    if (rejectStopped && (await getSupervisor(threadId, storage))?.state === "stopped") throw failure("A stopped managed task cannot be reactivated by registration.", "MANAGED_SUPERVISOR_STOPPED");
     const current = await assertSupervisorRegistration(threadId, sessionId, { connection, ...storage });
     if (current?.session_id === sessionId) return current;
     const now = new Date().toISOString();

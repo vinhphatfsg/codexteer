@@ -8,11 +8,12 @@ import { fail } from "../src/cli.mjs";
 import { startWork } from "../src/work-start.mjs";
 import { createDesktopCloudTask, reconcileDesktopCloudCreation, desktopCloudReceipt, sendDesktopCloudInput } from "../src/desktop-cloud.mjs";
 import { DesktopCloudClient } from "../src/desktop-cloud-api.mjs";
-import { fetchThread, readSnapshot } from "../src/observe.mjs";
+import { fetchThread, readSnapshot, observeThread } from "../src/observe.mjs";
 import { listRecords } from "../src/store.mjs";
 import { getManagedThread, managedMembershipDigest } from "../src/project-index.mjs";
 import { getSupervisor, registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
 import { syncProject } from "../src/project-sync.mjs";
+import { controlProject } from "../src/project-control.mjs";
 import { tellWork } from "../src/work-tell.mjs";
 import { repositorySource } from "../src/repository-source.mjs";
 
@@ -215,3 +216,21 @@ test("initial delivery verifies the selected environment before sending any prom
   await assert.rejects(startWork(f.input, f.deps), { code: "WORK_CREATE_UNKNOWN" });
   assert.equal(creates(f), 1); assert.equal(deliveries(f), 0, "a created but unsent task is not resumed by an automatic send");
 });
+
+// The app-server ThreadStatus of a finished task is idle, or notLoaded once the
+// server unloaded it; neither carries activeFlags.
+for (const finished of ["idle", "notLoaded"]) {
+  test(`a stopped Desktop Cloud task that finished (${finished}) is settled by one sync and not read again`, async t => {
+    const f = await fixture(t); await startWork(f.input, f.deps);
+    const read = (id, options) => observeThread(id, options, { connect: f.transport.connect }), reads = () => f.state.calls.filter(c => c.method === "thread/read").length;
+    f.state.turns.at(-1).items.push({ id: "report", type: "agentMessage", text: "Done." }); f.state.turns.at(-1).status = "completed";
+    Object.assign(f.state, { status: finished, flags: null });
+    assert.equal((await controlProject(f.input.project, "stop", { work: ID }, f.storage)).changed, 1);
+    const initial = reads(), first = await syncProject(f.input.project, {}, { storage: f.storage, read });
+    assert.ok(reads() > initial, "the sync that first sees the stop reads the task"); assert.equal(first.complete, true); assert.equal(first.works[0].execution, "idle"); assert.equal(first.works[0].settled.basis, "observed");
+    assert.ok(first.works[0].events.some(event => event.event_id === "report"), "the final report is presented before the task is left alone");
+    const before = reads(), second = await syncProject(f.input.project, {}, { storage: f.storage, read });
+    assert.equal(reads(), before, "the settled task is not read"); assert.equal(second.complete, true);
+    assert.equal(second.works[0].observation, "settled"); assert.equal(second.works[0].settled.basis, "observed");
+  });
+}

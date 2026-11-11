@@ -12,7 +12,7 @@ import { getMessage } from "../src/journal.mjs";
 import { getFinding } from "../src/findings.mjs";
 import { readRecord, writeRecord } from "../src/store.mjs";
 
-const THREAD = "11111111-1111-4111-8111-121212121212", SESSION = "22222222-2222-4222-8222-121212121212";
+const THREAD = "11111111-1111-4111-8111-121212121212", OTHER = "11111111-1111-4111-8111-343434343434", SESSION = "22222222-2222-4222-8222-121212121212";
 const policyHash = text => createHash("sha256").update(text).digest("hex");
 const task = (items = [], flags = []) => ({ id: THREAD, name: "fixture", status: { type: "active", activeFlags: flags }, turns: [{ id: "turn-one", status: "inProgress", items: [{ id: "user-one", type: "userMessage", content: [{ type: "text", text: "original delegation" }] }, ...items] }] });
 
@@ -28,6 +28,22 @@ async function fixture(t) {
   await syncProject("project-tell", {}, { storage: { home }, read });
   return { home, root, read, get current() { return current; }, set current(value) { current = value; } };
 }
+
+async function pair(t, otherCursor) {
+  const f = await fixture(t), other = { ...task(), id: OTHER };
+  await registerManagedThread(OTHER, { projectId: "project-tell", connection: "shared", syncCursor: otherCursor ?? readSnapshot(other).cursor }, { home: f.home });
+  f.other = other; f.readAll = async (id, options) => id === OTHER ? readSnapshot(f.other, { since: options.since, limit: options.limit }) : f.read(id, options);
+  f.sync = (read = f.readAll) => syncProject("project-tell", {}, { storage: f, read });
+  return f;
+}
+const accepted = options => ({ sent: true, delivery_status: "accepted", client_message_id: options.clientMessageId, turn_id: "turn-one" });
+const accept = f => async (_id, _wire, options) => { await options.beforeSend(f.current); return accepted(options); };
+const targetFails = f => (id, options) => id === THREAD ? Promise.reject(Object.assign(new Error("rate"), { code: "CLOUD_RATE_LIMITED" })) : f.readAll(id, options);
+const targetAsksThenFails = f => { let calls = 0; return async (id, options) => {
+  if (id !== THREAD) return f.readAll(id, options);
+  if (++calls > 1) throw Object.assign(new Error("rate"), { code: "CLOUD_RATE_LIMITED" });
+  return { ...await f.read(id, options), cursor: "question-1", has_more: true, events: [{ id: "unanswered", type: "agentMessage", text: "Choose", questions: ["A or B?"] }] };
+}; };
 
 test("work tell creates internal finding and journal evidence without public supervision metadata", async t => {
   const f = await fixture(t); let dispatches = 0;
@@ -56,7 +72,7 @@ test("stale events, new user input, and human attention all refuse delivery", as
   await assert.rejects(tellWork(THREAD, "attention unknown", {}, { storage: unknown, read: async () => ({ ...observed, attention: undefined }) }), { code: "WORK_TELL_ATTENTION_UNKNOWN" });
 });
 
-test("incomplete sync, stale token, and membership generation conflict refuse delivery", async t => {
+test("incomplete sync, stale token, and competing bases refuse delivery", async t => {
   const f = await fixture(t); let dispatches = 0;
   await syncProject("project-tell", {}, { storage: f, read: async () => { throw Object.assign(new Error("rate"), { code: "CLOUD_RATE_LIMITED" }); } });
   await assert.rejects(tellWork(THREAD, "blocked", {}, { storage: f, read: f.read, send: async () => { dispatches++; } }), { code: "WORK_TELL_SYNC_INCOMPLETE" });
@@ -67,10 +83,71 @@ test("incomplete sync, stale token, and membership generation conflict refuse de
   const projectKey = createHash("sha256").update("project-tell").digest("hex").slice(0, 40), head = await readRecord("project-sync-heads", projectKey, fresh);
   await writeRecord("project-sync-heads", projectKey, { ...head, conflict_tokens: [oldToken, head.sync_token] }, fresh);
   await assert.rejects(tellWork(THREAD, "parallel sync", {}, { storage: fresh, read: fresh.read }), { code: "WORK_TELL_SYNC_TOKEN_REQUIRED" });
-  const changed = await fixture(t);
-  const other = "11111111-1111-4111-8111-343434343434", cursor = readSnapshot({ ...task(), id: other }).cursor;
-  await registerManagedThread(other, { projectId: "project-tell", connection: "shared", syncCursor: cursor }, { home: changed.home });
-  await assert.rejects(tellWork(THREAD, "membership changed", {}, { storage: changed, read: changed.read }), { code: "WORK_TELL_MEMBERSHIP_CHANGED" });
+});
+
+test("an unreadable member does not block work tell to a completely read member", async t => {
+  const f = await pair(t, "broken"), sync = await f.sync();
+  assert.equal(sync.complete, false); assert.equal(sync.works.find(work => work.thread_id === OTHER).complete, false);
+  const receipt = await tellWork(THREAD, "continue the healthy work", {}, { storage: f, read: f.readAll, send: accept(f) });
+  assert.equal(receipt.sent, true); assert.equal(receipt.sync_token, sync.sync_token);
+  assert.deepEqual(receipt.other_work, { incomplete: [OTHER], human_attention: [], membership_changed: false });
+  await assert.rejects(tellWork(OTHER, "unread target", {}, { storage: f, read: f.readAll, send: async () => assert.fail("dispatch") }), { code: "WORK_TELL_SYNC_INCOMPLETE" });
+});
+
+test("the receipt reports other members that are unread, waiting for a human, or registered after the sync", async t => {
+  const clean = await pair(t); await clean.sync();
+  assert.deepEqual((await tellWork(THREAD, "clean project", {}, { storage: clean, read: clean.readAll, send: accept(clean) })).other_work, { incomplete: [], human_attention: [], membership_changed: false });
+  const asking = await pair(t); asking.other = { ...task([], ["waitingOnApproval"]), id: OTHER }; await asking.sync();
+  assert.deepEqual((await tellWork(THREAD, "other asks", {}, { storage: asking, read: asking.readAll, send: accept(asking) })).other_work, { incomplete: [], human_attention: [OTHER], membership_changed: false });
+  const added = await fixture(t);
+  await registerManagedThread(OTHER, { projectId: "project-tell", connection: "shared", syncCursor: readSnapshot({ ...task(), id: OTHER }).cursor }, { home: added.home });
+  assert.deepEqual((await tellWork(THREAD, "member added", {}, { storage: added, read: added.read, send: accept(added) })).other_work, { incomplete: [OTHER], human_attention: [], membership_changed: true });
+});
+
+test("settled members are not reported as unread; an excluded member's open question still is", async t => {
+  const idle = { id: OTHER, name: "other", status: { type: "idle" }, turns: [{ id: "turn-other", status: "completed", items: [] }] };
+  const quiet = await pair(t, readSnapshot(idle).cursor); quiet.other = idle;
+  await registerSupervisor(OTHER, SESSION.replace(/1212$/, "3434"), { home: quiet.home, owner: "fixture", connection: "shared" }); await controlSupervisor(OTHER, "stop", quiet);
+  assert.equal((await quiet.sync()).works.find(work => work.thread_id === OTHER).settled.basis, "observed"); await quiet.sync();
+  assert.deepEqual((await tellWork(THREAD, "observed settled", {}, { storage: quiet, read: quiet.readAll, send: accept(quiet) })).other_work, { incomplete: [], human_attention: [], membership_changed: false });
+
+  const asking = await pair(t); asking.other = { ...task([], ["waitingOnApproval"]), id: OTHER }; await asking.sync();
+  await registerSupervisor(OTHER, SESSION.replace(/1212$/, "3434"), { home: asking.home, owner: "fixture", connection: "shared" }); await controlSupervisor(OTHER, "stop", asking);
+  const unreadable = (id, options) => id === OTHER ? Promise.reject(Object.assign(new Error("too large"), { code: "PAYLOAD_TOO_LARGE" })) : asking.readAll(id, options);
+  const excluded = await syncProject("project-tell", { excludeUnreadable: OTHER, reason: "history exceeds the receive limit" }, { storage: asking, read: unreadable });
+  assert.equal(excluded.exclude_unreadable.outcome, "excluded"); assert.equal(excluded.works.find(work => work.thread_id === OTHER).complete, false);
+  assert.deepEqual((await tellWork(THREAD, "excluded settled", {}, { storage: asking, read: asking.readAll, send: accept(asking) })).other_work, { incomplete: [], human_attention: [OTHER], membership_changed: false });
+  await asking.sync(unreadable);
+  assert.deepEqual((await tellWork(THREAD, "excluded carried", {}, { storage: asking, read: asking.readAll, send: accept(asking) })).other_work, { incomplete: [], human_attention: [OTHER], membership_changed: false });
+});
+
+test("an older sync token stays a valid basis until the target is completely read again", async t => {
+  const f = await pair(t), first = await f.sync(), second = await f.sync(targetFails(f));
+  assert.equal(second.works.find(work => work.thread_id === THREAD).complete, false);
+  await assert.rejects(tellWork(THREAD, "latest sync did not read the target", {}, { storage: f, read: f.readAll, send: async () => assert.fail("dispatch") }), { code: "WORK_TELL_SYNC_INCOMPLETE" });
+  const receipt = await tellWork(THREAD, "reviewed on the older sync", { syncToken: first.sync_token }, { storage: f, read: f.readAll, send: accept(f) });
+  assert.equal(receipt.sent, true); assert.equal(receipt.sync_token, first.sync_token);
+  const third = await f.sync(); assert.equal(third.complete, true);
+  await assert.rejects(tellWork(THREAD, "target was read again", { syncToken: first.sync_token }, { storage: f, read: f.readAll, send: async () => assert.fail("dispatch") }),
+    error => error.code === "WORK_TELL_SYNC_CONFLICT" && error.current_sync_token === third.sync_token);
+});
+
+test("a question seen by a newer incomplete read of the target refuses an older basis", async t => {
+  const f = await pair(t), first = await f.sync(), second = await f.sync(targetAsksThenFails(f));
+  assert.equal(second.works.find(work => work.thread_id === THREAD).complete, false);
+  assert.equal((await getManagedThread(THREAD, f)).sync_revision, first.works.find(work => work.thread_id === THREAD).sync_revision);
+  await assert.rejects(tellWork(THREAD, "choose A", { syncToken: first.sync_token }, { storage: f, read: f.readAll, send: async () => assert.fail("dispatch") }), { code: "WORK_TELL_HUMAN_REQUIRED" });
+});
+
+test("a project sync published during delivery refuses only when it concerns the target", async t => {
+  for (const [name, concurrent, code] of [["other member only", targetFails, null], ["question on target", targetAsksThenFails, "WORK_TELL_HUMAN_REQUIRED"], ["target read again", f => f.readAll, "WORK_TELL_SYNC_CONFLICT"]]) {
+    const f = await pair(t), basis = await f.sync(); let dispatches = 0, replaced;
+    const pending = tellWork(THREAD, `race: ${name}`, {}, { storage: f, read: f.readAll, send: async (_id, _wire, options) => {
+      replaced = await f.sync(concurrent(f)); await options.beforeSend(f.current); dispatches++; return accepted(options);
+    } });
+    if (code) await assert.rejects(pending, { code }); else assert.equal((await pending).sync_token, basis.sync_token);
+    assert.notEqual(replaced.sync_token, basis.sync_token); assert.equal(dispatches, code ? 0 : 1);
+  }
 });
 
 test("pause and acknowledged stop prevent dispatch", async t => {
@@ -112,14 +189,11 @@ test("policy drift is reported but never injected into the existing task", async
   assert.equal(result.policy.changed, true); assert.doesNotMatch(wire, /Changed policy/);
 });
 
-test("work tell rejects route identity drift and cursor revision changes after sync", async t => {
+test("work tell rejects a cursor revision change after sync", async t => {
   const { updateManagedThreadCursor } = await import("../src/project-index.mjs");
-  for (const change of ["route", "revision"]) {
-    const f = await fixture(t), member = await getManagedThread(THREAD, f);
-    if (change === "route") await writeRecord("project-index", policyHash(THREAD).slice(0, 40), { ...member, host_id: "different-host", remote_transport: "paired" }, f);
-    else await updateManagedThreadCursor(THREAD, member.sync_cursor, member.sync_cursor, f, member.sync_revision);
-    await assert.rejects(tellWork(THREAD, "do not send", {}, { storage: f, read: f.read, send: async () => assert.fail("dispatch") }), { code: change === "route" ? "WORK_TELL_MEMBERSHIP_CHANGED" : "WORK_TELL_SYNC_CONFLICT" });
-  }
+  const f = await fixture(t), member = await getManagedThread(THREAD, f);
+  await updateManagedThreadCursor(THREAD, member.sync_cursor, member.sync_cursor, f, member.sync_revision);
+  await assert.rejects(tellWork(THREAD, "do not send", {}, { storage: f, read: f.read, send: async () => assert.fail("dispatch") }), { code: "WORK_TELL_SYNC_CONFLICT" });
 });
 
 test("work tell cannot answer a retained question absent from the final sync page", async t => {

@@ -1,4 +1,5 @@
 export const SUPERVISOR_STOPPED = { code: "SUPERVISOR_STOPPED", when: "停止済みの監督IDで登録・観測・送信した。またはstoppedの監督をpause/resumeした。", action: "その監督を終了する。停止済みIDは復活しないので、続けるならユーザーに新しい本文の生成を頼む。" };
+export const MANAGED_SUPERVISOR_STOPPED = { code: "MANAGED_SUPERVISOR_STOPPED", when: "project control stopで停止済みの担当を、同じ題名・発注・方針のwork start、supervise THREAD、supervise registerで再び監督しようとした（新しい監督IDでも同じ）。", action: "停止済みの担当は再開しない。続けるのはユーザーが明示的に指示したときだけで、そのときは新しい題名か発注でwork startを実行し、別の担当として立ち上げる。" };
 export const SUPERVISOR_NOT_REGISTERED = { code: "SUPERVISOR_NOT_REGISTERED", when: "監督IDがこのタスクにまだ登録されていない。または未登録のタスクをpause/resume/stopした。", action: "本文の開始手順どおりsupervise registerしてから操作する。" };
 export const SUPERVISOR_PAUSED = { code: "SUPERVISOR_PAUSED", when: "pause中の監督が送信した。", action: "送信しない。観測は続けられる。resumeはユーザーだけが行い、監督は自分で解除しない。" };
 export const SUPERVISOR_ORPHANED = { code: "SUPERVISOR_ORPHANED", when: "superviseで直接起動した監督のプロセスが終了したのに、登録がactive/pausedのまま残っている。", action: "その監督を終了する。ユーザーにsupervise statusでの確認とstopを頼み、必要なら新しく始めてもらう。" };
