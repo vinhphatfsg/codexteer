@@ -228,14 +228,17 @@ const settledRow = work => ({ title: work.title, execution: work.execution, atte
 const settledMarker = ({ row, ...marker }) => marker;
 
 // Stop is irreversible, so a stopped member read completely and found quiet
-// needs no further reads. An unreadable one settles only on the operator's word.
-function settlement(decision, work, state, unresolvedAttention, settledAt) {
+// needs no further reads. Nobody answers a stopped member, so a question or
+// failure it ended on never resolves: the row that settles it shows that
+// attention and the head keeps it. An unreadable one settles only on the
+// operator's word.
+function settlement(decision, work, state, settledAt) {
   if (!decision.stopped) return null;
   // A coarse idle or notLoaded status with a running or unprovable turn is not
   // quiet, nor is work whose approval and question flags are unknown.
   const quiet = (work.execution === "terminal" || (work.execution === "idle" && state.latest?.active_turn_count === 0))
     && Array.isArray(state.latest?.attention) && state.latest.attention.length === 0;
-  if (work.complete) return quiet && !unresolvedAttention ? { basis: "observed", settled_at: settledAt, row: settledRow(work) } : null;
+  if (work.complete) return quiet ? { basis: "observed", settled_at: settledAt, row: settledRow(work) } : null;
   return decision.excludeReason && state.unreadable ? { basis: "excluded", reason: decision.excludeReason, error: state.error, settled_at: settledAt, row: settledRow(work) } : null;
 }
 
@@ -359,8 +362,8 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       resolution_unconfirmed: !!attention, attention_repeated: !!attention });
   }
   const observedComplete = () => observed.every(w => w.settled || w.complete);
-  works.sort((a, b) => (a.group === "対応が必要" ? -1 : 0) - (b.group === "対応が必要" ? -1 : 0)
-    || (a.observation === "settled") - (b.observation === "settled") || a.thread_id.localeCompare(b.thread_id));
+  works.sort((a, b) => (a.observation === "settled") - (b.observation === "settled")
+    || (a.group === "対応が必要" ? -1 : 0) - (b.group === "対応が必要" ? -1 : 0) || a.thread_id.localeCompare(b.thread_id));
   const syncToken = randomUUID(), createdAt = new Date().toISOString();
   const head = { schema: 1, project_id: projectId, sync_token: syncToken, membership_digest: membershipDigest,
     complete: observedComplete(), complete_work_ids: works.filter(w => w.complete).map(w => w.thread_id),
@@ -406,7 +409,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       }
       // Settle only on what this publication commits. The pending head above
       // must not skip a member whose last delta was never presented.
-      const settlements = new Map(observed.map(work => [work, settlement(plan.get(work.thread_id), work, states.get(work.thread_id), unresolved[work.thread_id], createdAt)]));
+      const settlements = new Map(observed.map(work => [work, settlement(plan.get(work.thread_id), work, states.get(work.thread_id), createdAt)]));
       const reviewed = !!dependencies.waitProbe || observed.every(work => work.complete || settlements.get(work));
       for (const [work, entry] of settlements) {
         if (!entry || (entry.basis === "observed" && !reviewed && owedToWait(previous?.wait_baseline, states.get(work.thread_id)))) continue;
