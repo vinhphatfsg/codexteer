@@ -18,8 +18,9 @@ async function usage(storage) {
   const stats = await Promise.all(buckets.map(bucket => recordStats(bucket, storage)));
   return { stats, bytes: stats.flat().reduce((sum, row) => sum + row.bytes, 0) };
 }
-function capacity(used, additional) {
-  if (used + additional > HISTORY_LIMIT_BYTES) throw failure("PROJECT_HISTORY_LIMIT", "History storage is full. Run project prune --project ID; protected evidence is never truncated.", { storage_bytes: used, required_bytes: additional, limit_bytes: HISTORY_LIMIT_BYTES });
+const limit = storage => storage.historyLimitBytes ?? HISTORY_LIMIT_BYTES;
+function capacity(used, additional, storage) {
+  if (used + additional > limit(storage)) throw failure("PROJECT_HISTORY_LIMIT", "History storage is full. Run project prune --project ID; protected evidence is never truncated.", { storage_bytes: used, required_bytes: additional, limit_bytes: limit(storage) });
 }
 // Lock order: work-start OR project-publication -> history -> membership.
 // prune acquires history only. No network/supervisor operations under history.
@@ -28,13 +29,13 @@ function capacity(used, additional) {
 export function withHistoryReservation(payload, action, storage = {}) {
   return withStoreLock("project-history", async () => {
     const used = await usage(storage);
-    capacity(used.bytes, bytes(payload) * 8 + 1024 * 1024);
+    capacity(used.bytes, bytes(payload) * 8 + 1024 * 1024, storage);
     let total = used.bytes;
     const sizes = new Map(used.stats.flatMap((rows, i) => rows.map(row => [`${buckets[i]}:${row.id}`, row.bytes])));
     const write = async (bucket, id, record, options = storage) => {
       const identifier = `${bucket}:${id}`, old = sizes.get(identifier) ?? 0;
       const size = bytes({ ...record, ...hostFields() }) + 1;
-      capacity(total - old, size);
+      capacity(total - old, size, storage);
       await writeRecord(bucket, id, record, options); total += size - old; sizes.set(identifier, size);
     };
     return action(write);
@@ -45,7 +46,7 @@ export function writeHistoryRecord(bucket, id, record, storage = {}) {
     const used = await usage(storage), index = buckets.indexOf(bucket);
     if (index < 0) throw failure("PROJECT_HISTORY_INVALID", "Unbudgeted history bucket.");
     const old = used.stats[index].find(row => row.id === id)?.bytes ?? 0;
-    capacity(used.bytes - old, bytes({ ...record, ...hostFields() }) + 1);
+    capacity(used.bytes - old, bytes({ ...record, ...hostFields() }) + 1, storage);
     return writeRecord(bucket, id, record, storage);
   }, storage);
 }
@@ -103,7 +104,7 @@ export async function pruneProjectHistory(projectId, storage = {}) {
       }
     }
     const after = await usage(storage);
-    return { project_id: projectId, deleted, storage_bytes: after.bytes, reclaimed_bytes: before.bytes - after.bytes, limit_bytes: HISTORY_LIMIT_BYTES,
+    return { project_id: projectId, deleted, storage_bytes: after.bytes, reclaimed_bytes: before.bytes - after.bytes, limit_bytes: limit(storage),
       protected_sync_token: head?.sync_token ?? null, retention: "explicit-prune" };
   }, storage);
 }
