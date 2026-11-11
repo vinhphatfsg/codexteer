@@ -124,6 +124,7 @@ export async function withStopHook(data) {
 const entryWriter = (baseline, id) => baseline.works[id] && (baseline.works[id].sync_token ?? baseline.sync_token);
 
 const UNREAD_GRACE_MS = 60000;
+const setStreaks = (observedAttention, unread) => { if (Object.keys(unread).length) observedAttention.unread = unread; else delete observedAttention.unread; };
 
 // A failed read says nothing about its member, and the next full read returns
 // everything since the cursor. So a failure is reported only once it has lasted
@@ -134,8 +135,6 @@ const UNREAD_GRACE_MS = 60000;
 // together than the grace cannot keep a member from being reported. A reported
 // member keeps no streak, so a quiet wait stops writing and a member shown
 // readable since starts from one poll.
-const setStreaks = (observedAttention, unread) => { if (Object.keys(unread).length) observedAttention.unread = unread; else delete observedAttention.unread; };
-
 function unreadStreaks(previous, observedAttention, failures, graceMs) {
   const reported = previous?.wait_reported_failures ?? {}, now = Date.now(), unread = {};
   const report = new Set(Object.keys(failures).filter(id => Object.hasOwn(reported, id)));
