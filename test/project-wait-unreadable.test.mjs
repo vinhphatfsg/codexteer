@@ -548,3 +548,22 @@ test("a streak that an earlier version saved with the wait publication it starte
   at(60000); const failed = await f.wait();
   assert.equal(failed.reason, "observation_failed"); assert.deepEqual(failed.unreadable, reported(A));
 });
+
+test("an approval that cleared during a poll whose publication lost, and was raised again, is returned", async t => {
+  const f = await fixture(t, { count: 3 });
+  Object.assign(f.works.get(A), { status: "active", turnStatus: "inProgress", attention: approval });
+  await f.sync();
+  f.works.get(C).error = "TIMEOUT";
+  assert.equal((await f.wait()).reason, "timeout", "one failed poll");
+  f.works.get(A).attention = []; let raced = false;
+  // The poll sees the clear and reports the lasting failure, then loses to a partial sync.
+  const lost = await f.checked(await waitProject("P", { timeoutMs: 0 }, { ...f.dependencies, read: async (id, options) => {
+    if (id === B && !raced) { raced = true; assert.equal((await f.sync()).complete, false); }
+    return f.dependencies.read(id, options);
+  } }));
+  assert.ok(raced); assert.equal(lost.reason, "observation_failed"); assert.equal(lost.sync.publication_conflict, "SYNC_CURSOR_CONFLICT");
+  f.works.get(C).error = null; f.works.get(A).attention = approval;
+  const renewed = await f.wait();
+  assert.equal(renewed.reason, "work_changed", "the clear the lost poll saw makes the approval new"); assert.deepEqual(renewed.unreadable, []);
+  assert.equal((await f.wait(30)).reason, "timeout", "the approval is returned once");
+});
