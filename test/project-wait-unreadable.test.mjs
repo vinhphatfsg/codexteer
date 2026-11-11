@@ -98,6 +98,18 @@ test("a reported failure that returns after a recovery without a change is retur
   assert.equal((await f.wait(30)).reason, "timeout", "the recurrence is returned once");
 });
 
+test("a recovery seen only by an ordinary sync lets the same failure be returned again", async t => {
+  const f = await fixture(t); await f.sync();
+  f.works.get(A).error = "CONNECTION_FAILED";
+  assert.equal((await f.wait()).reason, "observation_failed");
+  f.works.get(A).error = null;
+  assert.equal((await f.sync()).complete, true);
+  assert.equal((await f.head()).wait_reported_failures, undefined, "the complete read clears the reported failure");
+  f.works.get(A).error = "CONNECTION_FAILED";
+  assert.equal((await f.wait(1000)).reason, "observation_failed");
+  assert.equal((await f.wait(30)).reason, "timeout", "the recurrence is returned once");
+});
+
 test("a recovery and a recurrence inside one wait return the failure", async t => {
   const f = await fixture(t); await f.sync();
   f.works.get(A).error = "CONNECTION_FAILED";

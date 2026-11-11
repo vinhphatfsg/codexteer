@@ -323,7 +323,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     const attention = previous.unresolved_attention?.[member.thread_id];
     if (attention) unresolved[member.thread_id] = attention;
     carried[member.thread_id] = entry;
-    works.push({ thread_id: member.thread_id, ...entry.row, observation: "settled", events: [], settled: settledMarker(entry),
+    works.push({ thread_id: member.thread_id, ...entry.row, observation: "settled", events: attention?.events ?? [], settled: settledMarker(entry),
       resolution_unconfirmed: !!attention, attention_repeated: !!attention });
   }
   const observedComplete = () => observed.every(w => w.settled || w.complete);
@@ -398,6 +398,10 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
         baseline = { sync_token: syncToken, membership_digest: membershipDigest, works: entries };
         if (dependencies.waitProbe) head.wait_sync_token = syncToken;
       }
+      // A member an ordinary sync read in full with known flags has recovered;
+      // a failure only the wait probe sees (unknown flags) stays reported.
+      if (!dependencies.waitProbe) failures = Object.fromEntries(Object.entries(failures)
+        .filter(([id]) => !(states.get(id)?.complete && Array.isArray(states.get(id).latest?.attention))));
       const unsettled = map => Object.fromEntries(Object.entries(map).filter(([id]) => !head.settled?.[id]));
       if (baseline) head.wait_baseline = { ...baseline, works: unsettled(baseline.works) };
       failures = Object.fromEntries(Object.entries(unsettled(failures)).filter(([id]) => plan.has(id)));
