@@ -11,7 +11,7 @@ export async function launchAgent(agent, agentArgs, prompt, { env = process.env 
   try {
     // Keep forwarded argv intact. The agent's own terminator keeps its variadic
     // options from consuming the generated prompt as another option value.
-    child = spawn(agent, [...agentArgs, "--", prompt], { shell: false, stdio: "inherit", env });
+    child = spawn(agent, prompt === null ? agentArgs : [...agentArgs, "--", prompt], { shell: false, stdio: "inherit", env });
   } catch (error) { throw launchFailure(agent, error); }
 
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"];

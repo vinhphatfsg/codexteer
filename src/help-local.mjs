@@ -104,6 +104,7 @@ export const topics = {
       "supervise status|pause|resume|stop <THREAD>",
       "supervise list",
       "orchestrate --project ID|NAME <GOAL> [--agent claude|codex] [--use-path-cli] [-- <AGENT-ARGS...>]",
+      "orchestrate resume <SESSION-ID> --project ID|NAME [--use-path-cli] [-- <AGENT-ARGS...>]",
       "orchestrate prompt --project ID|NAME <GOAL> [--agent claude|codex] [--use-path-cli]",
       "doctor [--backend app-server|ui]",
       "desktop start [--dry-run]",

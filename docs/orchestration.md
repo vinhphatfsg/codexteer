@@ -125,6 +125,8 @@ macOSの起動識別は、起動日時とcommandのSHA-256だけを保存・比�
 
 印のない手動起動、Codex起動、異なるproject、プロセス検査不能は`unverified`です。最初の報告で「監視漏れを止める仕組みがない（有効なStop hookを確認できない）」ことと、`help project`の設定例を案内してください。手動設定済みならセッションの有効なhook一覧（Claude Codeでは`/hooks`）で同じproject・CLI・接続経路のguardとhook無効化の有無を確認します。ファイルの存在だけで有効と判断しません。`configured`も設定時の印であり、その後の無効化、信頼設定、CLIの継続上限やhook実行そのものまでは保証しません。未完了の間はhookの状態にかかわらず自分のwaitを動かし続けます。
 
+`orchestrate`で起動したClaude Codeセッションは、`claude --resume`ではなく`codexteer orchestrate resume <SESSION-ID> --project sample`で再開します。`--settings`のhookと`CODEXTEER_STOP_GUARD`の印は起動したプロセスに付き、セッションには保存されません。素の`claude --resume`や`claude --continue`で再開したセッションはhookなしで動くため、未完了の担当があってもwaitなしで停止でき、`stop_hook`は`unverified`になります。`orchestrate resume`は`orchestrate`と同じguardを`--settings`へ追加し、同じ印を付けて`claude --resume <SESSION-ID>`を起動します。新しい本文は送りません。`<SESSION-ID>`は`claude --resume`に渡すセッションIDか名前です。`--project`には元の`orchestrate`と同じ指定文字列を使います。違う文字列では印のprojectが一致せず`unverified`のままです。PATH方式で始めた場合は`--use-path-cli`も付けます。`--`以降の引数は`--resume <SESSION-ID>`の後ろでClaudeへ渡します。Claude向けの本文は、`stop_hook`が`unverified`なら最初の報告でも途中でも、このコマンドで再開するよう案内します。
+
 `orchestrate`はClaude Code起動時に、生成した同じCLIコマンド・project・接続経路のguardを`--settings`へ追加します。checkoutの設定ファイルは編集しません。自分で起動したClaude Codeでは`.claude/settings.json`の既存設定へ次を追加してください。`sample`はwork startと同じ調整用project IDへ、commandは同じCODEX_HOME・接続・hostを選ぶ保存済みコマンドまたはPATHコマンドへ置き換えます。
 
 ```json

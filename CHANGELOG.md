@@ -14,6 +14,7 @@
 - `project wait`は、開始したClaude/Codex CLIセッションが異常終了すると、次の照会の前に`reason:"owner_exited"`・終了値1で終わり、wait記録とlockを解放します。再開したセッションのwaitが`RECORD_BUSY`になり続け、Stop hookが停止を拒否し続けることはなくなりました。セッションを特定できないwaitは従来どおり待ち続けます。実行中のwaitの内部で別の記録が使用中だった`RECORD_BUSY`は、他セッションのwaitが使用中だという案内に置き換えなくなりました。
 - オーケストレーター用の指示に、再起動・要約の後で前のwaitの結果を読んだ記録がなければ、syncが返す`wait_sync_token`を`--continue`で読み切る手順を加えました。waitが公開した変化は以後のsyncに出ないため、セッションが落ちる直前のwait結果を読み落とさないようにします。
 - `project sync`と`project wait`のJSONに`stop_hook`（`configured`|`unverified`）を追加しました。Desktop Cloud接続でも返します。
+- `orchestrate resume SESSION_ID --project ID`を追加しました。`orchestrate`で起動したClaude Codeセッションを、同じStop hookと設定印を付けて`claude --resume`で再開し、新しい本文は送りません。素の`claude --resume`や`claude --continue`ではhookが付かず、未完了の担当があってもwaitなしで停止できました。Claude向けの本文は、`stop_hook`が`unverified`なら最初の報告でも途中でも、この再開コマンドを案内します。
 - 履歴容量のエラーは`storage_bytes`・`required_bytes`・`limit_bytes`をJSONとtextの両方で返します。受信上限を超えた応答のメッセージは、失敗した接続の上限（Desktop Cloudは16 MiB、共有App Serverは64 MiB）を示します。
 
 ## 0.23.0 — 2026-11-05公開

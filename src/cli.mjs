@@ -17,7 +17,7 @@ import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, ve
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 import { playSendSound } from "./sound.mjs";
 import { prepareSupervisorPrompt, superviseAgent } from "./supervise.mjs";
-import { prepareOrchestrationPrompt, orchestrateAgent } from "./orchestrate.mjs";
+import { prepareOrchestrationPrompt, orchestrateAgent, resumeOrchestrator } from "./orchestrate.mjs";
 import { rejectRepeatedBinding } from "./prompt-command.mjs";
 import { rejectUnknownOptions } from "./unknown-options.mjs";
 import { supervisorId, registerSupervisor, getSupervisor, assertSupervisor, assertSupervisorRegistration, controlSupervisor, supervisorStatus, listSupervisors } from "./supervision.mjs";
@@ -386,6 +386,14 @@ async function mainOnTarget(argv) {
       const promptOnly = args[0] === "prompt";
       if (promptOnly) args.shift();
       else if (json) throw usage("orchestrate inherits agent output and does not support --json. Use help orchestrate --json or orchestrate prompt --project ID|NAME <GOAL> --json.");
+      if (!promptOnly && args[0] === "resume") {
+        const separator = args.indexOf("--"), ownArgs = (separator < 0 ? args : args.slice(0, separator)).slice(1);
+        const project = takeOption(ownArgs, "--project", undefined), usePathCli = takeFlag(ownArgs, "--use-path-cli");
+        rejectUnknownOptions(ownArgs, "orchestrate", "See help orchestrate; agent arguments belong after --.", usage);
+        if (ownArgs.length !== 1) throw usage("Expected: orchestrate resume <SESSION-ID> --project <ID-or-exact-name>. Use the same project selector as the original orchestrate.");
+        process.exitCode = await resumeOrchestrator(ownArgs[0], project, { agentArgs: separator < 0 ? [] : args.slice(separator + 1), connection, usePathCli });
+        return;
+      }
       const separator = promptOnly ? -1 : args.indexOf("--");
       const ownArgs = separator < 0 ? args : args.slice(0, separator);
       const agentArgs = separator < 0 ? [] : args.slice(separator + 1);

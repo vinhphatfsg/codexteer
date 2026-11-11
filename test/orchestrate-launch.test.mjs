@@ -107,6 +107,64 @@ test("Stop hook status belongs to the receiving launch, never to prompt generati
   assert.match(JSON.parse(generated.stdout).data.prompt, /最初の報告.*監視漏れを止める仕組みがない/);
 });
 
+const SESSION = "22222222-2222-4222-8222-000000000002";
+const settingsOf = args => JSON.parse(args[args.lastIndexOf("--settings") + 1]);
+
+test("orchestrate resume reopens the Claude session with the launch's Stop hook and no new prompt", t => {
+  for (const pathMode of [false, true]) {
+    const options = fixture(t), mode = pathMode ? ["--use-path-cli"] : [];
+    const direct = run(options, ["--project", PROJECT, GOAL, ...mode]); assert.equal(direct.status, 0, direct.stderr);
+    const result = run(options, ["resume", SESSION, "--project", PROJECT, ...mode, "--", "--model", "model with spaces"]);
+    assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, "agent stderr\n");
+    const launched = JSON.parse(result.stdout);
+    assert.deepEqual(settingsOf(launched.args), settingsOf(JSON.parse(direct.stdout).args), "same hook as the original launch");
+    launched.args = withoutGuard(launched.args, "claude", pathMode ? undefined : options);
+    assert.deepEqual(launched, { agent: "claude", args: ["--resume", SESSION, "--model", "model with spaces"], cwd: options.cwd, input: "interactive input\n", inherited: "inherited value" });
+  }
+});
+
+test("a resumed orchestrator reports configured only for the project it was resumed with", t => {
+  const options = fixture(t);
+  options.env = { ...options.env, CT_GUARD_PROBE: "1", CT_BIN: BIN, CODEXTEER_STOP_GUARD: "stale inherited value" };
+  for (const [project, expected] of [[PROJECT, "configured"], ["Other Project", "unverified"]]) for (const mode of [[], ["--use-path-cli"]]) {
+    const result = run(options, ["resume", SESSION, "--project", project, ...mode]);
+    assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).data.stop_hook, expected, `${project} ${mode}`);
+  }
+});
+
+test("the prompt's resume command, run as printed, restores a configured Stop hook", t => {
+  const options = fixture(t);
+  writeFileSync(path.join(options.env.PATH, "codexteer"), `#!/bin/sh\nexec node ${JSON.stringify(BIN)} "$@"\n`, { mode: 0o755 });
+  options.env = { ...options.env, CT_GUARD_PROBE: "1", CT_BIN: BIN };
+  for (const mode of [["--use-path-cli"], []]) {
+    const generated = run(options, ["prompt", "--project", PROJECT, "goal", "--agent", "claude", ...mode, "--json"]); assert.equal(generated.status, 0, generated.stderr);
+    const lines = JSON.parse(generated.stdout).data.prompt.split("\n").filter(line => line.includes(" orchestrate resume <SESSION-ID> "));
+    assert.equal(lines.length, 1, `${mode}`);
+    const resumed = spawnSync("/bin/sh", ["-c", lines[0].replace("<SESSION-ID>", SESSION)], { ...options, input: "" });
+    assert.equal(resumed.status, 0, resumed.stderr); assert.equal(JSON.parse(resumed.stdout).data.stop_hook, "configured", `${mode}`);
+    if (mode.length) assert.deepEqual(readdirSync(options.env.CODEX_HOME), [], "a PATH-mode session resumes without saving a CLI");
+  }
+  for (const agent of [["--agent", "codex"], []]) {
+    const other = run(options, ["prompt", "--project", PROJECT, "goal", ...agent, "--use-path-cli"]);
+    assert.equal(other.status, 0, other.stderr); assert.equal(other.stdout.includes("orchestrate resume"), false, `${agent}`);
+  }
+});
+
+test("invalid resume inputs never deploy or launch", t => {
+  const options = fixture(t);
+  const cases = [["resume"], ["resume", "--project", PROJECT], ["resume", SESSION], ["resume", SESSION, "extra", "--project", PROJECT],
+    ["resume", "-r", "--project", PROJECT], ["resume", " ", "--project", PROJECT], ["resume", "a\nb", "--project", PROJECT],
+    ["resume", SESSION, "--project", PROJECT, "--agent", "codex"], ["resume", SESSION, "--project", PROJECT, "--json"],
+    ["resume", SESSION, "--project", PROJECT, "--model", "misplaced"], ["--supervisor", ID, "resume", SESSION, "--project", PROJECT],
+    ["--connection", "desktop", "resume", SESSION, "--project", PROJECT]];
+  for (const args of cases) {
+    const result = run(options, args); assert.equal(result.status, 1, JSON.stringify(args));
+    assert.equal(existsSync(path.join(options.cwd, "started")), false); assert.equal(existsSync(options.env.CODEX_HOME), false);
+  }
+  const hooksOff = run(options, ["resume", SESSION, "--project", PROJECT, "--use-path-cli", "--", "--settings", '{"disableAllHooks":true}']);
+  assert.equal(hooksOff.status, 1); assert.match(hooksOff.stderr, /hooks/); assert.equal(existsSync(path.join(options.cwd, "started")), false);
+});
+
 test("Claude settings preserve existing hooks/options and quote literal project selectors", async t => {
   const options = fixture(t), settings = { model: "original", hooks: { Stop: [{ hooks: [{ type: "command", command: "existing-hook" }] }], SessionStart: [] } };
   const file = path.join(options.cwd, "settings.json"); writeFileSync(file, JSON.stringify(settings));

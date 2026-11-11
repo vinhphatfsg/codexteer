@@ -6,13 +6,17 @@ export const ORCHESTRATED_SUPERVISION_POLICY = [
   "同じ委任の未完了作業だけを継続し、pause/stop、質問・承認待ちを迂回しません。unknownを自動再送せず、最終差分・検証・成果物・未確認事項を提出します。",
 ].join(" ");
 
-export function validateOrchestrationInput(project, goal, agent) {
+export function validateOrchestrationProject(project) {
   if (typeof project !== "string" || !project.trim()) {
     throw Object.assign(new Error("--project requires a project ID or exact name."), { code: "PROJECT_REQUIRED" });
   }
   if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(project)) {
     throw Object.assign(new Error("The project selector must not contain control characters."), { code: "INVALID_ORCHESTRATION_PROJECT" });
   }
+}
+
+export function validateOrchestrationInput(project, goal, agent) {
+  validateOrchestrationProject(project);
   if (typeof goal !== "string" || !goal.trim()) {
     throw Object.assign(new Error("Orchestration GOAL must contain non-whitespace text."), { code: "INVALID_ORCHESTRATION_GOAL" });
   }
@@ -48,7 +52,8 @@ ${usePathCli ? "PATHとCODEX_HOMEを同じ対象プロファイルで維持し�
 コマンドの接続指定を付け直さず、そのまま使います。<PROJECT>は冒頭の対象projectと同じ指定文字列を全操作で使い、照合後もIDと名前を混用しません。<CHECKOUT>は方針を読むローカルcheckoutです。sharedの作成先は実在のDesktop project ID・完全一致名とrootsを事前に照合します。各placeholderは実際の値をシェル引数として引用し、発注本文をシェルコードとして評価しません。
 ${command} --version
 ${command} project guard --project ${shellArgument(project)} --status --json
-受信した自分のセッションで最初にStop hookの状態を確認します。stop_hook:configuredは、このprojectの直接起動でhookを設定した印と親プロセスの照合です。本文生成だけでは起動経路は分かりません。unverifiedまたは検査不能なら、最初の報告で「監視漏れを止める仕組みがない（有効なStop hookを確認できない）」ことと、${command} help project の設定例を伝えます。手動設定済みならセッションの有効なhook一覧で同じproject・CLI・経路のguardとhook無効化の有無を確認し、設定ファイルの存在だけでは有効としません。configuredでも実行中の無効化・信頼設定・継続上限までは保証しません。
+受信した自分のセッションで最初にStop hookの状態を確認します。stop_hook:configuredは、このprojectの直接起動でhookを設定した印と親プロセスの照合です。本文生成だけでは起動経路は分かりません。unverifiedまたは検査不能なら、最初の報告で「監視漏れを止める仕組みがない（有効なStop hookを確認できない）」ことと、${command} help project の設定例${agent === "claude" ? "、このセッションを終了して下の行で再開する方法" : ""}を伝えます。${agent === "claude" ? "後でunverifiedになった時も同様です。<SESSION-ID>はこのセッションのIDで、知らなければ置き換えずに伝えます。" : ""}手動設定済みならセッションの有効なhook一覧で同じproject・CLI・経路のguardとhook無効化の有無を確認し、設定ファイルの存在だけでは有効としません。configuredでも実行中の無効化・信頼設定・継続上限までは保証しません。${agent === "claude" ? `
+${command} orchestrate resume <SESSION-ID> --project ${shellArgument(project)}${usePathCli ? " --use-path-cli" : ""}` : ""}
 ${command} help work --json
 ${command} projects list --json
 ${canStart ? `${command} work start --project <PROJECT> --root <CHECKOUT> --title <TITLE> - --json < <ORDER-FILE>` : "このhost経路ではwork startは未対応です。新規作成が必要ならlocal Desktopのプロファイルで本文を生成し直し、自動で別経路へ切り替えません。"}
