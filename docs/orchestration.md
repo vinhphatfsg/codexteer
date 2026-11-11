@@ -61,7 +61,7 @@ codexteer project event <EVENT-TOKEN> --json
 
 承認・質問のフラグが立っている担当、ターン実行中の担当、フラグが不明な担当は、停止済みでも読み続けます。フラグの解消とidleを完全な観測で確認した回に`settled`になります。
 
-読めない担当が残り`complete:false`になる通常のsyncは、オーケストレーターが確認した観測ではありません。このsyncでは、waitの基準（最後にwaitが返した観測か完全なsyncで示した観測）から新しいターン終了・質問・バックエンド失敗のない担当だけを`settled`にします。停止時に実行中だったターンがその後に終わった担当や、基準を作ったときに読めなかった担当は、次のwaitが変化として返し、そのwaitの回に`settled`になります。waitの回と完全なsyncの回は、この確認なしに`settled`にします。waitも完全なsyncも一度も公開していないprojectでは、通常のsyncだけで`settled`になります。
+読めない担当が残り`complete:false`になる通常のsyncは、オーケストレーターが確認した観測ではありません。このsyncでは、waitの基準（最後にwaitが返した観測か完全なsyncで示した観測）から新しいターン終了・質問・バックエンド失敗がなく、未解決attentionも残っていない担当だけを`settled`にします。停止時に実行中だったターンがその後に終わった担当や、基準を作ったときに読めなかった担当は、次のwaitが変化として返し、そのwaitの回に`settled`になります。未解決attentionが残る担当は、次にwaitが返した回か完全なsyncの回に`settled`になります。waitの回と完全なsyncの回は、この確認なしに`settled`にします。waitも完全なsyncも一度も公開していないprojectでは、通常のsyncだけで`settled`になります。
 
 `settled`の担当は読まないため、その後にDesktopから直接ターンを再開しても、syncもwaitも検知しません。stopは検収を終えた担当だけに使ってください。停止済みの担当は、新しい監督IDでも`supervise THREAD`・`supervise register`・同じ発注の`work start`で再び監督できず、`MANAGED_SUPERVISOR_STOPPED`で拒否します。続きの作業は新しい題名か発注の`work start`で別の担当として始めます。
 
