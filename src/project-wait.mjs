@@ -123,7 +123,9 @@ export async function withStopHook(data) {
 // written with its whole baseline.
 const entryWriter = (baseline, id) => baseline.works[id] && (baseline.works[id].sync_token ?? baseline.sync_token);
 
-function probeReason({ previous, membershipDigest, states }, observedAttention, failures) {
+const UNREAD_GRACE_MS = 60000;
+
+function probeReason({ previous, membershipDigest, states }, observedAttention, failures, graceMs) {
   const baseline = previous?.wait_baseline;
   if (!baseline) return "initial_sync";
   if (baseline.membership_digest !== membershipDigest) return "membership_changed";
@@ -143,18 +145,20 @@ function probeReason({ previous, membershipDigest, states }, observedAttention, 
     if (!entry || changedSinceBaseline(state, entry, observedAttention.flags[id] ?? entry.signal.attention ?? [])) return "work_changed";
     observedAttention.flags[id] = projectWaitSignal(state.latest).attention; entries[id] = entryWriter(baseline, id);
   }
-  // A failure already returned stays quiet until its member's code changes or
-  // the member is read in full. The recovery holds only until the next wait
-  // publication rewrites the reported failures.
-  const reported = previous.wait_reported_failures ?? {}, recovered = observedAttention.recovered ?? {};
-  for (const id of Object.keys(recovered)) {
-    if (recovered[id].wait_sync_token !== (previous.wait_sync_token ?? null) || recovered[id].error !== reported[id]) delete recovered[id];
+  // A failed read says nothing about its member, and the next full read returns
+  // everything since the cursor. So a failure is returned only once it has
+  // lasted two polls and the grace, and only for a member the last wait return
+  // did not list. A wait publication lists every failing member, so its token
+  // restarts each streak. The count stops at two so a quiet wait stops writing.
+  const reported = previous.wait_reported_failures ?? {}, token = previous.wait_sync_token ?? null, now = Date.now(), unread = {};
+  for (const id of Object.keys(failures)) {
+    const streak = observedAttention.unread?.[id];
+    // A wall clock that moved backwards restarts the grace, never the streak.
+    unread[id] = streak?.wait_sync_token === token ? { since: Math.min(streak.since, now), polls: Math.min(streak.polls + 1, 2), wait_sync_token: token }
+      : { since: now, polls: 1, wait_sync_token: token };
   }
-  for (const [id, state] of states) {
-    if (state.complete && reported[id]) recovered[id] = { error: reported[id], wait_sync_token: previous.wait_sync_token ?? null };
-  }
-  if (Object.keys(recovered).length) observedAttention.recovered = recovered; else delete observedAttention.recovered;
-  return Object.entries(failures).some(([id, error]) => reported[id] !== error || recovered[id]) ? "observation_failed" : null;
+  if (Object.keys(unread).length) observedAttention.unread = unread; else delete observedAttention.unread;
+  return Object.entries(unread).some(([id, streak]) => streak.polls >= 2 && now - streak.since >= graceMs && !Object.hasOwn(reported, id)) ? "observation_failed" : null;
 }
 
 export async function waitProject(projectId, { timeoutMs } = {}, dependencies = {}) {
@@ -185,14 +189,18 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
           || !(observedAttention.baseline === null || typeof observedAttention.baseline === "string")
           || !isMap(observedAttention.flags, flags => Array.isArray(flags) && flags.every(flag => typeof flag === "string"))
           || (observedAttention.entries !== undefined && !isMap(observedAttention.entries, token => typeof token === "string"))
-          || (observedAttention.recovered !== undefined && !isMap(observedAttention.recovered, entry => !!entry && typeof entry === "object"
-            && typeof entry.error === "string" && (entry.wait_sync_token === null || typeof entry.wait_sync_token === "string")))) {
+          || (observedAttention.unread !== undefined && !isMap(observedAttention.unread, streak => !!streak && typeof streak === "object"
+            && Number.isFinite(streak.since) && Number.isSafeInteger(streak.polls) && streak.polls > 0
+            && (streak.wait_sync_token === null || typeof streak.wait_sync_token === "string")))) {
           throw failure("Invalid project wait attention observations. Inspect local state before restarting wait.");
         }
         let savedAttention = JSON.stringify(observedAttention), failures = {};
+        // A recovery that an earlier version recorded is no longer used.
+        delete observedAttention.recovered;
         const deadline = timeoutMs === undefined ? Infinity : performance.now() + timeoutMs;
         const members = await listManagedThreads(projectId, storage);
         const pollMs = dependencies.pollMs ?? (members.some(m => ["cloud", "desktop-cloud"].includes(m.connection)) ? 15000 : 1000);
+        const graceMs = dependencies.unreadGraceMs ?? UNREAD_GRACE_MS;
         // Outside the paged sync envelope, on every return: the members the last read could not complete.
         const unreadable = () => Object.entries(failures).map(([thread_id, error]) => ({ thread_id, error }));
         // A wait that outlives its session would hold the project lock forever and
@@ -203,7 +211,7 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
           let reason;
           const sync = await syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => {
             failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete ? [] : [[id, state.error]]));
-            return !!(reason = probeReason(snapshot, observedAttention, failures));
+            return !!(reason = probeReason(snapshot, observedAttention, failures, graceMs));
           } });
           if (sync) {
             // A newer sync won the head: nothing this wait read was published or reviewed.

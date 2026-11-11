@@ -77,10 +77,9 @@ test("a permanently unreadable member is returned once, then wait stays quiet an
   assert.equal((await f.wait(30)).reason, "timeout", "the same change is not returned twice");
 
   f.works.get(A).error = "RPC_REJECTED";
-  const failed = await f.wait(1000);
-  assert.equal(failed.reason, "observation_failed"); assert.equal(failed.changed, false);
-  assert.deepEqual(failed.unreadable, [{ thread_id: A, error: "RPC_REJECTED" }]);
-  assert.equal((await f.wait(30)).reason, "timeout", "a changed code is returned once");
+  const recoded = await f.wait(30);
+  assert.equal(recoded.reason, "timeout", "a member the last return listed is not returned for another code");
+  assert.deepEqual(recoded.unreadable, [{ thread_id: A, error: "RPC_REJECTED" }]);
 
   f.works.get(A).error = null;
   const recovered = await f.wait(1000);
@@ -92,7 +91,7 @@ test("a permanently unreadable member is returned once, then wait stays quiet an
 test("a member that recovers without a change does not wake wait", async t => {
   const f = await fixture(t); await f.sync();
   f.works.get(A).error = "RPC_REJECTED";
-  assert.equal((await f.wait()).reason, "observation_failed");
+  assert.equal((await f.wait(1000)).reason, "observation_failed");
   f.works.get(A).error = null;
   const recovered = await f.wait(30);
   assert.equal(recovered.reason, "timeout"); assert.deepEqual(recovered.unreadable, []);
@@ -101,7 +100,7 @@ test("a member that recovers without a change does not wake wait", async t => {
 test("a reported failure that returns after a recovery without a change is returned again, once", async t => {
   const f = await fixture(t); await f.sync();
   f.works.get(A).error = "CONNECTION_FAILED";
-  assert.equal((await f.wait()).reason, "observation_failed");
+  assert.equal((await f.wait(1000)).reason, "observation_failed");
   f.works.get(A).error = null;
   assert.equal((await f.wait(30)).reason, "timeout", "the recovery alone is not a change");
   const ordinary = await f.sync();
@@ -115,7 +114,7 @@ test("a reported failure that returns after a recovery without a change is retur
 test("a recovery seen only by an ordinary sync lets the same failure be returned again", async t => {
   const f = await fixture(t); await f.sync();
   f.works.get(A).error = "CONNECTION_FAILED";
-  assert.equal((await f.wait()).reason, "observation_failed");
+  assert.equal((await f.wait(1000)).reason, "observation_failed");
   f.works.get(A).error = null;
   assert.equal((await f.sync()).complete, true);
   assert.equal((await f.head()).wait_reported_failures, undefined, "the complete read clears the reported failure");
@@ -124,15 +123,15 @@ test("a recovery seen only by an ordinary sync lets the same failure be returned
   assert.equal((await f.wait(30)).reason, "timeout", "the recurrence is returned once");
 });
 
-test("a recovery and a recurrence inside one wait return the failure", async t => {
+test("a recovery and a recurrence inside one wait do not return the failure again", async t => {
   const f = await fixture(t); await f.sync();
   f.works.get(A).error = "CONNECTION_FAILED";
-  assert.equal((await f.wait()).reason, "observation_failed");
+  assert.equal((await f.wait(1000)).reason, "observation_failed");
   f.works.get(A).error = null;
   let reads = 0; const read = f.dependencies.read;
   f.dependencies.read = async (id, options) => { if (id === A && ++reads === 3) f.works.get(A).error = "CONNECTION_FAILED"; return read(id, options); };
-  const result = await f.wait(2000);
-  assert.ok(reads >= 3); assert.equal(result.reason, "observation_failed");
+  const result = await f.wait(200);
+  assert.ok(reads >= 3); assert.equal(result.reason, "timeout"); assert.deepEqual(result.unreadable, [{ thread_id: A, error: "CONNECTION_FAILED" }]);
 });
 
 test("a partial ordinary sync does not consume a change wait has not returned", async t => {
@@ -170,7 +169,7 @@ test("a renewed approval on a member that was unreadable at the last return stil
   f.works.get(A).attention = [];
   assert.equal((await f.wait(30)).reason, "timeout", "the clear is observed, not returned");
   f.works.get(A).error = "RPC_REJECTED";
-  assert.equal((await f.wait()).reason, "observation_failed");
+  assert.equal((await f.wait(1000)).reason, "observation_failed");
   Object.assign(f.works.get(A), { error: null, attention: approval });
   const renewed = await f.wait(1000);
   assert.equal(renewed.reason, "work_changed"); assert.deepEqual(renewed.unreadable, []);
@@ -199,7 +198,7 @@ for (const activeUnreadable of [false, true]) test(`settled work is never listed
   await controlSupervisor(B, "stop", f.storage); f.works.get(B).error = "PAYLOAD_TOO_LARGE";
   if (activeUnreadable) f.works.get(D).error = "RPC_REJECTED";
   const remaining = activeUnreadable ? [{ thread_id: D, error: "RPC_REJECTED" }] : [];
-  const stopped = await f.wait();
+  const stopped = await f.wait(1000);
   assert.equal(stopped.reason, "observation_failed", "stopped but unsettled work is still read");
   assert.deepEqual(stopped.unreadable, [{ thread_id: B, error: "PAYLOAD_TOO_LARGE" }, ...remaining]);
   assert.equal((await f.sync({ excludeUnreadable: B, reason: "history exceeds the receive limit" })).complete, !activeUnreadable);
@@ -222,7 +221,7 @@ test("a 0.23.0 head and wait record behave as before on the first wait and keep 
   // As 0.23.0 saves it after observing the approval clear.
   await writeRecord("project-wait-attention", key("legacy"), { schema: 1, project_id: "legacy", baseline: head.wait_baseline.sync_token, flags: { [A]: [] } }, f.storage);
   f.works.get(A).error = "RPC_REJECTED";
-  const failed = await f.wait();
+  const failed = await f.wait(1000);
   assert.equal(failed.reason, "observation_failed"); assert.equal(failed.changed, false);
   assert.deepEqual(failed.unreadable, [{ thread_id: A, error: "RPC_REJECTED" }]);
   assert.equal((await f.wait(30)).reason, "timeout");
@@ -234,7 +233,7 @@ test("a member that fails only the wait probe is returned once, however many ord
   const f = await fixture(t, { count: 3 }); await f.sync();
   const unknown = { [B]: "PROJECT_WAIT_ATTENTION_UNKNOWN" };
   f.works.get(B).attention = undefined;
-  const failed = await f.wait();
+  const failed = await f.wait(1000);
   assert.equal(failed.reason, "observation_failed"); assert.deepEqual(failed.unreadable, [{ thread_id: B, error: unknown[B] }]);
   for (const round of [1, 2]) {
     assert.equal((await f.sync()).complete, true, "an ordinary sync reads the member in full");
@@ -246,7 +245,7 @@ test("a member that fails only the wait probe is returned once, however many ord
   f.works.get(A).error = "RPC_REJECTED";
   assert.equal((await f.sync()).complete, false);
   assert.deepEqual((await f.head()).wait_reported_failures, unknown, "a partial sync reports nothing to wait");
-  assert.equal((await f.wait()).reason, "observation_failed", "the failure the sync saw is still new to wait");
+  assert.equal((await f.wait(1000)).reason, "observation_failed", "the failure the sync saw is still new to wait");
   assert.deepEqual((await f.head()).wait_reported_failures, { [A]: "RPC_REJECTED", ...unknown });
   await removeRecord("project-index", createHash("sha256").update(B).digest("hex").slice(0, 40), f.storage);
   await f.sync();
@@ -274,7 +273,7 @@ test("a member that fails every poll is returned once, after two failed polls an
   const started = Date.now(), failed = await f.wait(10000);
   assert.equal(failed.reason, "observation_failed"); assert.equal(failed.changed, false); assert.equal(failed.timed_out, false); assert.equal(failed.sync.complete, false);
   assert.deepEqual(failed.unreadable, [{ thread_id: A, error: "TIMEOUT" }]);
-  assert.ok(Date.now() - started >= 60, "not before the grace"); assert.ok(f.failed.length > 2, "after more than two failed polls");
+  assert.ok(Date.now() - started >= 60, "not before the grace"); assert.ok(f.failed.length >= 2, "after at least two failed polls");
   const saved = await f.saved(), quiet = await f.wait(150);
   assert.equal(quiet.reason, "timeout", "the member is returned once"); assert.deepEqual(quiet.unreadable, [{ thread_id: A, error: "TIMEOUT" }]);
   assert.deepEqual(await f.saved(), saved, "the quiet wait saves nothing");

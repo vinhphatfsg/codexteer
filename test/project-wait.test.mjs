@@ -26,7 +26,7 @@ async function fixture(t, mode = "aggregate") {
   const storage = { home }, connection = cloud ? "desktop-cloud" : "shared";
   await registerManagedThread(id, { projectId: "P", connection, ...(cloud ? { environmentConfigId: "config" } : {}) }, storage);
   await registerSupervisor(id, SESSION, { ...storage, connection });
-  const dependencies = { storage, read, pollMs: 5, processIdentity: async pid => pid === 123 ? "owner-start" : "same-start",
+  const dependencies = { storage, read, pollMs: 5, unreadGraceMs: 0, processIdentity: async pid => pid === 123 ? "owner-start" : "same-start",
     orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) };
   await syncProject("P", {}, dependencies);
   return { home, id, thread, server, storage, dependencies };
@@ -79,7 +79,7 @@ test("membership changes wake wait; empty projects establish a baseline then tim
 
 test("failed observations are explicit, preserve the complete baseline and do not hide a later successful turn", async t => {
   const f = await fixture(t);
-  const failed = await waitProject("P", { timeoutMs: 0 }, { ...f.dependencies, read: async () => { throw Object.assign(new Error(), { code: "CLOUD_RATE_LIMITED" }); } });
+  const failed = await waitProject("P", { timeoutMs: 1000 }, { ...f.dependencies, read: async () => { throw Object.assign(new Error(), { code: "CLOUD_RATE_LIMITED" }); } });
   assert.equal(failed.changed, false); assert.equal(failed.timed_out, false); assert.equal(failed.reason, "observation_failed");
   assert.equal(failed.sync.complete, false);
   assert.deepEqual(failed.sync.works.map(work => work.error), ["CLOUD_RATE_LIMITED"]);
@@ -118,7 +118,7 @@ test("unknown attention stays distinct and fails observation without advancing w
   assert.equal(projectWaitSignal({}).attention, null);
   assert.deepEqual(projectWaitSignal({ attention: [] }).attention, []);
   f.thread.status = { type: "active", activeFlags: null };
-  const unknown = await waitProject("P", { timeoutMs: 0 }, f.dependencies);
+  const unknown = await waitProject("P", { timeoutMs: 1000 }, f.dependencies);
   assert.equal(unknown.changed, false); assert.equal(unknown.timed_out, false); assert.equal(unknown.reason, "observation_failed");
   assert.equal(unknown.sync.complete, false); assert.equal(unknown.sync.works[0].error, "PROJECT_WAIT_ATTENTION_UNKNOWN");
   assert.deepEqual(await getManagedThread(f.id, f.storage), before);
