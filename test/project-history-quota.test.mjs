@@ -116,7 +116,7 @@ test("a publication is published in full or not at all when another sync moves a
       assert.deepEqual({ ...after, member: null }, { ...before, member: null }, "a refused publication wrote no record and no head");
       assert.equal(after.member.sync_revision, before.member.sync_revision + 1, "only the other sync moved the cursor");
     } else {
-      fits++; assert.equal(page.works[0].error, "SYNC_CURSOR_CONFLICT"); assert.equal(page.works[0].events.length, questions.length + 1);
+      fits++; assert.equal(page.works[0].error, "SYNC_CURSOR_CONFLICT"); assert.equal(page.omitted_events + page.works[0].events.length, questions.length + 1);
       await published(f, page, free, before);
     }
   }

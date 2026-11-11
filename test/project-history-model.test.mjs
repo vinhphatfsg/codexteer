@@ -57,7 +57,8 @@ test("history publication/pruning model preserves pins, capacity and acyclic loc
 test("publication and cleanup source use the modeled history boundary", async () => {
   const sync = await readFile("src/project-sync.mjs", "utf8"), start = await readFile("src/work-start.mjs", "utf8"), history = await readFile("src/project-history.mjs", "utf8");
   assert.match(sync, /withStoreLock\(`project-sync-[\s\S]*?withHistoryReservation/);
-  assert.equal((sync.match(/await historyWrite\("project-sync-/g) ?? []).length, 5);
+  assert.equal((sync.match(/await historyWrite\(\.\.\./g) ?? []).length, 4);
+  assert.equal((sync.match(/withHistoryReservation\(\{ records \}/g) ?? []).length, 2);
   assert.doesNotMatch(sync, /writeRecord\("project-sync-(?:events|results)"/);
   assert.doesNotMatch(start, /\bwriteRecord\("work-starts"/);
   assert.match(history, /pruneProjectHistory[\s\S]*?withStoreLock\("project-history"/);

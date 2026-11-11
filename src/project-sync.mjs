@@ -227,6 +227,11 @@ const settledRow = work => ({ title: work.title, execution: work.execution, atte
   complete: work.complete, history_gap: work.history_gap });
 const settledMarker = ({ row, ...marker }) => marker;
 
+// A row is reserved before its cursor's outcome is known, so the error code a
+// refused cursor records has a fixed largest size.
+const CURSOR_ERROR_BYTES = 64;
+const cursorError = error => typeof error.code === "string" && /^[A-Z0-9_]+$/.test(error.code) && error.code.length <= CURSOR_ERROR_BYTES ? error.code : "OBSERVATION_FAILED";
+
 // Stop is irreversible, so a stopped member read completely and found quiet
 // needs no further reads. Nobody answers a stopped member, so a question or
 // failure it ended on never resolves: the row that settles it shows that
@@ -378,16 +383,43 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   if (dependencies.waitProbe && !waitReport) return null;
   head.wait_sync_token = previous?.wait_sync_token ?? null;
   for (const work of observed) work.detail_token = randomUUID();
+  const eventRecord = record => ["project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }];
+  const detailRecord = (work, row = work) => eventRecord({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...row } } });
+  const resultRecord = (rows, fields) => ["project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, ...fields, works: rows, created_at: createdAt }];
+  // The row a refused cursor leaves: incomplete, with the attention an
+  // incomplete read cannot resolve.
+  const refusedRow = (work, state, code) => {
+    const prior = previous?.unresolved_attention?.[work.thread_id];
+    const retained = reduceAttention({ ...state, complete: false }, prior, state.eventSummaries);
+    return { retained, row: { ...work, complete: false, cursor: null, error: code, observation: "incomplete",
+      ...(retained ? { attention: retained.attention, reason: retained.reason, group: retained.attention === "unknown" ? "未確認" : "対応が必要",
+        resolution_unconfirmed: true, attention_repeated: !!prior,
+        events: [...new Map([...retained.events, ...work.events].map(e => [e.token, e])).values()] } : {}) } };
+  };
+  // The result and detail records are final only after the cursors, which follow
+  // the first write. Each fully read member's row is reserved as the larger of
+  // its two outcomes, advanced (settled when it can be) or refused, and
+  // `complete` as false, so the reservation is never below what is written.
+  const reserved = new Map(observed.map(work => {
+    const state = states.get(work.thread_id);
+    const rows = state.complete ? [{ ...work, sync_revision: (state.member.sync_revision ?? 0) + 1 }, refusedRow(work, state, "X".repeat(CURSOR_ERROR_BYTES)).row] : [work];
+    return [work, rows.map(row => {
+      const entry = settlement(plan.get(work.thread_id), row, state, createdAt);
+      return entry ? { ...row, settled: settledMarker(entry) } : row;
+    }).reduce((a, b) => bytes(a) >= bytes(b) ? a : b)];
+  }));
+  const records = [...eventRecords.map(eventRecord), ...observed.map(work => detailRecord(work, reserved.get(work))),
+    resultRecord(works.map(work => reserved.get(work) ?? work), { wait_sync_token: dependencies.waitProbe ? syncToken : head.wait_sync_token, complete: false })];
   // The existing project head lock protects only publication, never network I/O.
   // A stale reader must not replace a newer attention head, even after a CAS miss.
   let conflict = null;
   try {
-    await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => withHistoryReservation({ eventRecords, works, head, previous }, async (historyWrite) => {
+    await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => withHistoryReservation({ records }, async (historyWrite) => {
       const current = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage);
       if (hash(current ?? null) !== hash(previous ?? null)) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");
       // Persist attention evidence before advancing any cursor. A crash during
       // publication leaves an incomplete head that the next sync can recover.
-      for (const record of eventRecords) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
+      for (const record of eventRecords) await historyWrite(...eventRecord(record), storage);
       await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), { ...head, complete: false, complete_work_ids: [], publication_pending: true }, storage);
       // CAS uses the snapshot revision even if an empty read returns the same cursor.
       for (const state of states.values()) if (state.complete) {
@@ -396,15 +428,9 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
           const updated = await updateManagedThreadCursor(state.member.thread_id, state.member.sync_cursor, state.cursor, storage, state.member.sync_revision ?? 0);
           work.sync_revision = updated.sync_revision;
         } catch (error) {
-          work.complete = false; work.cursor = null; work.error = error.code; work.observation = "incomplete";
-          state.complete = false;
-          const retained = reduceAttention(state, previous?.unresolved_attention?.[work.thread_id], state.eventSummaries);
-          if (retained) {
-            unresolved[work.thread_id] = retained; work.attention = retained.attention; work.reason = retained.reason;
-            work.group = retained.attention === "unknown" ? "未確認" : "対応が必要"; work.resolution_unconfirmed = true;
-            work.attention_repeated = !!previous?.unresolved_attention?.[work.thread_id];
-            work.events = [...new Map([...retained.events, ...work.events].map(e => [e.token, e])).values()];
-          }
+          const { retained, row } = refusedRow(work, state, cursorError(error));
+          Object.assign(work, row); state.complete = false;
+          if (retained) unresolved[work.thread_id] = retained;
         }
       }
       // Settle only on what this publication commits. The pending head above
@@ -449,22 +475,17 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       failures = Object.fromEntries(Object.entries(unsettled(failures)).filter(([id]) => plan.has(id)));
       if (Object.keys(failures).length) head.wait_reported_failures = failures; else delete head.wait_reported_failures;
       // Save detail records before publishing a head that work tell may consume.
-      const detailStart = eventRecords.length;
-      for (const work of observed) {
-        eventRecords.push({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...work } } });
-      }
-      await historyWrite("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, storage);
-      for (const record of eventRecords.slice(detailStart)) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
+      await historyWrite(...resultRecord(works, { wait_sync_token: head.wait_sync_token, complete: head.complete }), storage);
+      for (const work of observed) await historyWrite(...detailRecord(work), storage);
       await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), head, storage);
     }, storage), storage);
   } catch (error) {
     if (!["SYNC_CURSOR_CONFLICT", "PROJECT_SYNC_CONFLICT", "RECORD_BUSY"].includes(error.code)) throw error;
     conflict = error.code; head.complete = false;
     for (const work of observed) { work.complete = false; work.cursor = null; work.error ??= error.code === "SYNC_CURSOR_CONFLICT" ? "SYNC_CURSOR_CONFLICT" : "PROJECT_SYNC_CONFLICT"; work.observation = "incomplete"; }
-    for (const work of observed) eventRecords.push({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...work } } });
-    await withHistoryReservation({ eventRecords, works, head, previous }, async (historyWrite) => {
-      await historyWrite("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, complete: false, works, created_at: createdAt }, storage);
-      for (const record of eventRecords) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
+    const records = [resultRecord(works, { complete: false }), ...eventRecords.map(eventRecord), ...observed.map(work => detailRecord(work))];
+    await withHistoryReservation({ records }, async (historyWrite) => {
+      for (const record of records) await historyWrite(...record, storage);
     }, storage);
   }
   const page = pageResult({ project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, syncToken, byteBudget);

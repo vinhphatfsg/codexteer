@@ -7,6 +7,8 @@ export const HISTORY_LIMIT_BYTES = 256 * 1024 * 1024;
 export const HISTORY_BATCH_BYTES = 16 * 1024 * 1024;
 const buckets = ["project-sync-events", "project-sync-results", "work-starts"];
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
+// The file writeRecord stores: host fields and the final newline included.
+const stored = record => bytes({ ...record, ...hostFields() }) + 1;
 const failure = (code, message, details = {}) => Object.assign(new Error(message), { code, ...details });
 const key = project => createHash("sha256").update(project).digest("hex").slice(0, 40);
 
@@ -24,17 +26,16 @@ function capacity(used, additional, storage) {
 }
 // Lock order: work-start OR project-publication -> history -> membership.
 // prune acquires history only. No network/supervisor operations under history.
-// Reservations include the pending head, result, detail copies and CAS-failure
-// evidence; eight copies plus 1 MiB conservatively bound publication overhead.
-export function withHistoryReservation(payload, action, storage = {}) {
+// `records` lists every [bucket, id, record] the action will write, each at least
+// as large as what it writes: once the first write succeeds, the rest fit.
+export function withHistoryReservation({ records = [] }, action, storage = {}) {
   return withStoreLock("project-history", async () => {
     const used = await usage(storage);
-    capacity(used.bytes, bytes(payload) * 8 + 1024 * 1024, storage);
     let total = used.bytes;
     const sizes = new Map(used.stats.flatMap((rows, i) => rows.map(row => [`${buckets[i]}:${row.id}`, row.bytes])));
+    capacity(total, records.reduce((sum, [bucket, id, record]) => sum + stored(record) - (sizes.get(`${bucket}:${id}`) ?? 0), 0), storage);
     const write = async (bucket, id, record, options = storage) => {
-      const identifier = `${bucket}:${id}`, old = sizes.get(identifier) ?? 0;
-      const size = bytes({ ...record, ...hostFields() }) + 1;
+      const identifier = `${bucket}:${id}`, old = sizes.get(identifier) ?? 0, size = stored(record);
       capacity(total - old, size, storage);
       await writeRecord(bucket, id, record, options); total += size - old; sizes.set(identifier, size);
     };
@@ -46,7 +47,7 @@ export function writeHistoryRecord(bucket, id, record, storage = {}) {
     const used = await usage(storage), index = buckets.indexOf(bucket);
     if (index < 0) throw failure("PROJECT_HISTORY_INVALID", "Unbudgeted history bucket.");
     const old = used.stats[index].find(row => row.id === id)?.bytes ?? 0;
-    capacity(used.bytes - old, bytes({ ...record, ...hostFields() }) + 1, storage);
+    capacity(used.bytes - old, stored(record), storage);
     return writeRecord(bucket, id, record, storage);
   }, storage);
 }
