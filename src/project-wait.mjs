@@ -147,9 +147,10 @@ function probeReason({ previous, membershipDigest, states }, observedAttention, 
   }
   // A failed read says nothing about its member, and the next full read returns
   // everything since the cursor. So a failure is returned only once it has
-  // lasted two polls and the grace, and only for a member the last wait return
-  // did not list. A wait publication lists every failing member, so its token
-  // restarts each streak. The count stops at two so a quiet wait stops writing.
+  // lasted two polls and the grace, and only for a member the last wait
+  // publication did not list. That publication lists every failing member, so
+  // its token restarts each streak. The count stops at two so a quiet wait
+  // stops writing.
   const reported = previous.wait_reported_failures ?? {}, token = previous.wait_sync_token ?? null, now = Date.now(), unread = {};
   for (const id of Object.keys(failures)) {
     const streak = observedAttention.unread?.[id];
