@@ -82,6 +82,16 @@ test("a stopped work with a running turn is not settled until it is idle", async
   assert.equal(row(await f.sync(), A).settled.basis, "observed");
 });
 
+test("a stopped work whose flags are unknown is not settled until they are known", async t => {
+  const f = await fixture(t); f.works.get(A).attention = null; await f.stop(A);
+  for (const attempt of [1, 2]) {
+    const result = await f.sync();
+    assert.ok(f.calls.includes(A), `sync ${attempt} reads the stopped work`); assert.equal(row(result, A).settled, undefined);
+  }
+  f.works.get(A).attention = [];
+  assert.equal(row(await f.sync(), A).settled.basis, "observed");
+});
+
 for (const [status, activeTurns] of [["idle", 1], ["notLoaded", 1], ["idle", null]]) {
   test(`a stopped work reported ${status} with ${activeTurns === null ? "unprovable" : "running"} turns is not settled`, async t => {
     const f = await fixture(t); Object.assign(f.works.get(A), { status, turnStatus: activeTurns ? "inProgress" : "completed", activeTurns }); await f.stop(A);
