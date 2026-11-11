@@ -125,7 +125,30 @@ const entryWriter = (baseline, id) => baseline.works[id] && (baseline.works[id].
 
 const UNREAD_GRACE_MS = 60000;
 
-function probeReason({ previous, membershipDigest, states }, observedAttention, failures, graceMs) {
+// A failed read says nothing about its member, and the next full read returns
+// everything since the cursor. So a failure is reported only once it has lasted
+// two polls and the grace. A wait publication keeps as reported the members it
+// reported before that still fail, and adds those whose streak has lasted. A
+// member that merely fails in a publication is listed there, not reported: the
+// new token restarts its streak. A reported member keeps no streak, so a quiet
+// wait stops writing and a member shown readable since starts from one poll.
+function unreadStreaks(previous, observedAttention, failures, graceMs) {
+  const reported = previous?.wait_reported_failures ?? {}, token = previous?.wait_sync_token ?? null, now = Date.now(), unread = {};
+  const report = new Set(Object.keys(failures).filter(id => Object.hasOwn(reported, id)));
+  let lasting = false;
+  for (const id of Object.keys(failures)) {
+    if (report.has(id)) continue;
+    const streak = observedAttention.unread?.[id];
+    // A wall clock that moved backwards restarts the grace, never the streak.
+    unread[id] = streak?.wait_sync_token === token ? { since: Math.min(streak.since, now), polls: Math.min(streak.polls + 1, 2), wait_sync_token: token }
+      : { since: now, polls: 1, wait_sync_token: token };
+    if (unread[id].polls >= 2 && now - unread[id].since >= graceMs) { report.add(id); lasting = true; }
+  }
+  if (Object.keys(unread).length) observedAttention.unread = unread; else delete observedAttention.unread;
+  return { lasting, report };
+}
+
+function probeReason({ previous, membershipDigest, states }, observedAttention, lasting) {
   const baseline = previous?.wait_baseline;
   if (!baseline) return "initial_sync";
   if (baseline.membership_digest !== membershipDigest) return "membership_changed";
@@ -145,21 +168,7 @@ function probeReason({ previous, membershipDigest, states }, observedAttention, 
     if (!entry || changedSinceBaseline(state, entry, observedAttention.flags[id] ?? entry.signal.attention ?? [])) return "work_changed";
     observedAttention.flags[id] = projectWaitSignal(state.latest).attention; entries[id] = entryWriter(baseline, id);
   }
-  // A failed read says nothing about its member, and the next full read returns
-  // everything since the cursor. So a failure is returned only once it has
-  // lasted two polls and the grace, and only for a member the last wait
-  // publication did not list. That publication lists every failing member, so
-  // its token restarts each streak. The count stops at two so a quiet wait
-  // stops writing.
-  const reported = previous.wait_reported_failures ?? {}, token = previous.wait_sync_token ?? null, now = Date.now(), unread = {};
-  for (const id of Object.keys(failures)) {
-    const streak = observedAttention.unread?.[id];
-    // A wall clock that moved backwards restarts the grace, never the streak.
-    unread[id] = streak?.wait_sync_token === token ? { since: Math.min(streak.since, now), polls: Math.min(streak.polls + 1, 2), wait_sync_token: token }
-      : { since: now, polls: 1, wait_sync_token: token };
-  }
-  if (Object.keys(unread).length) observedAttention.unread = unread; else delete observedAttention.unread;
-  return Object.entries(unread).some(([id, streak]) => streak.polls >= 2 && now - streak.since >= graceMs && !Object.hasOwn(reported, id)) ? "observation_failed" : null;
+  return lasting ? "observation_failed" : null;
 }
 
 export async function waitProject(projectId, { timeoutMs } = {}, dependencies = {}) {
@@ -212,7 +221,8 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
           let reason;
           const sync = await syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => {
             failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete ? [] : [[id, state.error]]));
-            return !!(reason = probeReason(snapshot, observedAttention, failures, graceMs));
+            const { lasting, report } = unreadStreaks(snapshot.previous, observedAttention, failures, graceMs);
+            return (reason = probeReason(snapshot, observedAttention, lasting)) ? report : null;
           } });
           if (sync) {
             // A newer sync won the head: nothing this wait read was published or reviewed.

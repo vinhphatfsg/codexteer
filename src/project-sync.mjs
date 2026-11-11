@@ -369,8 +369,10 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     ...(previous?.wait_baseline ? { wait_baseline: previous.wait_baseline } : {}),
     ...(previous?.wait_reported_failures ? { wait_reported_failures: previous.wait_reported_failures } : {}) };
   // A probe that sees only ordinary progress must not publish, consume events,
-  // or replace the orchestrator's reviewed baseline.
-  if (dependencies.waitProbe && !dependencies.waitProbe({ previous, members, membershipDigest, states })) return null;
+  // or replace the orchestrator's reviewed baseline. One that returns names
+  // the failing members its publication reports.
+  const waitReport = dependencies.waitProbe?.({ previous, members, membershipDigest, states });
+  if (dependencies.waitProbe && !waitReport) return null;
   head.wait_sync_token = previous?.wait_sync_token ?? null;
   for (const work of observed) work.detail_token = randomUUID();
   // The existing project head lock protects only publication, never network I/O.
@@ -425,7 +427,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
         for (const [id, state] of states) {
           if (state.complete) entries[id] = { cursor: state.cursor, signal: projectWaitSignal(state.latest), sync_token: syncToken };
           else {
-            if (dependencies.waitProbe) failures[id] = works.find(work => work.thread_id === id).error;
+            if (waitReport?.has(id)) failures[id] = works.find(work => work.thread_id === id).error;
             if (baseline?.works?.[id]) entries[id] = { sync_token: baseline.sync_token, ...baseline.works[id] };
           }
         }
