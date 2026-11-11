@@ -342,25 +342,28 @@ for (const [what, evidence, attention, end] of ends) {
   });
 }
 
-for (const review of ["wait return", "complete sync"]) {
-  test(`a question that arrives without a turn end is not settled by a partial sync and settles at the next ${review}`, async t => {
+// Evidence that reaches a stopped work while its latest turn id and status stay as wait last saw them.
+const arrivals = [["a question", "question", "human", message("question", { questions: ["Which?"] })],
+  ["a failure", "turn-1", "failure", { id: "turn-1", type: "turn", status: "failed" }]];
+for (const [what, evidence, attention, event] of arrivals) for (const review of ["wait return", "complete sync"]) {
+  test(`${what} that arrives without a change of the latest turn is not settled by a partial sync and settles at the next ${review}`, async t => {
     const f = await fixture(t); f.works.get(B).error = unreadable;
     assert.equal((await wait(f)).reason, "initial_sync");
-    await f.stop(A); f.works.get(A).events.push(message("question", { questions: ["Which?"] }));
+    await f.stop(A); f.works.get(A).events.push(event);
     for (const attempt of [1, 2]) {
       const partial = await f.sync();
-      assert.equal(partial.complete, false); assert.ok(cites(row(partial, A), "question"));
-      assert.equal(row(partial, A).settled, undefined, `partial sync ${attempt} leaves the question to wait`);
+      assert.equal(partial.complete, false); assert.equal(row(partial, A).attention, attention); assert.ok(cites(row(partial, A), evidence));
+      assert.equal(row(partial, A).settled, undefined, `partial sync ${attempt} leaves it to the next review`);
     }
     if (review === "wait return") {
       const returned = await wait(f, 1000);
-      assert.equal(returned.reason, "work_changed"); assert.ok(cites(row(returned.sync, A), "question"), "wait returns the question");
-      assert.equal(row(returned.sync, A).settled.basis, "observed");
+      assert.equal(returned.reason, "work_changed"); assert.ok(cites(row(returned.sync, A), evidence), "wait returns it");
+      assert.equal(row(returned.sync, A).attention, attention); assert.equal(row(returned.sync, A).settled.basis, "observed");
     } else {
       f.works.get(B).error = null;
       const complete = await f.sync();
-      assert.equal(complete.complete, true); assert.ok(cites(row(complete, A), "question"), "the complete sync shows the question");
-      assert.equal(row(complete, A).attention, "human"); assert.equal(row(complete, A).settled.basis, "observed");
+      assert.equal(complete.complete, true); assert.ok(cites(row(complete, A), evidence), "the complete sync shows it");
+      assert.equal(row(complete, A).attention, attention); assert.equal(row(complete, A).settled.basis, "observed");
     }
     assert.equal((await wait(f, 30)).reason, "timeout"); assert.equal(f.calls.includes(A), false);
   });
