@@ -150,6 +150,14 @@ test("the exclusion flag does not settle throttled, endless or readable work", a
   const throttled = await f.sync({ excludeUnreadable: A, reason: "stuck" });
   assert.deepEqual(throttled.exclude_unreadable, { thread_id: A, outcome: "not_applied", error: "CLOUD_RATE_LIMITED" });
   assert.equal(throttled.complete, false); assert.equal(row(throttled, A).settled, undefined); assert.equal((await f.head()).settled, undefined);
+  f.works.get(A).error = { code: "CONNECTION_FAILED", cause_code: "CLOUD_RATE_LIMITED", retry_after_ms: 9000 };
+  const mapped = await f.sync({ excludeUnreadable: A, reason: "stuck" });
+  assert.deepEqual(mapped.exclude_unreadable, { thread_id: A, outcome: "not_applied", error: "CONNECTION_FAILED" }, "Web Cloud throttling keeps its cause");
+  assert.equal(row(mapped, A).retry_after_ms, 9000); assert.equal((await f.head()).settled, undefined);
+  f.works.get(A).error = { code: "OBSERVATION_CHANGED" };
+  const racing = await f.sync({ excludeUnreadable: A, reason: "stuck" });
+  assert.deepEqual(racing.exclude_unreadable, { thread_id: A, outcome: "not_applied", error: "OBSERVATION_CHANGED" }, "a turn starting during the read is not unreadable");
+  assert.equal((await f.head()).settled, undefined);
   f.works.get(A).error = null;
   const endless = await f.sync({ excludeUnreadable: A, reason: "stuck", maxPagesPerWork: 2 }, { read: async (id, options) => id !== A ? f.read(id, options)
     : { ...(await f.read(id, options)), cursor: `more-${options.since}`, events: [message(`more-${options.since}`)], has_more: true } });
