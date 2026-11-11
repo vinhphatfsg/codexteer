@@ -264,9 +264,11 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       state.pages++; state.cursor = page.cursor; state.events.push(...(page.events ?? [])); state.latest = page; state.complete = !page.has_more; return page.has_more;
     } catch (error) {
       state.complete = false; state.error = error.code ?? "OBSERVATION_FAILED"; state.history_gap = gapCodes.has(error.code);
-      if (error.code === "CLOUD_RATE_LIMITED" || error.http_status === 429) state.retry_after_ms = error.retry_after_ms ?? 15000;
-      // A backend that asks for a retry has not shown the work to be unreadable.
-      state.unreadable = state.retry_after_ms === null;
+      // Web Cloud maps its throttling to CONNECTION_FAILED and keeps the cause.
+      if ([error.code, error.cause_code].includes("CLOUD_RATE_LIMITED") || error.http_status === 429) state.retry_after_ms = error.retry_after_ms ?? 15000;
+      // A backend that asks for a retry, or a turn that started during the read,
+      // has not shown the work to be unreadable.
+      state.unreadable = state.retry_after_ms === null && error.code !== "OBSERVATION_CHANGED";
       return false;
     }
   };
