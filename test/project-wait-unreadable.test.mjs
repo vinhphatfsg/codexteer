@@ -567,3 +567,16 @@ test("an approval that cleared during a poll whose publication lost, and was rai
   assert.equal(renewed.reason, "work_changed", "the clear the lost poll saw makes the approval new"); assert.deepEqual(renewed.unreadable, []);
   assert.equal((await f.wait(30)).reason, "timeout", "the approval is returned once");
 });
+
+test("a wait whose owner exited lists the members its last poll could not read and says which are reported", async t => {
+  const f = await fixture(t, { count: 3 }); await f.sync();
+  f.works.get(A).error = "TIMEOUT";
+  assert.equal((await f.wait(1000)).reason, "observation_failed");
+  f.works.get(B).error = "TIMEOUT";
+  const from = f.polls(), identity = f.dependencies.processIdentity;
+  // The owner is gone when the wait checks it before its second poll.
+  const orphan = await f.checked(await waitProject("P", { timeoutMs: 10000 }, { ...f.dependencies,
+    processIdentity: async pid => { const start = await identity(pid); return pid === 123 && f.polls() - from > 1 ? "another-start" : start; } }));
+  assert.equal(orphan.reason, "owner_exited"); assert.equal(orphan.changed, false); assert.equal(orphan.sync, null);
+  assert.deepEqual(orphan.unreadable, [...reported(A), ...unread(B)]);
+});
