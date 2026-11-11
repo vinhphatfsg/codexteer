@@ -22,11 +22,12 @@ async function fixture(t, { count = 2, project = "P", grace = 0, hold = 0 } = {}
   const home = await mkdtemp(tempPrefix("ct-wait-unreadable-")); t.after(() => rm(home, { recursive: true, force: true }));
   const storage = { home }, works = new Map(), calls = [], failed = [];
   let polls = 0;
-  for (let n = 1; n <= count; n++) {
+  const join = async n => {
     await registerManagedThread(uuid(n), { projectId: project, connection: "shared", syncCursor: "c0" }, storage);
     await registerSupervisor(uuid(n), session(n), storage);
     works.set(uuid(n), { status: "idle", attention: [], turn: `turn-${n}`, turnStatus: "completed", events: [], error: null });
-  }
+  };
+  for (let n = 1; n <= count; n++) await join(n);
   const read = async (id, options) => {
     calls.push(id); const work = works.get(id);
     if (work.error) { failed.push({ poll: polls, thread_id: id, error: work.error }); await delay(hold); throw Object.assign(new Error("unreadable"), { code: work.error }); }
@@ -39,24 +40,30 @@ async function fixture(t, { count = 2, project = "P", grace = 0, hold = 0 } = {}
   const finishTurn = id => { const work = works.get(id), turn = `next-${work.events.length + 1}`; Object.assign(work, { turn, status: "idle", turnStatus: "completed" }); work.events.push({ id: turn, type: "turn", status: "completed" }); };
   const history = async () => (await Promise.all(["project-sync-events", "project-sync-results"].map(bucket => recordStats(bucket, storage)))).flat().reduce((sum, record) => sum + record.bytes, 0);
   const head = () => readRecord("project-sync-heads", key(project), storage);
-  return Object.assign(f, { storage, works, calls, failed, polls: () => polls, finishTurn, dependencies, sync: (options = {}) => syncProject(project, options, dependencies),
+  return Object.assign(f, { storage, works, calls, failed, polls: () => polls, finishTurn, join, dependencies, sync: (options = {}) => syncProject(project, options, dependencies),
     wait: (timeoutMs = 0) => { calls.length = 0; return waitProject(project, { timeoutMs }, dependencies); },
     // Waits until something other than a timeout comes back; a restarted wait makes one poll per call.
     until: async restarted => { for (;;) { const result = await f.wait(restarted ? 0 : 10000); if (result.reason !== "timeout") return result; } },
     head, history, saved: async () => ({ history: await history(), head: await head() }) });
 }
 
-// Freezes the wall clock; the returned function moves it to an offset from the start.
+// Freezes Date.now; the returned function moves it to an offset from the start.
 function clock(t) {
-  const start = Date.now(); t.mock.timers.enable({ apis: ["Date"], now: start });
-  return ms => t.mock.timers.setTime(start + ms);
+  const real = Date.now, start = real(); let now = start;
+  Date.now = () => now; t.after(() => { Date.now = real; });
+  return ms => { now = start + ms; };
 }
+
+const unread = (...ids) => ids.map(thread_id => ({ thread_id, error: "TIMEOUT" }));
 
 test("a permanently unreadable member is returned once, then wait stays quiet and saves nothing until something changes", async t => {
   const f = await fixture(t); f.works.get(A).error = "PAYLOAD_TOO_LARGE";
   const first = await f.wait();
   assert.equal(first.reason, "initial_sync"); assert.equal(first.changed, true); assert.equal(first.sync.complete, false);
   assert.deepEqual(first.unreadable, [{ thread_id: A, error: "PAYLOAD_TOO_LARGE" }]);
+  const failed = await f.wait(1000);
+  assert.equal(failed.reason, "observation_failed", "one failed poll at the first return is not yet a report"); assert.equal(failed.changed, false);
+  assert.deepEqual(failed.unreadable, [{ thread_id: A, error: "PAYLOAD_TOO_LARGE" }]);
   const quiet = [];
   for (const attempt of [2, 3]) {
     const result = await f.wait(30);
@@ -78,7 +85,7 @@ test("a permanently unreadable member is returned once, then wait stays quiet an
 
   f.works.get(A).error = "RPC_REJECTED";
   const recoded = await f.wait(30);
-  assert.equal(recoded.reason, "timeout", "a member the last return listed is not returned for another code");
+  assert.equal(recoded.reason, "timeout", "a reported member is not returned for another code");
   assert.deepEqual(recoded.unreadable, [{ thread_id: A, error: "RPC_REJECTED" }]);
 
   f.works.get(A).error = null;
@@ -136,7 +143,7 @@ test("a recovery and a recurrence inside one wait do not return the failure agai
 
 test("a partial ordinary sync does not consume a change wait has not returned", async t => {
   const f = await fixture(t); f.works.get(A).error = "PAYLOAD_TOO_LARGE";
-  assert.equal((await f.wait()).reason, "initial_sync");
+  assert.equal((await f.wait()).reason, "initial_sync"); assert.equal((await f.wait(1000)).reason, "observation_failed");
   f.finishTurn(B);
   const partial = await f.sync();
   assert.equal(partial.complete, false); assert.ok(partial.works.find(work => work.thread_id === B).events.length > 0);
@@ -147,7 +154,7 @@ test("a partial ordinary sync does not consume a change wait has not returned", 
 
 test("a wait whose publication loses to a concurrent sync fails the observation and keeps the change for the next wait", async t => {
   const f = await fixture(t); f.works.get(A).error = "PAYLOAD_TOO_LARGE";
-  assert.equal((await f.wait()).reason, "initial_sync");
+  assert.equal((await f.wait()).reason, "initial_sync"); assert.equal((await f.wait(1000)).reason, "observation_failed");
   f.finishTurn(B); let raced = false;
   const lost = await waitProject("P", { timeoutMs: 1000 }, { ...f.dependencies, read: async (id, options) => {
     if (id === B && !raced) { raced = true; assert.equal((await f.sync()).complete, false); }
@@ -337,7 +344,7 @@ for (const shown of ["wait return", "complete sync"]) test(`after a ${shown} sho
   at(3600000); assert.equal((await f.wait()).reason, "timeout"); assert.equal((await f.wait()).reason, "timeout", "the new failure is returned once");
 });
 
-test("a change in a readable member is returned while another member has not failed long enough, and lists that member as unreadable", async t => {
+test("a change in a readable member is returned while another member has not failed long enough, lists that member as unreadable, and leaves it to be returned once it stays unread", async t => {
   const f = await fixture(t, { count: 3, grace: null }), at = clock(t); await f.sync();
   f.works.get(A).error = "TIMEOUT";
   const quiet = await f.wait(30);
@@ -347,7 +354,94 @@ test("a change in a readable member is returned while another member has not fai
   assert.equal(changed.reason, "work_changed"); assert.equal(changed.changed, true); assert.equal(changed.sync.complete, false);
   assert.deepEqual(changed.unreadable, [{ thread_id: A, error: "TIMEOUT" }]);
   assert.ok(changed.sync.works.find(work => work.thread_id === B).events.some(event => event.event_id === "next-1"));
-  at(3600000); assert.equal((await f.wait()).reason, "timeout"); assert.equal((await f.wait()).reason, "timeout", "that return already listed the member");
+  assert.equal((await f.wait()).reason, "timeout", "the count starts again after that return");
+  at(59999); assert.equal((await f.wait()).reason, "timeout");
+  at(60000); const failed = await f.wait();
+  assert.equal(failed.reason, "observation_failed", "listing the member once did not report it"); assert.deepEqual(failed.unreadable, [{ thread_id: A, error: "TIMEOUT" }]);
+  at(3600000); assert.equal((await f.wait()).reason, "timeout"); assert.equal((await f.wait()).reason, "timeout", "the member is returned once");
+});
+
+// Each wait below makes one poll, so the poll that returns is the one that fails.
+for (const reason of ["initial_sync", "membership_changed", "work_changed"]) {
+  const returned = async (f, ...failing) => {
+    if (reason === "work_changed") f.finishTurn(C);
+    if (reason === "membership_changed") await f.join(f.works.size + 1);
+    const result = await f.wait();
+    assert.equal(result.reason, reason); assert.equal(result.changed, true); assert.deepEqual(result.unreadable, unread(...failing));
+  };
+  const start = async t => { const f = await fixture(t, { count: 3, grace: null }), at = clock(t); if (reason !== "initial_sync") await f.sync(); return { f, at }; };
+
+  test(`a member whose one failed poll falls on ${reason === "initial_sync" ? "an" : "a"} ${reason} return is returned once when it then fails every poll`, async t => {
+    const { f, at } = await start(t);
+    f.works.get(A).error = "TIMEOUT"; await returned(f, A);
+    assert.equal((await f.wait()).reason, "timeout", "one failed poll after the return");
+    at(59999); assert.equal((await f.wait()).reason, "timeout", "inside the grace");
+    at(60000); const failed = await f.wait();
+    assert.equal(failed.reason, "observation_failed"); assert.equal(failed.changed, false); assert.deepEqual(failed.unreadable, unread(A));
+    at(3600000); assert.equal((await f.wait()).reason, "timeout"); assert.equal((await f.wait()).reason, "timeout", "the member is returned once");
+  });
+
+  test(`a member whose one failed poll falls on ${reason === "initial_sync" ? "an" : "a"} ${reason} return, and that reads fine before it fails for good, is still returned once`, async t => {
+    const { f, at } = await start(t);
+    f.works.get(A).error = "TIMEOUT"; await returned(f, A);
+    f.works.get(A).error = null;
+    // A member the first return could not read is new once it is read.
+    const readable = await f.wait(); assert.equal(readable.reason, reason === "initial_sync" ? "work_changed" : "timeout"); assert.deepEqual(readable.unreadable, []);
+    at(3600000); assert.equal((await f.wait()).reason, "timeout");
+    f.works.get(A).error = "TIMEOUT";
+    assert.equal((await f.wait()).reason, "timeout", "one failed poll");
+    at(3659999); assert.equal((await f.wait()).reason, "timeout", "inside the grace");
+    at(3660000); const failed = await f.wait();
+    assert.equal(failed.reason, "observation_failed"); assert.deepEqual(failed.unreadable, unread(A));
+    at(7200000); assert.equal((await f.wait()).reason, "timeout"); assert.equal((await f.wait()).reason, "timeout", "the member is returned once");
+  });
+
+  test(`a member whose one failed poll falls on ${reason === "initial_sync" ? "an" : "a"} ${reason} return and that then reads fine is never returned as a failure`, async t => {
+    const { f, at } = await start(t);
+    f.works.get(A).error = "TIMEOUT"; await returned(f, A);
+    f.works.get(A).error = null;
+    const reasons = [];
+    for (const ms of [0, 60000, 3600000, 7200000]) { at(ms); const result = await f.wait(); reasons.push(result.reason); assert.deepEqual(result.unreadable, []); }
+    assert.deepEqual(reasons, [reason === "initial_sync" ? "work_changed" : "timeout", "timeout", "timeout", "timeout"]);
+  });
+
+  // Nothing is reported before the first return.
+  if (reason !== "initial_sync") test(`a reported member still failing at a ${reason} return stays reported and is not returned again`, async t => {
+    const { f, at } = await start(t);
+    f.works.get(A).error = "TIMEOUT";
+    assert.equal((await f.wait()).reason, "timeout"); at(60000); assert.equal((await f.wait()).reason, "observation_failed");
+    await returned(f, A);
+    for (const ms of [60000, 120000, 3600000]) { at(ms); const quiet = await f.wait(); assert.equal(quiet.reason, "timeout"); assert.deepEqual(quiet.unreadable, unread(A)); }
+  });
+}
+
+test("a member whose one failed poll falls on another member's failure return is returned once when it then fails every poll", async t => {
+  const f = await fixture(t, { count: 3, grace: null }), at = clock(t); await f.sync();
+  f.works.get(A).error = "TIMEOUT";
+  assert.equal((await f.wait()).reason, "timeout");
+  f.works.get(B).error = "TIMEOUT";
+  at(60000); const first = await f.wait();
+  assert.equal(first.reason, "observation_failed"); assert.deepEqual(first.unreadable, unread(A, B));
+  assert.equal((await f.wait()).reason, "timeout", "the second member has failed two polls, inside the grace");
+  at(119999); assert.equal((await f.wait()).reason, "timeout");
+  at(120000); const second = await f.wait();
+  assert.equal(second.reason, "observation_failed"); assert.deepEqual(second.unreadable, unread(A, B));
+  at(3600000); assert.equal((await f.wait()).reason, "timeout"); assert.equal((await f.wait()).reason, "timeout", "each member is returned once");
+});
+
+test("after a complete sync showed a reported member readable, one more failed poll is not returned, however long the member had failed before", async t => {
+  const f = await fixture(t, { count: 3, grace: null }), at = clock(t); await f.sync();
+  f.works.get(A).error = "TIMEOUT";
+  assert.equal((await f.wait()).reason, "timeout"); at(60000); assert.equal((await f.wait()).reason, "observation_failed");
+  at(120000); assert.equal((await f.wait()).reason, "timeout"); at(180000); assert.equal((await f.wait()).reason, "timeout");
+  f.works.get(A).error = null;
+  assert.equal((await f.sync()).complete, true);
+  f.works.get(A).error = "TIMEOUT";
+  at(240000); const one = await f.wait();
+  assert.equal(one.reason, "timeout", "the first failed poll after the member was shown readable"); assert.deepEqual(one.unreadable, unread(A));
+  at(299999); assert.equal((await f.wait()).reason, "timeout");
+  at(300000); assert.equal((await f.wait()).reason, "observation_failed");
+  at(3600000); assert.equal((await f.wait()).reason, "timeout", "the new failure is returned once");
 });
 
 test("a wall clock that moved backwards delays the return by one grace, not until the old time comes back", async t => {
