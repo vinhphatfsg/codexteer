@@ -59,17 +59,21 @@ test("a stopped work seen quiet is settled by the sync that read it and is not r
   assert.deepEqual(await getManagedThread(A, f.storage), membership, "a settled work's cursor and revision stay put");
 });
 
-test("a stopped work with an unanswered question keeps being read until the question is resolved", async t => {
-  const f = await fixture(t); f.works.get(A).events.push(message("question", { questions: ["Which?"] })); await f.stop(A);
-  for (const attempt of [1, 2]) {
-    const result = await f.sync();
-    assert.ok(f.calls.includes(A), `sync ${attempt} reads the stopped work`);
-    assert.equal(row(result, A).attention, "human"); assert.equal(row(result, A).settled, undefined); assert.equal((await f.head()).settled, undefined);
-  }
-  f.works.get(A).events.push({ id: "answer", type: "userMessage", text: "The first." });
-  assert.equal(row(await f.sync(), A).settled.basis, "observed");
-  await f.sync(); assert.equal(f.calls.includes(A), false);
-});
+for (const flag of ["waitingOnApproval", "waitingOnUserInput"]) {
+  test(`a stopped work with a live ${flag} flag keeps being read until the flag clears`, async t => {
+    const f = await fixture(t); f.works.get(A).events.push(message("question", { questions: ["Which?"] })); f.works.get(A).attention = [flag]; await f.stop(A);
+    for (const attempt of [1, 2]) {
+      const result = await f.sync();
+      assert.ok(f.calls.includes(A), `sync ${attempt} reads the stopped work`);
+      assert.equal(row(result, A).attention, "human"); assert.equal(row(result, A).settled, undefined); assert.equal((await f.head()).settled, undefined);
+    }
+    f.works.get(A).events.push({ id: "answer", type: "userMessage", text: "The first." }); f.works.get(A).attention = [];
+    const answered = await f.sync();
+    assert.equal(row(answered, A).settled.basis, "observed");
+    assert.equal(row(answered, A).attention, "review", "a later user message resolves the question"); assert.equal((await f.head()).unresolved_attention[A], undefined);
+    await f.sync(); assert.equal(f.calls.includes(A), false);
+  });
+}
 
 test("a stopped work with a running turn is not settled until it is idle", async t => {
   const f = await fixture(t); Object.assign(f.works.get(A), { status: "active", turnStatus: "inProgress" }); await f.stop(A);
@@ -142,7 +146,7 @@ test("an excluded unreadable work keeps its unresolved attention through later s
     assert.equal(carried.observation, "settled"); assert.equal(carried.complete, false);
     assert.equal(carried.attention, "human"); assert.equal(carried.group, "対応が必要"); assert.equal(carried.attention_repeated, true);
     assert.equal(carried.settled.reason, "history exceeds the receive limit"); assert.equal(carried.settled.error, "PAYLOAD_TOO_LARGE");
-    assert.equal(next.works[0].thread_id, A, "unresolved attention still sorts first");
+    assert.equal(next.works.at(-1).thread_id, A, "a settled row follows the rows still being read, unresolved attention or not");
     assert.deepEqual(carried.events.map(event => event.token), [token], "the carried row still cites the unresolved question");
     assert.deepEqual((await f.head()).unresolved_attention[A], attention);
     await pruneProjectHistory("P", f.storage);
@@ -204,8 +208,12 @@ test("the first sync on a 0.23.0 head still reads a work that was stopped earlie
   await f.stop(A); await f.stop(B);
   const upgraded = await f.sync();
   assert.deepEqual([...new Set(f.calls)].sort(), [A, B]);
-  assert.equal(row(upgraded, A).settled.basis, "observed"); assert.equal(row(upgraded, B).settled, undefined, "the 0.23.0 question still blocks settling");
-  await f.sync(); assert.deepEqual([...new Set(f.calls)], [B]);
+  assert.equal(row(upgraded, A).settled.basis, "observed"); assert.equal(row(upgraded, B).settled.basis, "observed");
+  assert.equal(row(upgraded, B).attention, "human"); assert.equal(row(upgraded, B).attention_repeated, true);
+  const question = (await f.head()).unresolved_attention[B].events[0].token;
+  assert.ok(row(upgraded, B).events.some(event => event.token === question), "the 0.23.0 question is shown by the sync that settles its work");
+  const next = await f.sync(); assert.deepEqual(f.calls, []);
+  assert.equal(row(next, B).attention, "human"); assert.deepEqual(row(next, B).events.map(event => event.token), [question]);
 });
 
 test("a sync that loses the publication race settles nothing and the newer head keeps settled work and its attention", async t => {
@@ -295,6 +303,70 @@ test("a turn that ends after a stop is returned by the next wait, not settled by
   assert.ok(row(returned.sync, A).events.some(event => event.event_id === "turn-final"), "wait returns the turn end");
   assert.equal(row(returned.sync, A).settled.basis, "observed", "the wait that returns it settles the work");
   assert.equal((await wait(f, 30)).reason, "timeout"); assert.equal(f.calls.includes(A), false);
+});
+
+const ends = [["a question", "question", "human", f => { f.works.get(A).events.push(message("question", { questions: ["Which?"] })); endTurn(f, A, "turn-final"); }],
+  ["a failure", "turn-final", "failure", f => { Object.assign(f.works.get(A), { status: "idle", turn: "turn-final", turnStatus: "failed", activeTurns: 0 }); f.works.get(A).events.push({ id: "turn-final", type: "turn", status: "failed" }); }]];
+const cites = (work, eventId) => work.events.some(event => event.event_id === eventId);
+
+for (const [what, evidence, attention, end] of ends) {
+  test(`a turn that ends with ${what} after a stop is returned by the next wait, which settles the work with it`, async t => {
+    const f = await fixture(t); f.works.get(B).error = unreadable;
+    Object.assign(f.works.get(A), { status: "idle", turnStatus: "inProgress", activeTurns: 1 }); await f.stop(A);
+    assert.equal((await wait(f)).reason, "initial_sync");
+    end(f);
+    for (const attempt of [1, 2]) {
+      const partial = await f.sync();
+      assert.equal(partial.complete, false); assert.ok(f.calls.includes(A));
+      assert.equal(row(partial, A).attention, attention); assert.ok(cites(row(partial, A), evidence));
+      assert.equal(row(partial, A).settled, undefined, `partial sync ${attempt} leaves the turn end to wait`);
+    }
+    const returned = await wait(f, 1000), settling = row(returned.sync, A);
+    assert.equal(returned.reason, "work_changed"); assert.ok(cites(settling, evidence), "wait returns it");
+    assert.equal(settling.attention, attention); assert.equal(settling.group, "対応が必要");
+    assert.equal(settling.settled.basis, "observed", "the wait that returns it settles the work");
+    assert.equal((await wait(f, 30)).reason, "timeout"); assert.equal(f.calls.includes(A), false);
+    const carried = row(await f.sync(), A);
+    assert.equal(f.calls.includes(A), false); assert.equal(carried.observation, "settled");
+    assert.equal(carried.attention, attention); assert.ok(cites(carried, evidence), "the settled row still cites it");
+  });
+
+  test(`a project that never ran wait settles a stopped work whose last turn ended with ${what} in the sync that shows it`, async t => {
+    const f = await fixture(t); f.works.get(B).error = unreadable; end(f); await f.stop(A);
+    const partial = await f.sync(), settling = row(partial, A);
+    assert.equal(partial.complete, false); assert.ok(cites(settling, evidence)); assert.equal(settling.attention, attention);
+    assert.equal(settling.settled.basis, "observed");
+    const first = await wait(f);
+    assert.equal(first.reason, "initial_sync"); assert.equal(f.calls.includes(A), false);
+    assert.equal(row(first.sync, A).observation, "settled"); assert.equal(row(first.sync, A).attention, attention); assert.ok(cites(row(first.sync, A), evidence));
+  });
+}
+
+test("a question a complete sync showed stays on the row of its stopped work, which settles and is not read again", async t => {
+  const f = await fixture(t, { count: 3 });
+  for (const id of [A, C]) f.works.get(id).events.push(message(`question-${id.slice(-1)}`, { questions: ["Which?"] }));
+  const shown = await f.sync(), token = row(shown, A).events[0].token;
+  assert.equal(shown.complete, true); assert.equal(row(shown, A).attention, "human");
+  await f.stop(A);
+  const settling = row(await f.sync(), A);
+  assert.ok(f.calls.includes(A)); assert.equal(settling.settled.basis, "observed");
+  assert.equal(settling.attention, "human"); assert.equal(settling.group, "対応が必要"); assert.deepEqual(settling.events.map(event => event.token), [token]);
+  const attention = (await f.head()).unresolved_attention[A];
+  for (const attempt of [1, 2]) {
+    const next = await f.sync({ byteBudget: 4096 }), carried = row(next, A);
+    assert.equal(f.calls.includes(A), false, `sync ${attempt} after settling`); assert.equal(next.complete, true);
+    assert.deepEqual(next.works.map(work => work.thread_id), [C, B, A], "the settled row follows every row still being read");
+    assert.equal(carried.observation, "settled"); assert.equal(carried.attention, "human"); assert.equal(carried.group, "対応が必要");
+    assert.equal(carried.attention_repeated, true); assert.deepEqual(carried.events.map(event => event.token), [token]);
+    assert.deepEqual((await f.head()).unresolved_attention[A], attention);
+    await pruneProjectHistory("P", f.storage);
+    assert.equal((await projectEvent(token, f.storage)).event.id, "question-1", "prune keeps the evidence the head still cites");
+  }
+  assert.equal((await wait(f, 30)).reason, "timeout"); assert.equal(f.calls.includes(A), false);
+  const paged = await f.sync({ byteBudget: 4096 }, { read: async (id, options) => ({ ...(await f.read(id, options)), title: "題".repeat(700) }) });
+  assert.deepEqual(paged.works.map(work => work.thread_id), [C, B], "a settled row that needs attention does not take the first page from the rows still being read");
+  const rest = await continueProjectSync(paged.sync_token, { byteBudget: 4096, offset: paged.next_offset }, f.storage);
+  assert.deepEqual(rest.works.map(work => work.thread_id), [A]); assert.equal(rest.works[0].attention, "human"); assert.equal(rest.continuation_token, null);
 });
 
 test("a stopped work with nothing new since the last wait return settles in a partial sync", async t => {
