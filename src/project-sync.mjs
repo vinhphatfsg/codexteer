@@ -52,9 +52,10 @@ export function changedSinceBaseline(state, entry, knownFlags = entry.signal.att
 // promised the orchestrator a delta yet; a member without an entry is new to wait.
 // An earlier partial sync may have advanced the read past the baseline, so the
 // signal, not this read's events alone, carries a turn end wait has not returned.
-const owedToWait = (baseline, state) => {
+// It carries no question, so unresolved attention is left to the next review.
+const owedToWait = (baseline, state, unresolvedAttention) => {
   const entry = baseline?.works?.[state.member.thread_id];
-  return !!baseline && (!entry || changedSinceBaseline(state, entry));
+  return !!baseline && (!entry || !!unresolvedAttention || changedSinceBaseline(state, entry));
 };
 
 function classify(observation, complete, connection) {
@@ -412,7 +413,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       const settlements = new Map(observed.map(work => [work, settlement(plan.get(work.thread_id), work, states.get(work.thread_id), createdAt)]));
       const reviewed = !!dependencies.waitProbe || observed.every(work => work.complete || settlements.get(work));
       for (const [work, entry] of settlements) {
-        if (!entry || (entry.basis === "observed" && !reviewed && owedToWait(previous?.wait_baseline, states.get(work.thread_id)))) continue;
+        if (!entry || (entry.basis === "observed" && !reviewed && owedToWait(previous?.wait_baseline, states.get(work.thread_id), unresolved[work.thread_id]))) continue;
         head.settled = { ...head.settled, [work.thread_id]: entry }; work.settled = settledMarker(entry);
       }
       head.complete = observedComplete();
