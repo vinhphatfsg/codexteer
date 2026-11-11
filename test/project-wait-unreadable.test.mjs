@@ -34,7 +34,7 @@ async function fixture(t, { count = 2, project = "P", grace = 0, hold = 0 } = {}
       status: work.status, attention: work.attention, latest_turn_id: work.turn, latest_turn_status: work.turnStatus, active_turn_count: work.status === "active" ? 1 : 0 };
   };
   // A wait checks its owner once before each poll, so that check numbers the polls and lets a test script the backend per poll.
-  const f = { script: null }, owner = async pid => { if (pid === 123) await f.script?.(++polls); return pid === 123 ? "owner-start" : "same-start"; };
+  const f = { script: null }, owner = async pid => { if (pid !== 123) return "same-start"; polls++; await f.script?.(polls); return "owner-start"; };
   const dependencies = { storage, read, pollMs: 5, ...(grace === null ? {} : { unreadGraceMs: grace }), processIdentity: owner, orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) };
   const finishTurn = id => { const work = works.get(id), turn = `next-${work.events.length + 1}`; Object.assign(work, { turn, status: "idle", turnStatus: "completed" }); work.events.push({ id: turn, type: "turn", status: "completed" }); };
   const history = async () => (await Promise.all(["project-sync-events", "project-sync-results"].map(bucket => recordStats(bucket, storage)))).flat().reduce((sum, record) => sum + record.bytes, 0);
@@ -252,18 +252,18 @@ test("a member that fails only the wait probe is returned once, however many ord
   assert.deepEqual((await f.head()).wait_reported_failures, { [A]: "RPC_REJECTED" }, "work no longer in the project is forgotten");
 });
 
-for (const restarted of [false, true]) test(`members that each fail one poll at different times are never returned as a failure (${restarted ? "restarted waits" : "one wait"})`, async t => {
+for (const restarted of [false, true]) test(`members that fail one poll at a time, at different times, are never returned as a failure (${restarted ? "restarted waits" : "one wait"})`, async t => {
   const f = await fixture(t, { count: 5, grace: 10, hold: 30 }); await f.sync();
-  const codes = ["TIMEOUT", "RPC_REJECTED", "CONNECTION_FAILED", "TIMEOUT", "RPC_REJECTED"], failing = [3, 4, 5, 9, 14];
+  const codes = ["TIMEOUT", "RPC_REJECTED", "CONNECTION_FAILED", "TIMEOUT", "RPC_REJECTED"], failing = [[3, 12], [4], [5], [9], [14]];
   const before = await f.saved(); let quiet;
   // Each failing read outlasts the grace. A turn that ends at poll 17 is the first thing worth returning.
   f.script = async poll => {
-    failing.forEach((at, n) => { f.works.get(uuid(n + 1)).error = poll === at ? codes[n] : null; });
+    failing.forEach((polls, n) => { f.works.get(uuid(n + 1)).error = polls.includes(poll) ? codes[n] : null; });
     if (poll === 17) { quiet = await f.saved(); f.finishTurn(B); }
   };
   const result = await f.until(restarted);
   assert.equal(result.reason, "work_changed"); assert.equal(f.polls(), 17); assert.deepEqual(result.unreadable, []);
-  assert.deepEqual(f.failed, failing.map((poll, n) => ({ poll, thread_id: uuid(n + 1), error: codes[n] })), "every scripted failure was read");
+  assert.deepEqual(f.failed, failing.flatMap((polls, n) => polls.map(poll => ({ poll, thread_id: uuid(n + 1), error: codes[n] }))).sort((a, b) => a.poll - b.poll), "every scripted failure was read");
   assert.deepEqual(quiet, before, "the failed polls saved nothing");
 });
 
@@ -289,13 +289,29 @@ test("a member that fails every poll is returned by a restarted wait, two failed
   assert.equal(failed.reason, "observation_failed"); assert.deepEqual(failed.unreadable, [{ thread_id: A, error: "TIMEOUT" }]);
   assert.equal((await f.wait()).reason, "timeout");
   at(3600000); assert.equal((await f.wait()).reason, "timeout", "the member is returned once");
+  const record = await readRecord("project-wait-attention", key("P"), f.storage);
+  at(7200000); assert.equal((await f.wait()).reason, "timeout");
+  assert.deepEqual(await readRecord("project-wait-attention", key("P"), f.storage), record, "a wait that stays quiet stops rewriting its record");
+});
+
+for (const change of ["turn end", "approval"]) test(`${change === "approval" ? "an" : "a"} ${change} during a member's one failed poll is returned by the next poll`, async t => {
+  const f = await fixture(t, { count: 3, grace: null }); await f.sync();
+  f.script = poll => {
+    f.works.get(A).error = poll === 1 ? "TIMEOUT" : null;
+    if (poll !== 1) return;
+    if (change === "turn end") f.finishTurn(A); else Object.assign(f.works.get(A), { status: "active", turn: "asking", turnStatus: "inProgress", attention: approval });
+  };
+  const result = await f.until(false);
+  assert.equal(result.reason, "work_changed"); assert.equal(f.polls(), 2); assert.deepEqual(result.unreadable, []);
+  assert.deepEqual(f.failed, [{ poll: 1, thread_id: A, error: "TIMEOUT" }]);
+  if (change === "turn end") assert.ok(result.sync.works.find(work => work.thread_id === A).events.some(event => event.event_id === "next-1"));
 });
 
 for (const restarted of [false, true]) test(`a reported member that fails with another code, or reads fine for some polls and fails again, is not returned again (${restarted ? "restarted waits" : "one wait"})`, async t => {
   const f = await fixture(t, { count: 3 }); await f.sync();
   f.works.get(A).error = "TIMEOUT";
   assert.equal((await f.until(restarted)).reason, "observation_failed");
-  const from = f.polls();
+  const from = f.polls(); assert.equal(from, 2, "with no grace the failure is returned by the second failed poll, never the first");
   // Two polls with another code, three readable, then failing again. A turn that ends at the tenth poll is the next thing worth returning.
   f.script = poll => {
     f.works.get(A).error = poll - from < 3 ? "RPC_REJECTED" : poll - from < 6 ? null : "CONNECTION_FAILED";
