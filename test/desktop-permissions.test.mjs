@@ -41,6 +41,41 @@ for (const atoms of [undefined, {}, { "agent-mode-by-host-id": { remote: "full-a
   await assert.rejects(readDesktopPermissionSelection(home), { code: "DESKTOP_PERMISSION_UNVERIFIED" });
 });
 
+async function ownerFixture(t, state) {
+  const home = await mkdtemp(tempPrefix("ct-permissions-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await writeFile(path.join(home, ".codex-global-state.json"), JSON.stringify(state), { mode: 0o600 });
+  return home;
+}
+const owner = "9853403b6eb124b2f2bafa6f2e577e6380cbe84ca0996a40bdff3fee94197337";
+
+test("selection that Desktop keeps under its content owner is read", async t => {
+  const home = await ownerFixture(t, {
+    "electron-renderer-content-owner": owner,
+    [`electron-owner-atoms:${owner}`]: pick("guardian-approvals"),
+    "electron-persisted-atom-state": { "prompt-history": [] },
+  });
+  assert.deepEqual(await readDesktopPermissionSelection(home), { kind: "agent-mode", agentMode: "guardian-approvals" });
+});
+
+test("device atoms override owner atoms the way Desktop merges them", async t => {
+  const home = await ownerFixture(t, {
+    "electron-renderer-content-owner": owner,
+    [`electron-owner-atoms:${owner}`]: pick("full-access"),
+    "electron-persisted-atom-state": pick("read-only"),
+  });
+  assert.deepEqual(await readDesktopPermissionSelection(home), { kind: "agent-mode", agentMode: "read-only" });
+});
+
+for (const state of [
+  { [`electron-owner-atoms:${owner}`]: pick("full-access") },
+  { "electron-renderer-content-owner": "other", [`electron-owner-atoms:${owner}`]: pick("full-access") },
+  { "electron-renderer-content-owner": owner, [`electron-owner-atoms:${owner}`]: [pick("full-access")] },
+]) test("owner atoms of no owner or another owner are not read", async t => {
+  const home = await ownerFixture(t, state);
+  await assert.rejects(readDesktopPermissionSelection(home), { code: "DESKTOP_PERMISSION_UNVERIFIED" });
+});
+
 test("unsafe or malformed state is refused", async t => {
   const { home, file } = await fixture(t, pick("auto"));
   await chmod(file, 0o666);
