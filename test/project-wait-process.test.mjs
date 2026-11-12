@@ -237,7 +237,7 @@ for (const [connection, change] of [[[], false], [[], true], [["--connection", "
   assert.equal(next.code, 0, next.stdout); assert.equal(JSON.parse(next.stdout).data.reason, change ? "work_changed" : "timeout", "no RECORD_BUSY, and a change is still owed");
 });
 
-test("real CLI wait keeps running under a launcher that stays alive and under nohup after its shell exits", { timeout: 30000 }, async t => {
+test("real CLI wait keeps running under a launcher that stays alive, and when it starts after its shell is gone", { timeout: 30000 }, async t => {
   const f = await fixture(t), env = { ...process.env, CODEX_HOME: f.home }, started = [];
   t.after(() => { for (const pid of started) try { process.kill(pid, "SIGKILL"); } catch { /* Already gone. */ } });
   const wrapper = spawn("/bin/sh", ["-c", `${waitCommand([], `${f.home}/wrapped.json`)}; echo exit=$?`], { env, stdio: "ignore" });
@@ -246,7 +246,8 @@ test("real CLI wait keeps running under a launcher that stays alive and under no
   await delay(2500);
   assert.equal(await processIdentity(wrapped.pid), wrapped.process_start, "several polls later the wrapped wait still runs");
   process.kill(wrapped.pid, "SIGKILL"); await once(wrapper, "close");
-  const shell = spawn("/bin/sh", ["-c", `nohup ${waitCommand([], `${f.home}/nohup.json`)} 2>&1 &`], { env, stdio: "ignore" });
+  // The wait must start after its shell is gone, whatever the load: a wait that starts first is tied to that shell.
+  const shell = spawn("/bin/sh", ["-c", `(sleep 1; exec nohup ${waitCommand([], `${f.home}/nohup.json`)} 2>&1) &`], { env, stdio: "ignore" });
   await once(shell, "close");
   const detached = await waitRecord(f.home, wrapped.pid); started.push(detached.pid);
   await delay(2500);
