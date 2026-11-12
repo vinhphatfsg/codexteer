@@ -234,6 +234,9 @@ const settledRow = work => ({ title: work.title, execution: work.execution, atte
   cursor: work.cursor, sync_revision: work.sync_revision, turn_identity: work.turn_identity, history_notes: work.history_notes,
   complete: work.complete, history_gap: work.history_gap });
 const settledMarker = ({ row, ...marker }) => marker;
+// Nobody answers a stopped member, so the attention a settled row keeps is not
+// work that needs action: its row leaves the group of members still read.
+const SETTLED_GROUP = "監視終了";
 
 // A row is reserved before its cursor's outcome is known, so the error code a
 // refused cursor records has a fixed largest size.
@@ -371,7 +374,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     const attention = previous.unresolved_attention?.[member.thread_id];
     if (attention) unresolved[member.thread_id] = attention;
     carried[member.thread_id] = entry;
-    works.push({ thread_id: member.thread_id, ...entry.row, observation: "settled", events: attention?.events ?? [], settled: settledMarker(entry),
+    works.push({ thread_id: member.thread_id, ...entry.row, group: SETTLED_GROUP, observation: "settled", events: attention?.events ?? [], settled: settledMarker(entry),
       resolution_unconfirmed: !!attention, attention_repeated: !!attention });
   }
   const observedComplete = () => observed.every(w => w.settled || w.complete);

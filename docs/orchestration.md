@@ -44,7 +44,7 @@ sharedの作成先はDesktopの実在project ID・完全一致名とrootsを照�
 
 作成結果の担当IDとreceiptを記録します。`create_not_dispatched`は作成側が未作成・作成RPC未送信・指示未送信・担当IDなしを明示した段階です。原因を直して同じ発注・開始オプションを再実行すると同じattempt_idで作成をやり直せます。部分成功・unknown・観測不能では同じ担当を読み取り照合し、createを繰り返しません。membershipを先に登録してから監督を結び、stoppedを自動で置き換えません。初回観測で省略件数が0と確認できない場合は、sharedとDesktop Cloudの双方でhistory gapとして止まり、cursorを保存しません。完全な初回観測の公開イベント全文は未提示として保存し、次のsyncで返します。
 
-syncは全担当を一巡してからbacklogを読み、動作中・対応が必要・検収待ち・未確認へ分類します。未解決attentionは解消証拠が得られるまで根拠とtokenを再掲します。バックエンドの待機フラグは完全な最新観測で消えたら解消します。質問は後続の人間入力または同じイベントの回答済み状態、失敗は該当turnの状態更新または後続turnの成功を根拠に解消します。空の待機フラグだけでは質問や失敗を消しません。根拠不足の古いattentionは、完全な成功観測後にhistory_notesへ分け、現在の分類を上書きしません。履歴の欠落、429、不完全な取得を変化なしと扱いません。idleで直近turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ちです。開始前idleや証明不足は未確認として区別します。旧Cloudの質問・承認状態は未確認なので、completedだけでは検収待ちとしません。再起動・要約後はsyncから再開します。
+syncは全担当を一巡してからbacklogを読み、動作中・対応が必要・検収待ち・未確認へ分類します。読むのを終えた停止済みの担当（`settled`）の行は、5つ目の「監視終了」に分けます。未解決attentionは解消証拠が得られるまで根拠とtokenを再掲します。バックエンドの待機フラグは完全な最新観測で消えたら解消します。質問は後続の人間入力または同じイベントの回答済み状態、失敗は該当turnの状態更新または後続turnの成功を根拠に解消します。空の待機フラグだけでは質問や失敗を消しません。根拠不足の古いattentionは、完全な成功観測後にhistory_notesへ分け、現在の分類を上書きしません。履歴の欠落、429、不完全な取得を変化なしと扱いません。idleで直近turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ちです。開始前idleや証明不足は未確認として区別します。旧Cloudの質問・承認状態は未確認なので、completedだけでは検収待ちとしません。再起動・要約後はsyncから再開します。
 
 ```sh
 codexteer project sync --continue <TOKEN> --offset <NEXT_OFFSET> --event-offset <NEXT_EVENT_OFFSET> --json
@@ -55,9 +55,9 @@ codexteer project event <EVENT-TOKEN> --json
 
 ### 停止済みの担当を読むのを終える
 
-`project control stop`した担当は、停止を確認した後のsyncでもう一度完全に読みます。実行が終了済みか、idleで実行中のターンがないと確かめられ、承認・質問のフラグが空と分かれば、その回の担当行に通常の観測結果と`settled`（`basis:"observed"`と`settled_at`）を付け、次のsyncからその担当を読みません。以後の行は`observation:"settled"`で、今回読んだ全ての担当の後に並び、最後に読んだときの題名・状態・cursorを示します。cursor・イベント・詳細recordは増えません。`complete`は今回読んだ担当だけで決まり、`membership_count`とmembership digestは全担当のままです。
+`project control stop`した担当は、停止を確認した後のsyncでもう一度完全に読みます。実行が終了済みか、idleで実行中のターンがないと確かめられ、承認・質問のフラグが空と分かれば、その回の担当行に通常の観測結果と`settled`（`basis:"observed"`と`settled_at`）を付け、次のsyncからその担当を読みません。以後の行は`observation:"settled"`、`group:"監視終了"`で、今回読んだ全ての担当の後に並び、最後に読んだときの題名・状態・cursorを示します。cursor・イベント・詳細recordは増えません。`complete`は今回読んだ担当だけで決まり、`membership_count`とmembership digestは全担当のままです。
 
-最後のターンが未回答の質問や失敗で終わった担当も、同じ条件で`settled`になります。停止済みの担当には誰も回答しないため、その質問や失敗は解消しないからです。`settled`にする回の担当行は、その質問・失敗を`attention`と`events`で示します。以後の行も同じ`attention`と根拠のイベントを再掲し、「対応が必要」のまま残ります。未解決attentionは消えません。未解決attentionのない`settled`の行は`events:[]`です。
+最後のターンが未回答の質問や失敗で終わった担当も、同じ条件で`settled`になります。停止済みの担当には誰も回答しないため、その質問や失敗は解消しないからです。`settled`にする回の担当行は、その質問・失敗を`attention`と`events`で示します。以後の行も同じ`attention`・`reason`と根拠のイベントを再掲します。未解決attentionは消えません。ただし`group`は「監視終了」になり、「対応が必要」には読み続けている担当だけが並びます。停止済みの担当の古い質問と、動いている担当の新しい質問を`group`で見分けられます。`settled`にする回の行は、その回に読んだ結果なので通常の分類（質問や失敗があれば「対応が必要」）のままです。未解決attentionのない`settled`の行は`events:[]`です。
 
 承認・質問のフラグが立っている担当、ターン実行中の担当、フラグが不明な担当は、停止済みでも読み続けます。フラグの解消とidleを完全な観測で確認した回に`settled`になります。
 
@@ -82,11 +82,11 @@ codexteer project sync --project sample --exclude-unreadable <THREAD> --reason '
 | `already_settled` | 既に`settled`だった。読まず、保存済みの理由も変えない。 |
 | `not_applied` | 除外しなかった。429など再試行を求める応答、ページ上限、読み取り中の更新、cursorやheadの競合が該当する。`error`のcodeを確認して再実行する。 |
 
-除外した担当の未解決attentionは解消しません。以後のsyncでも「対応が必要」として、今回読んだ担当の後に残ります。除外を取り消す操作はありません。Desktopが起動していないなど接続全体の失敗も読み取り失敗として扱うため、同じエラーが続くことと、他の担当は読めることを確認してから実行してください。
+除外した担当の未解決attentionは解消しません。以後のsyncでも行の`attention`と根拠に残り、「監視終了」として今回読んだ担当の後に並びます。除外を取り消す操作はありません。Desktopが起動していないなど接続全体の失敗も読み取り失敗として扱うため、同じエラーが続くことと、他の担当は読めることを確認してから実行してください。
 
 停止していない担当は除外できません（`PROJECT_SYNC_EXCLUDE_NOT_STOPPED`）。読めない担当がまだ作業中なら不完全のまま扱い、原因を調べます。syncを完全にする目的で、検収前の担当をstopしないでください。stopは取り消せず、その担当へは二度と指示を送れません。
 
-tellの可否は対象の担当だけで決まります。最新のsyncで対象が完全に読めていること（`complete:true`、履歴欠落なし）を基点に送信直前まで再照合し、対象の新しいイベント、質問・承認待ち、attention不明、履歴欠落、不完全な観測では拒否します。他の担当が未読・不完全でも、対象への指示は妨げません。receiptの`other_work`は、未読の担当を`incomplete`、質問・承認待ちの担当を`human_attention`、sync後のmembership変更を`membership_changed`で返します。空でなければ、送信後もその担当への対応を続けます。`--sync-token`で以前のsyncを基点にできるのは、その後に対象が完全に再読されていない間だけです。質問・承認待ちは常に最新のsyncで判定します。サーバーが観測版と送信を原子的に照合する保証はなく、最終観測の後に起きる競合は残ります。代理回答はせず、同じ意図やunknownを自動再送しません。検収待ちでもidleなら`--new-turn`が必要です。同じ委任の未完了作業がある場合だけ続け、受付後に新turnがactiveになれば動作中へ戻ります。検収待ちは成果の受入や全体の完了認定ではありません。
+tellの可否は対象の担当だけで決まります。最新のsyncで対象が完全に読めていること（`complete:true`、履歴欠落なし）を基点に送信直前まで再照合し、対象の新しいイベント、質問・承認待ち、attention不明、履歴欠落、不完全な観測では拒否します。他の担当が未読・不完全でも、対象への指示は妨げません。receiptの`other_work`は、未読の担当を`incomplete`、質問・承認待ちの担当を`human_attention`、sync後のmembership変更を`membership_changed`で返します。空でなければ、送信後もその担当への対応を続けます。`settled`の担当は読まれず回答もできないため、`incomplete`にも`human_attention`にも含めません。その担当の質問は`project sync`の「監視終了」の行に残ります。`--sync-token`で以前のsyncを基点にできるのは、その後に対象が完全に再読されていない間だけです。質問・承認待ちは常に最新のsyncで判定します。サーバーが観測版と送信を原子的に照合する保証はなく、最終観測の後に起きる競合は残ります。代理回答はせず、同じ意図やunknownを自動再送しません。検収待ちでもidleなら`--new-turn`が必要です。同じ委任の未完了作業がある場合だけ続け、受付後に新turnがactiveになれば動作中へ戻ります。検収待ちは成果の受入や全体の完了認定ではありません。
 
 controlはproject全体の新しい監督IDを作らず、各担当の既存recordを制御します。`--all`と`--work`はどちらか一方を指定します。返り値のrequested・changed・already・failed、各code、membership_digestを確認してください。部分失敗でも全担当の結果を返し、CLIは終了値1（JSONはok:false）です。busyは未完了、binding不在は失敗、同じ状態への再実行はalreadyです。stop済みはresumeできません。対象集合は呼出し開始時のsnapshotで、新しく追加された担当は含まれません。
 

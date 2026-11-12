@@ -43,10 +43,11 @@ async function syncBasis(threadId, member, token, storage) {
 }
 
 async function otherWork(threadId, member, head, storage) {
-  // Settled members are no longer read; their own attention still surfaces below.
+  // Settled members are no longer read and nobody answers one, so they are
+  // neither unread nor waiting: their rows keep the attention in project sync.
   const members = await listManagedThreads(member.project_id, storage), complete = new Set([...head.complete_work_ids ?? [], ...Object.keys(head.settled ?? {})]);
   return { incomplete: members.filter(m => m.thread_id !== threadId && !complete.has(m.thread_id)).map(m => m.thread_id),
-    human_attention: Object.entries(head.unresolved_attention ?? {}).filter(([id, entry]) => id !== threadId && entry?.attention === "human").map(([id]) => id).sort(),
+    human_attention: Object.entries(head.unresolved_attention ?? {}).filter(([id, entry]) => id !== threadId && entry?.attention === "human" && !head.settled?.[id]).map(([id]) => id).sort(),
     membership_changed: managedMembershipDigest(members) !== head.membership_digest };
 }
 
