@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, readdir, writeFile, chmod } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { tempPrefix } from "../test-support/temp.mjs";
@@ -11,8 +11,8 @@ import { syncProject, projectEvent, continueProjectSync } from "../src/project-s
 import { waitProject } from "../src/project-wait.mjs";
 import { startWork } from "../src/work-start.mjs";
 import { tellWork } from "../src/work-tell.mjs";
-import { pruneProjectHistory, withHistoryReservation } from "../src/project-history.mjs";
-import { readRecord, writeRecord, removeRecord, listRecords, recordStats, storePath } from "../src/store.mjs";
+import { pruneProjectHistory, withHistoryReservation, historyBucket } from "../src/project-history.mjs";
+import { readRecord, writeRecord, removeRecord, listRecords, recordStats, storePath, withStoreLock } from "../src/store.mjs";
 
 const KiB = 1024, MiB = 1024 * KiB, P = "alpha", Q = "beta";
 const families = ["project-sync-events", "project-sync-results", "work-starts"];
@@ -30,7 +30,7 @@ async function fixture(t) {
     await registerManagedThread(id, { projectId: project, connection: "shared", syncCursor: readSnapshot(thread).cursor }, storage);
     await registerSupervisor(id, randomUUID(), { home, owner: "fixture", connection: "shared" });
   }
-  f.read = async (id, options) => readSnapshot(f.threads.get(id), options);
+  f.read = async (id, options) => { await f.onRead?.(id); return readSnapshot(f.threads.get(id), options); };
   f.dependencies = { storage, read: f.read, pollMs: 5, processIdentity: async pid => pid === 123 ? "owner-start" : "same-start",
     orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) };
   f.add = (project, count, size) => f.threads.get(f.member[project]).turns[0].items.push(...Array.from({ length: count }, () => message(size)));
@@ -218,4 +218,90 @@ test("two projects publish, start and prune while the other holds its history lo
   assert.equal(inside.sync.complete, true); assert.equal(inside.sync.publication_conflict, undefined);
   assert.equal(inside.start.observed, true); assert.equal(inside.prune.project_id, Q);
   await readable(f, inside.sync);
+});
+
+// The previous version publishes under one history lock shared by every project
+// and writes the flat buckets.
+const previousPublication = (f, publish) => withStoreLock("project-history", publish, f.storage);
+const flatEvent = (f, project) => ({ schema: 1, project_id: project, sync_token: randomUUID(), token: randomUUID(), thread_id: f.member[project], event: message(KiB) });
+
+test("a publication of the previous version in flight keeps its records through this version's manual and quota prunes", async t => {
+  const f = await fixture(t);
+  f.add(P, 1, 64 * KiB); const old = await f.sync(P);
+  f.add(P, 1, 64 * KiB); await f.sync(P);
+  const inFlight = flatEvent(f, P);
+  await previousPublication(f, async () => {
+    await writeRecord("project-sync-events", inFlight.token, inFlight, f.storage);
+    const manual = await pruneProjectHistory(P, f.storage);
+    assert.equal(manual.deleted.results, 1); await gone(f, old);
+    assert.equal((await projectEvent(inFlight.token, f.storage)).token, inFlight.token, "a manual prune keeps it");
+    f.add(P, 1, 64 * KiB); const superseded = await f.sync(P);
+    f.add(P, 1, 64 * KiB); await f.sync(P);
+    f.storage.historyLimitBytes = await own(f) + KiB;
+    const started = await f.start(P, "at the quota", 64 * KiB);
+    assert.equal(started.observed, true); assert.equal(started.history_pruned.deleted.results, 1); await gone(f, superseded);
+    assert.equal((await projectEvent(inFlight.token, f.storage)).token, inFlight.token, "a work start's quota prune keeps it");
+  });
+  delete f.storage.historyLimitBytes;
+  assert.ok((await pruneProjectHistory(P, f.storage)).deleted.events >= 1);
+  await assert.rejects(projectEvent(inFlight.token, f.storage), { code: "PROJECT_EVENT_NOT_FOUND" }, "a later prune removes what no publication protects");
+});
+
+test("another project's previous-version publication holding the shared lock neither fails nor delays this project", async t => {
+  const f = await fixture(t);
+  f.add(P, 1, 8 * KiB); const replaced = await asPrevious(f, () => f.sync(P));
+  f.add(P, 1, 8 * KiB); await asPrevious(f, () => f.sync(P));
+  f.add(P, 1, 8 * KiB); await f.sync(P);
+  const elapsed = await previousPublication(f, async () => {
+    const begin = Date.now(), neighbour = flatEvent(f, Q);
+    await writeRecord("project-sync-events", neighbour.token, neighbour, f.storage);
+    f.add(P, 1, 8 * KiB); await f.sync(P);
+    f.storage.historyLimitBytes = await own(f) + KiB;
+    f.add(P, 1, 8 * KiB); const synced = await f.sync(P);
+    assert.equal(synced.complete, true); assert.equal(synced.publication_conflict, undefined);
+    assert.equal(synced.history_pruned.deleted.results, 1, "this project's own history is pruned, the earlier records wait");
+    delete f.storage.historyLimitBytes;
+    f.threads.get(f.member[P]).turns.push({ id: "turn-2", status: "completed", items: [message(KiB)] });
+    const waited = await f.wait(P);
+    assert.equal(waited.reason, "work_changed"); assert.equal(waited.sync.complete, true);
+    assert.equal((await f.start(P, "beside a busy lock", KiB)).observed, true);
+    assert.equal((await pruneProjectHistory(P, f.storage)).project_id, P);
+    await readable(f, replaced);
+    return Date.now() - begin;
+  });
+  assert.ok(elapsed < 10000, `${elapsed} ms`);
+  await pruneProjectHistory(P, f.storage);
+  await gone(f, replaced);
+});
+
+test("previous-version and current publications on one project interleave: the head decides, both results resolve, prune keeps the head's", async t => {
+  const f = await fixture(t);
+  f.add(P, 1, 4 * KiB); const first = await f.sync(P);
+  f.add(P, 1, 4 * KiB);
+  let previous;
+  f.onRead = async () => { f.onRead = null; previous = await asPrevious(f, () => f.sync(P)); };
+  const lost = await f.sync(P);
+  assert.equal(previous.complete, true); assert.equal(lost.publication_conflict, "SYNC_CURSOR_CONFLICT");
+  assert.equal((await readRecord("project-sync-heads", headKey(P), f.storage)).sync_token, previous.sync_token);
+  for (const page of [first, previous, lost]) await readable(f, page);
+  assert.equal((await pruneProjectHistory(P, f.storage)).deleted.results, 2);
+  await readable(f, previous); await gone(f, first); await gone(f, lost);
+  assert.equal((await f.tell(P, "Basis written by the previous version.")).sync_token, previous.sync_token);
+  f.add(P, 1, 4 * KiB); const current = await f.sync(P);
+  assert.equal(current.complete, true);
+  assert.equal((await pruneProjectHistory(P, f.storage)).deleted.results, 1);
+  await readable(f, current); await gone(f, previous);
+});
+
+test("a token found nowhere is not found even when another project's bucket cannot be read; only its own record's error surfaces", async t => {
+  const f = await fixture(t);
+  f.add(P, 1, 4 * KiB); const page = await f.sync(P);
+  f.add(Q, 1, 4 * KiB); const neighbour = await f.sync(Q);
+  for (const family of families.slice(0, 2)) { await corrupt(f, historyBucket(family, Q)); await chmod(path.dirname(storePath(historyBucket(family, Q), "x", f.home)), 0o755); }
+  await assert.rejects(continueProjectSync(randomUUID(), {}, f.storage), { code: "PROJECT_SYNC_CONTINUATION_NOT_FOUND" });
+  await assert.rejects(projectEvent(randomUUID(), f.storage), { code: "PROJECT_EVENT_NOT_FOUND" });
+  await readable(f, page);
+  await assert.rejects(continueProjectSync(neighbour.sync_token, {}, f.storage), { code: "STORE_UNSAFE" });
+  await writeFile(storePath(historyBucket("project-sync-results", P), page.sync_token, f.home), "{");
+  await assert.rejects(continueProjectSync(page.sync_token, {}, f.storage), SyntaxError);
 });
