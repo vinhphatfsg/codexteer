@@ -86,6 +86,7 @@ test("real orchestrate launch: only its own wait permits Stop; another session i
 test("real CLI sync and wait report the calling session's Stop hook status beside the paged result", { timeout: 20000 }, async t => {
   const f = await fixture(t);
   for (const connection of [[], ["--connection", "desktop-cloud"]]) {
+    assert.equal((await f.cli([...connection, "project", "guard", "--project", "P", "--status", "--json"])).data.stop_hook, "configured", connection.join(" "));
     const sync = await f.cli([...connection, "project", "sync", "--project", "P", "--json"]);
     assert.equal(sync.data.stop_hook, "configured", connection.join(" ")); assert.equal(sync.data.works[0].thread_id, ID);
     const { stop_hook: _hook, ...page } = sync.data;

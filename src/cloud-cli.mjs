@@ -31,7 +31,7 @@ import { acquireResource, resourceStatus, renewResource, releaseResource, listRe
 import { startWork } from "./work-start.mjs";
 import { tellWork } from "./work-tell.mjs";
 import { syncProject, continueProjectSync, continuationPosition, projectEvent } from "./project-sync.mjs";
-import { waitProject, guardProject, withStopHook } from "./project-wait.mjs";
+import { waitProject, guardProject, projectGuardStatus, withStopHook } from "./project-wait.mjs";
 import { observationConnection } from "./connection.mjs";
 
 const failure = (message, code = "CLOUD_OPTIONS_INVALID") => Object.assign(new Error(message), { code, execution_environment: "cloud" });
@@ -97,7 +97,9 @@ export async function mainCloud(argv) {
     const action = args.shift();
     if (action === "guard" || action === "wait") {
       if (supervisor) throw failure("A bound supervisor cannot wait for or guard an entire project.", "SUPERVISOR_CONTROL_FORBIDDEN");
-      const project = option(args, "--project"), timeout = action === "wait" ? option(args, "--timeout-ms") : undefined; exact(args, 0);
+      const project = option(args, "--project"), timeout = action === "wait" ? option(args, "--timeout-ms") : undefined;
+      const status = action === "guard" && flag(args, "--status"); exact(args, 0);
+      if (status) { output("project.guard.status", await projectGuardStatus(project)); return; }
       if (action === "guard") { console.log(JSON.stringify(await guardProject(project))); return; }
       const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
         read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),

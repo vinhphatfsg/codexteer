@@ -21,6 +21,10 @@
 - syncとwaitの結果は`continuation_command`を持ちます。続きがあれば次に実行するコマンド全体（token・`--offset`・`--event-offset`入り）、最後のページでは`null`です。`null`になるまで実行すれば全ての担当を読み切れます。
 - `project sync --continue TOKEN`は`--offset`と`--event-offset`の両方を必須にしました。どちらかがなければ`PROJECT_SYNC_OFFSET_REQUIRED`で拒否し、渡す値をエラーに示します。両方を渡す呼び出しは変わりません。tokenだけの呼び出し（`wait_sync_token`からのwait結果の復元を含む）は`--offset 0 --event-offset 0`を付けてください。
 
+`--connection desktop-cloud`（と`--connection cloud`）の`project guard --project ID --status`は、helpに載っているのに`CLOUD_OPTIONS_INVALID`で失敗していました。
+
+- `project guard --status`は、どの`--connection`でも同じ結果（`stop_hook:configured|unverified`）を返します。helpに載る他の`project`の使い方は、接続指定による違いがないことを確認しました。
+
 最後のターンが未回答の質問や失敗で終わった停止済みの担当を、syncとwaitが毎回読み続けていました。停止済みの担当には誰も回答しないため、この状態は終わらず、projectが長く続くほど読む担当が増えていました。
 
 - `project control stop`した担当は、停止後の完全な観測で終了済みか実行中ターンのないidleで、承認・質問のフラグが空と分かれば、未解決attentionが残っていても`settled`になり、次のsyncから読みません。`settled`にする回の担当行がその質問・失敗を`attention`と`events`で示し、以後の行も同じ未解決attentionと根拠のイベントを再掲します。未解決attentionは消えません。承認・質問のフラグが立っている担当、ターン実行中の担当、フラグが不明な担当は、従来どおり読み続けます。
