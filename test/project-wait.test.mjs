@@ -271,6 +271,24 @@ test("a wait between slow polls ends within about a second of its launcher going
   assert.deepEqual(stopped, { project_id: "P", changed: false, timed_out: false, reason: "launcher_exited", unreadable: [], sync: null });
   assert.ok(performance.now() - started < 3000, "not after the 15 second poll interval");
   assert.deepEqual(await listRecords("project-waits", f.storage), []);
+  // The launcher goes while a poll is still reading a slow member.
+  const headKey = createHash("sha256").update("P").digest("hex").slice(0, 40), head = await readRecord("project-sync-heads", headKey, f.storage);
+  let reading = 0, finished;
+  const slow = new Promise(resolve => { finished = resolve; });
+  parent = 4242;
+  const during = performance.now();
+  const midRead = await waitProject("P", {}, { ...f.dependencies, parentPid: () => parent, read: async (...args) => {
+    if (++reading === 1) {
+      parent = 1; f.thread.turns.push({ id: "t1", status: "completed", items: [{ id: "report", type: "agentMessage", text: "Done" }] });
+      await delay(2500);
+    }
+    try { return await f.dependencies.read(...args); } finally { if (reading === 1) finished(); }
+  } });
+  assert.equal(midRead.reason, "launcher_exited"); assert.equal(midRead.sync, null);
+  assert.ok(performance.now() - during < 2000, "the record and lock are released without waiting for the read");
+  assert.deepEqual(await listRecords("project-waits", f.storage), []);
+  await slow; await delay(50);
+  assert.deepEqual(await readRecord("project-sync-heads", headKey, f.storage), head, "the read left behind publishes nothing when it ends");
   let detachedParent = 1;
   setTimeout(() => { detachedParent = 77; }, 10);
   assert.equal((await waitProject("P", { timeoutMs: 40 }, { ...f.dependencies, parentPid: () => detachedParent })).reason, "timeout");
