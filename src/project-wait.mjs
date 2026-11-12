@@ -42,6 +42,26 @@ export async function processIdentity(pid) {
   }
 }
 
+// The pid of a process's current parent, or null when the process is gone.
+// A process whose parent exited has another parent from then on.
+export async function processParent(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  try {
+    if (process.platform === "linux") {
+      const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+      return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+    }
+    if (process.platform === "darwin") {
+      const { stdout } = await exec("/bin/ps", ["-p", String(pid), "-o", "ppid="], { timeout: 2000 });
+      return /^\d+$/.test(stdout.trim()) ? Number(stdout.trim()) : null;
+    }
+    throw failure("Project wait process inspection is supported on macOS and Linux.", "PROJECT_WAIT_IDENTITY_UNAVAILABLE");
+  } catch (error) {
+    if (["ENOENT", "ESRCH"].includes(error.code) || error.code === 1) return null;
+    throw error;
+  }
+}
+
 // Use the nearest agent ancestor, never a shared terminal/shell or project ID.
 // comm identifies native CLIs; the first script argument covers Node installs.
 // Official native install layout: https://code.claude.com/docs/en/setup#auto-updates
@@ -196,7 +216,7 @@ export async function waitProject(projectId, { timeoutMs, connection } = {}, dep
       const start = await identity(process.pid);
       if (!start) throw failure("Cannot verify this wait process's start identity.", "PROJECT_WAIT_IDENTITY_UNAVAILABLE");
       const owner = await (dependencies.orchestratorIdentity ?? (() => orchestratorIdentity(dependencies)))();
-      const record = { schema: 1, project_id: projectId, pid: process.pid, process_start: start, owner, created_at: new Date().toISOString() };
+      const record = { schema: 1, project_id: projectId, pid: process.pid, process_start: start, owner, launcher: { pid: launcher, detached: launcher <= 1 }, created_at: new Date().toISOString() };
       await writeRecord("project-waits", key, record, storage);
       let watch;
       try {
@@ -292,9 +312,14 @@ export async function guardProject(projectId, dependencies = {}) {
       && wait.project_id === projectId && typeof wait.process_start === "string" && wait.process_start);
     const owner = await (dependencies.orchestratorIdentity ?? (() => orchestratorIdentity(dependencies)))();
     if (!owner) return { systemMessage: "Project guard cannot identify the calling orchestrator session (PROJECT_GUARD_OWNER_UNVERIFIED); stop is allowed. Monitoring is unverified. Run the hook and project wait from the same supported Claude/Codex CLI session and inspect its parent process chain before relying on monitoring. No other session's wait has been accepted." };
+    // A wait whose launching command is gone ends within about a second and
+    // tells nobody, so it is not this session's wait any more. A wait that
+    // started detached, or was recorded without its launcher, counts as before.
+    const parent = dependencies.processParent ?? processParent;
+    const launched = async wait => !Number.isSafeInteger(wait.launcher?.pid) || wait.launcher.detached === true || wait.launcher.pid <= 1 || await parent(wait.pid) === wait.launcher.pid;
     for (const wait of waits) {
       if (owner && wait.owner?.pid === owner.pid && wait.owner.process_start === owner.process_start
-        && await identity(wait.pid) === wait.process_start) return {};
+        && await identity(wait.pid) === wait.process_start && await launched(wait)) return {};
     }
     return { decision: "block", reason: `Managed work remains unfinished (${unfinished.length}, including paused work). This session has no verified live wait. Use one orchestrator per CODEX_HOME, host and project; another session's wait cannot notify you. On RECORD_BUSY, arrange handoff with the owning session instead of adopting its wait or deleting its lock. Using the same saved CLI or PATH command, CODEX_HOME and host/connection route that invoked this hook, run project wait --project ${shellArgument(projectId)} --json from this agent session as a background task with completion notification; read its result and rearm it after every exit, including after relaying questions, approvals or URLs. After acceptance, use project control stop --project ${shellArgument(projectId)} --work THREAD (or --all when all work is accepted). To end orchestration at the user's request, stop its managed controls explicitly.` };
   } catch (error) {

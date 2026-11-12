@@ -330,3 +330,30 @@ test("a record busy inside a running wait keeps its own message, not another ses
   assert.doesNotMatch(error.message, /already owned|another session|hand off/i);
   await assert.doesNotReject(waitProject("P", { timeoutMs: 0 }, f.dependencies), "the wait lock was released");
 });
+
+test("guard does not count a wait whose launcher is gone, and still counts one launched, detached or recorded without a launcher", async t => {
+  const f = await fixture(t);
+  const recorded = async () => { for (let n = 0; n < 200 && !(await listRecords("project-waits", f.storage)).length; n++) await delay(5); return (await listRecords("project-waits", f.storage))[0]; };
+  let parent = 4242;
+  const guard = (overrides = {}) => guardProject("P", { ...f.dependencies, processParent: async () => parent, ...overrides });
+  const waiting = waitProject("P", {}, { ...f.dependencies, pollMs: 15000, parentPid: () => parent });
+  assert.deepEqual((await recorded()).launcher, { pid: 4242, detached: false });
+  assert.deepEqual(await guard(), {}, "a wait whose launcher lives allows the stop");
+  const unknown = await guard({ processParent: async () => { throw Object.assign(new Error(), { code: "EPERM" }); } });
+  assert.equal(unknown.decision, undefined); assert.match(unknown.systemMessage, /could not verify.*EPERM/);
+  // Stopping the background task ends only the shell that launched the wait.
+  parent = 1;
+  assert.equal((await guard()).decision, "block", "the wait is still alive, but nobody will be told its result");
+  assert.equal((await projectGuardStatus("P", { env: {}, processParent: async () => { throw new Error("not inspected"); } })).stop_hook, "unverified");
+  assert.equal((await waiting).reason, "launcher_exited");
+  assert.equal((await guard()).decision, "block");
+
+  const detached = waitProject("P", { timeoutMs: 400 }, { ...f.dependencies, pollMs: 15000, parentPid: () => parent });
+  assert.deepEqual((await recorded()).launcher, { pid: 1, detached: true });
+  parent = 77;
+  assert.deepEqual(await guard(), {}, "a wait that started detached has no launcher to lose");
+  assert.equal((await detached).reason, "timeout");
+
+  await writeRecord("project-waits", "earlier", { schema: 1, project_id: "P", pid: process.pid, process_start: "same-start", owner: await f.dependencies.orchestratorIdentity() }, f.storage);
+  assert.deepEqual(await guard({ processParent: async () => { throw new Error("not inspected"); } }), {}, "a record without a launcher is counted as before");
+});
