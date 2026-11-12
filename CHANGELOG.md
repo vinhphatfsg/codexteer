@@ -48,9 +48,10 @@ Desktop Cloudのタスクは、読むたびに全ターンを項目ごと取得�
 
 - Desktop Cloudの`read`・`watch`・`status`・`project sync`・`project wait`・`work tell`は、ターンを新しい順に1ターンずつ取得し、cursorが指すターンで止めます。1回の読み取りは、cursorのターンとそれより新しいターンの分だけになります。結果の`history_scope`は`tail-turns`です。
 - cursorはv3になります。v1 cursorと同じ判定を、cursorのターンから最新までに適用するため、返るイベント・`has_more`・`changed`は全履歴を読んだ場合と同じです。最新ターンが完了済みで全て読み終え、状態も変わらなければ、そのターンのIDと状態だけを確認します（`itemsView: notLoaded`）。
-- 完了・失敗・中断・取消したターンは後から変わらず、ターンは末尾にだけ追加される前提です。cursorのターンとそれより新しいターンは毎回cursorと照合します。cursorのターンが消えた場合は、開始時刻から古い履歴を読まずに判定し、従来どおり`STALE_CURSOR`（history gap）になります。新しい順でない一覧、同じターンや位置の繰り返しは`DESKTOP_CLOUD_PROTOCOL_ERROR`で拒否します。cursorのターンより前への挿入と、それより古い完了済みターンの書き換えは検出しません。最新の完了済みターンの項目の書き換えは、次にそのターンを取得した読み取りで検出します。
+- 完了・失敗・中断・取消したターンは後から変わらず、ターンは末尾にだけ追加される前提です。cursorのターンとそれより新しいターンは毎回cursorと照合します。cursorのターンが消えた場合は、開始時刻から古い履歴を読まずに判定し、従来どおり`STALE_CURSOR`（history gap）になります。新しい順でない一覧、同じターンや位置の繰り返しは`DESKTOP_CLOUD_PROTOCOL_ERROR`で拒否します。cursorのターンより前への挿入と、それより古い完了済みターンの書き換えは検出しません。最新の完了済みターンのIDと状態が変わらない間は、後から追加された項目や項目の書き換えも読みません。新しいターンが始まるかタスクの状態が変わった後、そのターンを取得する読み取りで返すか検出します。
+- 完了していないターンは、そこからcursorのターンを進めません。それより新しいターンが続く場合、読み取りは最新からそのターンまで1ターンずつ取得し、1000回を超えると失敗します。
 - `--since`なしの初回の`read`は`--limit`件に達した所で止まり、最古のターンまで読まなければ`omitted_older_events`は`null`です。`work start`と`project sync`は従来どおり、初回の境界を証明できない担当を`WORK_INITIAL_HISTORY_GAP`にします。
-- 前の版が保存したv1 cursor（担当のcursor、waitの基準、`work start`の記録、`--based-on`）はそのまま使えます。Desktop Cloudではv1 cursorを一度だけ全履歴で読み、同じイベントを返してv3 cursorを返します。担当のcursorは次の完全な`project sync`でv3になります。waitの基準は、waitが返るか完全な`project sync`が公開するまでv1のままで、その間のwaitは照会ごとに全履歴を読みます。全履歴がすでに受信上限を超えている担当のv1 cursorは読めないままです。`--full-history`は従来どおり全取得とv1 cursorで、v3 cursorとは併用できません（`OPTIONS_INVALID`）。
+- 前の版が保存したv1 cursor（担当のcursor、waitの基準、`work start`の記録、`--based-on`）はそのまま使えます。Desktop Cloudではv1 cursorを一度だけ全履歴で読み、同じイベントを返してv3 cursorを返します。担当のcursorは、その担当を最後まで読めた`project sync`が公開するとv3になります。他の担当が読めなくても変わりません。waitの基準は、waitが返るか、全ての担当を読めた`project sync`が公開するまでv1のままで、その間のwaitは照会ごとにその担当の全履歴を読みます。全履歴がすでに受信上限を超えている担当のv1 cursorは読めないままです。`--full-history`は従来どおり全取得とv1 cursorで、v3 cursorとは併用できません（`OPTIONS_INVALID`）。
 - 送信前の状態確認は、タスクの情報と最新ターン1つ（項目なし）だけを読み、そのターンをsteerの対象にします。v3の`--based-on`はcursorのターン以後だけで鮮度を確認し、v1の`--based-on`は従来どおり全履歴で確認します。
 - 最新ターン1つだけで受信上限（16 MiB）を超える担当は、従来どおり`PAYLOAD_TOO_LARGE`で読めません。`history check`と作成の照合は従来どおり全履歴を読みます。
 - 0.24.x以前に戻すと、このversionが保存したv3 cursorは読めず`STALE_CURSOR`になります。担当のcursor・waitの基準・`work start`の記録がv3の担当は、戻したversionではhistory gapになり、`work tell`は`WORK_TELL_SYNC_INCOMPLETE`になります。保存されたcursorは変わらないため、このversionに戻せば続きから読めます。
