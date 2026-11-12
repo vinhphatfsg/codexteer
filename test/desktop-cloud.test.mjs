@@ -19,7 +19,7 @@ const metadata = () => ({ id, turns: [], status: { type: "idle" }, historyMode: 
 const client = (calls, fail) => ({ close() {}, async request(method, params) {
   calls.push({ method, params });
   if (method === "thread/read") return { thread: metadata() };
-  if (method === "model/list") return { data: [{ model: "fixture-default", isDefault: true }] };
+  if (method === "model/list") return { data: [{ model: "fixture-default", isDefault: true, defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "high" }] }] };
   if (method === "thread/start") return { thread: { ...metadata(), id } };
   if (method === "thread/name/set") return {};
   if (method === "turn/start") { if (fail) throw fail(); return { turn: { id: turn } }; }
@@ -83,11 +83,12 @@ test("internal mutation errors stay unknown but invalid parameter rejection is n
 test("creation keeps environment binding and default model and never claims project membership", async t => {
   const storage = await profile(t), calls = [];
   const deps = { ...storage, environments: async () => ({ environments: [{ id: config, name: "Fixture" }] }), connect: async () => client(calls) };
-  await assert.rejects(createDesktopCloudTask(config, "test", { project: "local-fixture" }, { connect: () => assert.fail("no connection"), environments: () => assert.fail("no auth") }), { code: "DESKTOP_CLOUD_PROJECT_UNAVAILABLE" });
+  await assert.rejects(createDesktopCloudTask(config, "test", { project: "local-fixture" }, { ...storage, connect: () => assert.fail("no connection"), environments: () => assert.fail("no auth") }), { code: "DESKTOP_CLOUD_PROJECT_UNAVAILABLE" });
   const result = await createDesktopCloudTask(config, "read-only verification", { title: "Fixture" }, deps);
   assert.equal(result.project_membership, "not_requested"); assert.equal(result.delivery_status, "accepted"); assert.equal(result.thread_id, id);
   const start = calls.find(c => c.method === "thread/start").params, send = calls.find(c => c.method === "turn/start").params;
   assert.equal(start.model, "fixture-default"); assert.equal(start.environments[0].environmentConfigId, config); assert.equal(send.environments[0].environmentConfigId, config); assert.equal(send.deferredEnvironment, true); assert(!("projectId" in start)); assert(!("sandbox" in start));
+  assert.equal(start.config.model_reasoning_effort, "low"); assert.equal(send.effort, "low"); assert.equal(send.model, "fixture-default");
   assert.equal((await desktopCloudReceipt(result.attempt_id, storage)).turn_id, turn);
 });
 test("unknown delivery survives exit, blocks subsequent sends, and creation retains the target", async t => {

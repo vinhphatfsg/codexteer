@@ -5,6 +5,8 @@ import { listProjects as listDesktopProjects } from "./projects.mjs";
 import { isDesktopCloudTask, desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
 import { desktopCloudConnection, desktopCloudEnvironments } from "./desktop-cloud-api.mjs";
 import { createDesktopCloudTask, listDesktopCloudTasks, desktopCloudReceipt, reconcileDesktopCloudCreation } from "./desktop-cloud.mjs";
+import { desktopCloudModels, readCloudModelDefaults, setCloudModelDefaults, resetCloudModelDefaults, resolveCloudModelSelection, validateCloudModelOptions } from "./desktop-cloud-models.mjs";
+import { pickCloudModel } from "./cloud-model-picker.mjs";
 import { isCloudTask, selectedCloudInvocation } from "./task-id.mjs";
 import { cloudTaskId } from "./cloud-id.mjs";
 import { normalizeThreadId } from "./thread-id.mjs";
@@ -91,7 +93,7 @@ export async function mainCloud(argv) {
     return id;
   };
   const dependencies = desktopCloud ? desktopCloudConnection() : cloudConnection();
-  if (desktopCloud && await desktopCloudCommands(command, args, { supervisor, output, bound, dependencies })) return;
+  if (desktopCloud && await desktopCloudCommands(command, args, { supervisor, output, bound, dependencies, json })) return;
 
   if (command === "project") {
     const action = args.shift();
@@ -135,16 +137,19 @@ export async function mainCloud(argv) {
     if (!desktopCloud) throw failure("work start requires shared or desktop-cloud; the legacy cloud route is unsupported.", "WORK_START_CONNECTION_UNSUPPORTED");
     if (action !== "start" || supervisor) throw failure("Expected an unbound work start command.");
     const project = option(args, "--project"), title = option(args, "--title"), environment = option(args, "--environment"), root = option(args, "--root");
+    const model = option(args, "--model"), thinking = option(args, "--thinking");
+    validateCloudModelOptions({ model, thinking });
     const end = args.includes("--") ? args.indexOf("--") : args.length;
     rejectUnknownOptions(args.slice(0, end), "work start", "Put literal flags after --.", failure);
     const order = message(args);
-    const data = await startWork({ project, title, order, root, environment, connection: "desktop-cloud" }, {
+    const data = await startWork({ project, title, order, root, environment, model, thinking, connection: "desktop-cloud" }, {
+      resolveModelSelection: options => resolveCloudModelSelection(options),
       resolveEnvironment: async selector => {
         const matches = (await desktopCloudEnvironments()).environments.filter(e => e.id === selector || e.name === selector);
         if (matches.length !== 1) throw failure("Select exactly one accessible Desktop Cloud environment configuration.");
         return matches[0];
       },
-      create: ({ environmentConfigId, prompt, title: name, attemptId }) => createDesktopCloudTask(environmentConfigId, prompt, { title: name, attemptId }),
+      create: ({ environmentConfigId, prompt, title: name, attemptId, modelSelection }) => createDesktopCloudTask(environmentConfigId, prompt, { title: name, attemptId, modelSelection }),
       reconcile: record => reconcileDesktopCloudCreation(record),
       read: (threadId, options) => observeThread(threadId, { ...options, limit: 1000 }, dependencies),
     });
@@ -337,9 +342,30 @@ export async function mainCloud(argv) {
   output("send", receipt);
 }
 
-async function desktopCloudCommands(command, args, { supervisor, output, bound, dependencies }) {
-  if (!["projects", "environments", "threads", "thread", "doctor", "diff", "open"].includes(command)) return false;
-  if (supervisor && ["projects", "environments", "threads", "thread"].includes(command)) throw failure("A supervisor cannot enumerate or create other tasks.", "SUPERVISOR_CONTROL_FORBIDDEN");
+async function desktopCloudCommands(command, args, { supervisor, output, bound, dependencies, json }) {
+  if (!["models", "projects", "environments", "threads", "thread", "doctor", "diff", "open"].includes(command)) return false;
+  if (supervisor && ["models", "projects", "environments", "threads", "thread"].includes(command)) throw failure("A supervisor cannot change defaults, enumerate or create other tasks.", "SUPERVISOR_CONTROL_FORBIDDEN");
+  if (command === "models") {
+    const action = args.shift() ?? "select";
+    if (action === "set") {
+      const model = option(args, "--model"), thinking = option(args, "--thinking"); exact(args, 0);
+      output("models.set", await setCloudModelDefaults({ model, thinking }));
+    } else {
+      exact(args, 0);
+      if (action === "select") {
+        if (json) throw failure("models select is interactive. Use models list --json and models set --model MODEL --thinking EFFORT --json.");
+        try { await pickCloudModel(); }
+        catch (error) {
+          if (error.code !== "DESKTOP_CLOUD_MODEL_CANCELLED") throw error;
+          process.stdout.write("\n選択を中止しました。設定は変更していません。\n");
+        }
+      } else if (action === "list") output("models.list", { models: await desktopCloudModels(), saved: await readCloudModelDefaults() });
+      else if (action === "show") output("models.show", { saved: await readCloudModelDefaults(), applies_to: "new-desktop-cloud-threads" });
+      else if (action === "reset") output("models.reset", await resetCloudModelDefaults());
+      else throw failure("Expected models select|list|show|set|reset.");
+    }
+    return true;
+  }
   if (["projects", "environments"].includes(command)) {
     exact(args, 1); if (args[0] !== "list") throw failure("Expected list.");
     if (command === "projects") { output("projects.list", { projects: (await listDesktopProjects()).flatMap(row => row.desktop_project_ids.map(id => ({ project_id: id, canonical_project_id: row.project_id, name: row.name, roots: row.roots }))), catalog_source: "desktop-app-server", assignment_requires_exact_desktop_executor: true }); return true; }
@@ -354,9 +380,10 @@ async function desktopCloudCommands(command, args, { supervisor, output, bound, 
     const action = args.shift();
     if (action === "create") {
       const environment = option(args, "--environment"), project = option(args, "--project"), title = option(args, "--title"), dryRun = flag(args, "--dry-run");
+      const model = option(args, "--model"), thinking = option(args, "--thinking");
       const end = args.includes("--") ? args.indexOf("--") : args.length;
       rejectUnknownOptions(args.slice(0, end), "Desktop Cloud creation", "Put an instruction that starts with -- after --.", failure);
-      output("thread.create", await createDesktopCloudTask(environment, message(args), { project, title, dryRun })); return true;
+      output("thread.create", await createDesktopCloudTask(environment, message(args), { project, title, dryRun, model, thinking })); return true;
     }
     if (action === "assign") { const project = option(args, "--project"); exact(args, 1); const data = await assignDesktopCloudProject(await bound(args[0]), project); output("thread.assign", data); if (data.verification_status !== "verified") process.exitCode = 1; return true; }
     const resolveUnknown = action === "receipt" && flag(args, "--resolve-unknown"), note = resolveUnknown ? option(args, "--note") : undefined; exact(args, 1);

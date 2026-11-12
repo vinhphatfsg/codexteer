@@ -46,6 +46,8 @@ npx -y codexteer@0.18.0 supervise <thread-id>
 
 ### DesktopのCloud環境を使う
 
+新規 Cloud スレッドの既定モデル・エフォートは `codexteer --connection desktop-cloud models select` で現在の一覧から選べます。保存後の `work start`／`thread create` に即時反映され、再起動は不要です。非対話用の一覧・保存・解除は `help models` を参照してください。
+
 DesktopのCloud環境構成は、`codexteer --connection desktop-cloud environments list --json`で取得します。新規作成は`thread create --environment <ID_OR_EXACT_NAME>`、継続・監視・監督は`durable_`付きIDまたは`hostId=durable`付きリンクで共通コマンドを使います。所属情報と登録APIの可否は`doctor --thread ... --project ...`で区別します。公式の署名付き`thread assign`は対象がそのDesktopの実行環境を使う場合に限り利用でき、通常のCloud環境では`--project`付き作成を現在も事前拒否します。[操作・確認済み範囲と制限](docs/desktop-cloud.md)
 
 タスクと明示した接続が合わない場合は拒否し、エラー文に修正用の`--connection`、JSONの`error.expected_connection`に修正候補、`error.connection`に今回の指定値を返します。`durable_`付きID・`hostId=durable`付きリンクには`--connection desktop-cloud`、Web Cloudの`task_`付きID・公式リンクには`--connection cloud`を使います。ローカルUUIDには既定の`--connection shared`を候補として示します。ローカルの観測には`--connection desktop`も利用できますが、送信には使えません。明示指定を自動で切り替えることはありません。
