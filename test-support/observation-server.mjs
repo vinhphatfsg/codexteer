@@ -13,7 +13,7 @@ export function observationServer(thread, beforeRequest = () => {}) {
     assert.ok(["thread/items/list", "thread/turns/list"].includes(method));
     const scope = `${method}:${p.turnId ?? "all"}`;
     const rows = method === "thread/items/list" ? thread.turns.filter(t => !p.turnId || t.id === p.turnId).flatMap(t => t.items.map(item => ({ item, turnId: t.id }))) : thread.turns.map(t => {
-      if (p.itemsView === "full") return t;
+      if (p.itemsView === "full") return { ...t, itemsView: "full" };
       assert.equal(p.itemsView, "notLoaded"); return { ...t, items: [], itemsView: "notLoaded" };
     });
     const sorted = p.sortDirection === "desc" ? [...rows].reverse() : rows;
