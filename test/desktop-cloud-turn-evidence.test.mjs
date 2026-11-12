@@ -70,6 +70,28 @@ test("turns that do not prove their state, and a thread status that is neither i
   assert.equal((await empty.send(ID, "Open the thread.", { newTurn: true })).delivery_status, "accepted", "a thread with no turn is idle");
 });
 
+test("an older turn still running behind an ended newest turn refuses a new turn, as its row is active", async t => {
+  const f = await member(t);
+  f.append([user("first order")], { status: "inProgress" }); f.endedButActive();
+  assert.equal((await f.sync()).works[0].execution, "active");
+  await assert.rejects(f.send(ID, "Start a turn.", { newTurn: true }), { code: "STALE_OBSERVATION" });
+  await assert.rejects(tellWork(ID, "Continue.", { newTurn: true }, { storage: f.storage, read: f.read, send: f.send }), { code: "WORK_TELL_NEW_TURN_INVALID" });
+  assert.equal(f.methods().includes("turn/start"), false);
+});
+
+test("a new turn after an active thread status is proved from every turn's status, without reading items", async t => {
+  const long = await member(t);
+  for (let n = 0; n < 250; n++) long.append([user(`order ${n}`), agent(`report ${n}`)]);
+  long.state.status = "active"; long.resetServed();
+  assert.equal((await long.send(ID, "Start a turn.", { newTurn: true })).delivery_status, "accepted");
+  assert.deepEqual([long.state.served.turns, long.state.served.ids], [0, 251], "the newest turn, then every turn, as ids and statuses only");
+  const unlisted = await member(t); unlisted.endedButActive(); unlisted.state.rejectNotLoaded = true;
+  await assert.rejects(unlisted.send(ID, "Start a turn.", { newTurn: true }), { code: "STALE_OBSERVATION" });
+  assert.equal(unlisted.methods().includes("turn/start"), false, "a service that lists no turn without its items proves nothing");
+  unlisted.state.status = "idle";
+  assert.equal((await unlisted.send(ID, "Start a turn.", { newTurn: true })).delivery_status, "accepted", "an idle thread status needs no such proof, as before");
+});
+
 test("status, read and watch --until idle say what the rows say, and keep the thread status", async t => {
   const f = await member(t); f.endedButActive();
   const ended = await f.read(ID, {});
