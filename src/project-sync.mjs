@@ -7,6 +7,7 @@ import { listManagedThreads, updateManagedThreadCursor, managedMembershipDigest 
 import { getSupervisor } from "./supervision.mjs";
 import { normalizeTaskId } from "./task-id.mjs";
 import { readRecord, writeRecord, withStoreLock } from "./store.mjs";
+import { publicRpcDetail } from "./rpc-error.mjs";
 import { attentionCoverage, unobservedAttention, turnEvidence, turnRuns } from "./attention-coverage.mjs";
 
 const hash = value => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
@@ -118,7 +119,7 @@ function outputSize(result) {
 function compactWork(work) {
   return { thread_id: work.thread_id, group: work.group, execution: work.execution, attention: work.attention,
     observation: work.observation, complete: work.complete, history_gap: work.history_gap, retry_after_ms: work.retry_after_ms,
-    error: work.error, attention_repeated: work.attention_repeated, resolution_unconfirmed: work.resolution_unconfirmed,
+    error: work.error, ...(work.error_detail ? { error_detail: publicRpcDetail(work.error_detail, { message: false }) } : {}), attention_repeated: work.attention_repeated, resolution_unconfirmed: work.resolution_unconfirmed,
     ...(work.attention_coverage ? { attention_coverage: work.attention_coverage } : {}),
     detail_token: work.detail_token, details_omitted: true,
     // The operator's reason is unbounded; a compact row must always fit.
@@ -327,6 +328,8 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       state.pages++; state.cursor = page.cursor; state.events.push(...(page.events ?? [])); state.latest = page; state.complete = !page.has_more; return page.has_more;
     } catch (error) {
       state.complete = false; state.error = error.code ?? "OBSERVATION_FAILED"; state.history_gap = gapCodes.has(error.code);
+      // What the backend said when it rejected the read, bounded where it was received.
+      state.errorDetail = publicRpcDetail(error);
       // Web Cloud maps its throttling to CONNECTION_FAILED and keeps the cause.
       if ([error.code, error.cause_code].includes("CLOUD_RATE_LIMITED") || error.http_status === 429) state.retry_after_ms = error.retry_after_ms ?? 15000;
       // A backend that asks for a retry, or a turn that started during the read,
@@ -375,7 +378,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     const repeatedEvents = currentAttention?.events.filter(e => !eventSummaries.some(s => s.token === e.token)) ?? [];
     const coverage = attentionCoverage(state.latest, state.member.connection);
     works.push({ thread_id: state.member.thread_id, title: state.latest?.title ?? null, ...axes, ...(coverage ? { attention_coverage: coverage } : {}), history_gap: state.history_gap,
-      retry_after_ms: state.retry_after_ms, complete: state.complete, cursor: state.complete ? state.cursor : null, events: [...repeatedEvents, ...eventSummaries], error: state.error,
+      retry_after_ms: state.retry_after_ms, complete: state.complete, cursor: state.complete ? state.cursor : null, events: [...repeatedEvents, ...eventSummaries], error: state.error, ...(state.errorDetail ? { error_detail: state.errorDetail } : {}),
       turn_identity: state.latest?.latest_turn_id ?? state.latest?.current_turn_id ?? state.latest?.turn_id ?? state.latest?.active_turn_id ?? null,
       history_notes: historical[state.member.thread_id] ?? [],
       resolution_unconfirmed: !!currentAttention, attention_repeated: !!priorAttention && !!currentAttention });

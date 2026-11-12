@@ -168,6 +168,7 @@ export const topics = {
       "v2 cursorに--full-historyを付けるとOPTIONS_INVALID。--full-historyを外して続けるか、--sinceなしで全取得を始める。",
       "omitted_older_events:nullは省略した古い項目の件数が未集計という意味。件数のための全取得はしない。",
       "cursorは対象タスク・ホスト・remote transportに結び付く。別の対象に渡すとSTALE_CURSOR。",
+      "サーバーが要求を拒否したエラー（RPC_REJECTED）は、JSONのerrorにrpc_code、data.reasonが短い識別子ならrpc_reason（serverShuttingDownなど）、読み取りの拒否ならサーバーのmessageをrpc_message（300バイトまで）で返す。--jsonなしは「rpc: CODE REASON: MESSAGE」の行を出す。指示文を含む要求（送信・作成）の拒否ではrpc_messageを返さない。",
       "観測対象は履歴APIに現れた項目だけ。",
       "Desktop Cloudでは、実行中ターンの発言・コマンド・質問はターンが終わるまで履歴に現れない。その間はattention_coverage:running_turn_unobservedを返し、attentionが[]でも質問・承認待ちがないことを示さない。Codexの画面で確認する。ターンが終わると返さない。",
       "Codexの版によっては、実行開始の通知後、コマンドが完了してから履歴に現れる場合がある。",

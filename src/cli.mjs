@@ -9,6 +9,7 @@ import { listLocalThreads } from "./thread-store.mjs";
 import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, listInstructions } from "./journal.mjs";
 import { launchDesktopUpdate, desktopUpdateStatus } from "./update.mjs";
 import { appServerDoctor, startDesktop } from "./launcher.mjs";
+import { publicRpcDetail } from "./rpc-error.mjs";
 import { VERSION, helpData, renderHelp, renderErrors, errorRemedy, topicFor } from "./help.mjs";
 import { observeThread, printObservation } from "./observe.mjs";
 import { monitorCommand } from "./monitor.mjs";
@@ -46,7 +47,7 @@ function success(command, data, json) {
 
 export function fail(error, json, argv = []) {
   const message = error instanceof Error ? error.message : String(error);
-  const remedy = errorRemedy(argv, error.code);
+  const remedy = errorRemedy(argv, error.code), rpc = publicRpcDetail(error);
   if (json) console.log(JSON.stringify({ ok: false, ...(error.watch ? { command: "watch", data: error.watch } : {}), error: {
     message, code: error.code, ...remedy, ...hostFields(), delivery_status: error.delivery_status,
     operation: error.operation, capability: error.capability,
@@ -58,6 +59,7 @@ export function fail(error, json, argv = []) {
       http_status: error.http_status, retry_after_ms: error.retry_after_ms,
     } : {}),
     sent: error.sent, thread_id: error.thread_id, rpc_code: error.rpc_code ?? error.rpcCode,
+    rpc_message: rpc?.rpc_message, rpc_reason: rpc?.rpc_reason,
     message_id: error.message_id, client_message_id: error.client_message_id, journal_update_required: error.journal_update_required,
     existing_message_id: error.existing_message_id, unknown_options: error.unknown_options,
     existing_attempt_id: error.existing_attempt_id, existing_receipt_path: error.existing_receipt_path,
@@ -75,6 +77,7 @@ export function fail(error, json, argv = []) {
   } }));
   else {
     console.error(`codexteer: ${message}`);
+    if (rpc) console.error(`rpc: ${rpc.rpc_code}${rpc.rpc_reason ? ` ${rpc.rpc_reason}` : ""}${rpc.rpc_message ? `: ${rpc.rpc_message}` : ""}`);
     for (const line of remedy?.usage ?? []) console.error(`使い方: codexteer ${line}`);
     if (remedy?.action) console.error(`対処: ${remedy.action}`);
     for (const key of ["storage_bytes", "required_bytes", "limit_bytes"]) if (Number.isSafeInteger(error[key])) console.error(`${key}: ${error[key]}`);
@@ -587,7 +590,7 @@ async function mainOnTarget(argv) {
           console.log(`  observation compatibility: ${report.compatibility.status} (${report.compatibility.scope})`);
           for (const [method, status] of Object.entries(report.compatibility.api_checks)) console.log(`    ${method}: ${status}`);
           if (target === undefined) console.log("  Verify a target: codexteer doctor --thread <THREAD> --json");
-          if (report.failure) console.log(`  failure: ${report.failure.code}${report.failure.rpc_code === null ? "" : ` (RPC ${report.failure.rpc_code})`}`);
+          if (report.failure) console.log(`  failure: ${report.failure.code}${report.failure.rpc_code === null ? "" : ` (RPC ${report.failure.rpc_code}${report.failure.rpc_reason ? ` ${report.failure.rpc_reason}` : ""}${report.failure.rpc_message ? `: ${report.failure.rpc_message}` : ""})`}`);
         }
         if (report.remediation) console.log(`\n${report.remediation}`);
       }

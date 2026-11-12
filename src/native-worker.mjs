@@ -20,6 +20,6 @@ try {
   const result = await nativeRpc(endpoint, nativeRequest(action, args, context, callId), { timeoutMs });
   process.stdout.write(JSON.stringify({ ok: true, result }));
 } catch (error) {
-  process.stdout.write(JSON.stringify({ ok: false, error: { message: error.message, code: error.code ?? "NATIVE_PROTOCOL_ERROR", uncertain: !!error.uncertain, rpcCode: Number.isSafeInteger(error.rpcCode) ? error.rpcCode : undefined } }));
+  process.stdout.write(JSON.stringify({ ok: false, error: { message: error.message, code: error.code ?? "NATIVE_PROTOCOL_ERROR", uncertain: !!error.uncertain, rpcCode: Number.isSafeInteger(error.rpcCode) ? error.rpcCode : undefined, rpcReason: typeof error.rpcReason === "string" ? error.rpcReason : undefined } }));
   process.exitCode = 1;
 }

@@ -99,6 +99,9 @@ export async function nativeRpc(endpoint, request, { timeoutMs = 30000 } = {}) {
         if (response.error) {
           const error = failure("Desktop rejected the native request. Inspect the receipt before retrying.", "NATIVE_REJECTED");
           if (Number.isSafeInteger(response.error.code)) error.rpcCode = response.error.code;
+          // A native call can carry an instruction, so only a short identifier is kept.
+          const reason = response.error.data?.reason;
+          if (typeof reason === "string" && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(reason)) error.rpcReason = reason;
           return finish(error);
         }
         if (!Object.hasOwn(response, "result")) throw failure("Native response has no result.");

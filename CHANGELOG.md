@@ -21,6 +21,14 @@ Desktop Cloudのスレッドは、最後のターンが終わった後も`status
 - idleの担当を`settled`にするのは、全てのターンが終わったと確認できた場合だけになりました。実行中ターンの数が0でも最新ターンが実行中か状態不明の担当は、どの接続でも読み続けます。これまでは`settled`になることがありました。
 - shared・Web Cloudの担当の`execution`は変わりません。
 
+サーバーが要求を拒否したエラー（`RPC_REJECTED`）は、JSON-RPCのcodeだけを返し、サーバーのmessageと`data.reason`を捨てていました。過負荷（-32001）やサーバーの停止中（-32600、`serverShuttingDown`）のような一時的な拒否を、結果から見分けられませんでした。
+
+- `RPC_REJECTED`のエラーは、`--json`の`error`に`rpc_code`に加えて`rpc_reason`と`rpc_message`を返します。`rpc_reason`は`data.reason`が短い識別子のときだけ、`rpc_message`は読み取り（`thread/read`・`thread/turns/list`など）の拒否のときだけ返します。`--json`なしでは`rpc: CODE REASON: MESSAGE`の行を出します。
+- `rpc_message`は1行・300バイトまでに切り詰め、認証情報に見える長い文字列を伏せます。指示文や題名を含む要求（送信・作成）の拒否では、サーバーが要求を引用しうるため`rpc_message`を返しません。エラー本文（`message`）は変わりません。
+- `project sync`と`project wait`の担当行は、サーバーが読み取りを拒否した場合に`error_detail`（`rpc_code`・`rpc_reason`・`rpc_message`）を持ちます。byte budgetに収まらず詳細を省いた行では`rpc_code`と`rpc_reason`だけです。
+- `doctor`の`failure`も`rpc_reason`と`rpc_message`を返します。
+- どのエラーを再試行するかは変わりません。
+
 `project wait`が、1回だけ読み取りに失敗した担当を`observation_failed`で返していました。担当が多く長く続くprojectでは、すぐ後に読める担当の失敗のたびにオーケストレーターが起こされていました。
 
 - `project wait`は、同じ担当が2回以上の照会で続けて読めず、最初の失敗から60秒以上経ったときにだけ、その担当を`observation_failed`で返します。1回の読み取り失敗は担当の状態を示さず、次に読めたときにcursor以後の出来事を受け取れるため、返しません。同じ照会が他の理由で返る場合は、その結果の`unreadable`で`reported:true`にし、`observation_failed`では返しません。この経過はtimeoutや他の理由で返った後に再開したwaitにも引き継ぎ、途中でwaitの照会が完全に読めれば数え直します。通常のsyncが読めただけでは数え直しません。

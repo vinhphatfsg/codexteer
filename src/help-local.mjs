@@ -222,7 +222,7 @@ export const topics = {
       "codexteer doctor --backend ui --json",
     ],
     notes: [
-      "診断の失敗はエラー終了ではなく、failure（code・rpc_code・method、該当時はcapability）とremediationで返す。上のエラーコードはfailure.codeに入る。",
+      "診断の失敗はエラー終了ではなく、failure（code・rpc_code・method、該当時はrpc_reason・rpc_message・capability）とremediationで返す。上のエラーコードはfailure.codeに入る。",
       "readyはchecksがすべて真で失敗がないこと。checksはmacOS・同梱CLI・Desktop・runtime・初期化・同梱Node（desktop接続では省略）、--thread時はobservation。",
       "codex_steer_compatibilityはパッケージ名と版の比較（matched/mismatch/unverified）で、違いだけではreadyに影響しない。",
       "cli_version_statusは同梱CLIと起動中wrapperのCLIの版の一致（matched/mismatch/unverified）。",
@@ -514,6 +514,7 @@ export const topics = {
       "waitの基準はwaitが返した時と完全なsyncの公開時に、読めた担当だけ更新する。読めない担当は前の基準を保つ。通常のsyncが不完全なら基準を進めない。最初の基準がなければinitial_syncを返す。waitはprojectごとに1つ。同じ変化を再通知せず、最新waitの結果は次のsyncのwait_sync_tokenからsync --continueで復元できる。",
       "読めない担当がいてもwaitは読めた担当の変化を返す（sync.complete:falseでもchanged:true）。1回の読み取り失敗では返らない。同じ担当が2回以上の照会で続けて読めず、最初の失敗から60秒以上経つと、その担当を報告する（timeoutや他の理由で返った後に再開したwaitにも引き継ぐ）。他に返す理由がなければ1回だけobservation_failedを返し、同じ照会が他の理由で返るならその結果でreported:trueにする。報告した担当は、codeが変わっても途中で読めても再び返さず、履歴も保存しない。他の理由で返った結果にreported:falseで載った担当は、最初の失敗から数え続ける。waitの結果か通常のsyncがその担当を完全に読めた状態で示した後に、読めない状態がまた続けば、新しい失敗としてもう一度報告する。completeにするためにsyncやwaitを繰り返さず、結果を読んだらwaitを再開する。unreadableは直近の照会の結果。reported:falseの担当はその照会で失敗しただけで、waitは読み続ける。reported:trueの担当は、次に読めるまでターン終了・質問・承認待ちを検知しない。status THREADやその担当のbranchで別に確認してユーザーへ報告し、waitを静かにするためにstopしない。--exclude-unreadableは検収してstopした担当にだけ使う。",
       "Desktop Cloudの担当は、ターンの実行中は開始時の指示しか読めず、その間の質問・承認待ち・進捗を観測できない。その担当の行にattention_coverage:running_turn_unobservedを付け、attention_unobservedに並べる。attention・group・completeの値は変えない。この担当に「待っているものはない」とは言えないので、Codexの画面で確認する。ターンが終わった後の質問は従来どおり返す。attention_unobservedはページ本体の外に付き、output_bytesとbyte budgetに含めない。",
+      "サーバーが読み取りを拒否した担当（error:RPC_REJECTED）の行は、error_detail（rpc_code、サーバーが返した場合はrpc_reason・rpc_message）を持つ。byte budgetに収まらず詳細を省いた行のerror_detailはrpc_codeとrpc_reasonだけ。",
       "フラグの解除・再出現は読了済みcursorと別に保存し、timeout後も再要求を検知する。attention:nullなど現在のフラグ不明はPROJECT_WAIT_ATTENTION_UNKNOWNの読み取り失敗として扱い、その担当のcursorと基準を進めない。",
       "未完了の担当（paused・binding不在も含む）がいる間、waitを終了通知のあるバックグラウンドタスクとして動かし、終了後は結果を読んで再開する。質問・承認・URLの伝達後も続け、検収後にcontrol stopする。guardはpidと起動の同一性を照合し、異常終了記録を許可に使わない。macOS/Linux対応。",
       "同じCODEX_HOME・host・projectは1オーケストレーターで扱う。guardは最も近いClaude/Codex CLI親プロセスのpid・起動識別が一致するwaitだけを数える。所有者不明・旧版のwaitは許可に使わない。別セッションのwaitが生きていても停止は拒否し、重複waitはRECORD_BUSYのまま引継ぎを案内する。所有セッションでwaitを終了してから再開し、lock削除やcontrol stopで競合を迂回しない。",
