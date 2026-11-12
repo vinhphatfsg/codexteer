@@ -16,6 +16,11 @@
 - `project wait`は、自分を起動したコマンド（親プロセス）が終了すると、1秒以内に`reason:launcher_exited, changed:false, timed_out:false, sync:null`、終了値1で終わります。何も公開せず、wait記録とlockを解放します。公開しなかった変化は次のwaitが返します。
 - フォアグラウンドの実行、終了通知付きのバックグラウンドタスク、生き続けるラッパースクリプトからの実行は変わりません。開始時に既に親から切り離されているwait（シェルの最後のコマンドとして`nohup … &`で起動した場合など）も従来どおり動き続けます。waitを起動したシェルが後から終了する形で切り離したwaitは、そのシェルの終了時に終わるようになります。
 
+`project sync --continue TOKEN`は、`--offset`と`--event-offset`を省略すると先頭ページを返していました。結果にも次のコマンドが示されないため、tokenだけを繰り返すと同じ担当を読み続け、担当の多いprojectでは残りを読めませんでした。
+
+- syncとwaitの結果は`continuation_command`を持ちます。続きがあれば次に実行するコマンド全体（token・`--offset`・`--event-offset`入り）、最後のページでは`null`です。`null`になるまで実行すれば全ての担当を読み切れます。
+- `project sync --continue TOKEN`は`--offset`と`--event-offset`の両方を必須にしました。どちらかがなければ`PROJECT_SYNC_OFFSET_REQUIRED`で拒否し、渡す値をエラーに示します。両方を渡す呼び出しは変わりません。tokenだけの呼び出し（`wait_sync_token`からのwait結果の復元を含む）は`--offset 0 --event-offset 0`を付けてください。
+
 最後のターンが未回答の質問や失敗で終わった停止済みの担当を、syncとwaitが毎回読み続けていました。停止済みの担当には誰も回答しないため、この状態は終わらず、projectが長く続くほど読む担当が増えていました。
 
 - `project control stop`した担当は、停止後の完全な観測で終了済みか実行中ターンのないidleで、承認・質問のフラグが空と分かれば、未解決attentionが残っていても`settled`になり、次のsyncから読みません。`settled`にする回の担当行がその質問・失敗を`attention`と`events`で示し、以後の行も同じ未解決attentionと根拠のイベントを再掲します。未解決attentionは消えません。承認・質問のフラグが立っている担当、ターン実行中の担当、フラグが不明な担当は、従来どおり読み続けます。

@@ -51,7 +51,7 @@ codexteer project sync --continue <TOKEN> --offset <NEXT_OFFSET> --event-offset 
 codexteer project event <EVENT-TOKEN> --json
 ```
 
-出力は既定16000 UTF-8 bytes、指定範囲4096〜1048576です。同じ担当内のイベントも分割します。続きは返されたtokenと両offsetを使い、`details_omitted:true`ならeventのtokenまたは担当行のdetail_tokenから詳細を取得します。
+出力は既定16000 UTF-8 bytes、指定範囲4096〜1048576です。同じ担当内のイベントも分割します。続きがある結果は`continuation_command`に次のコマンド全体（token、`next_offset`、`next_event_offset`入り）を持ち、最後のページでは`null`です。続きはこのコマンドを実行し、`null`になるまで繰り返します。保存済みCLIや`--connection`を使っている場合は、同じCLIと接続指定で`project sync`以降の引数を使います。`--continue`には`--offset`と`--event-offset`の両方が必須で、どちらかがなければ`PROJECT_SYNC_OFFSET_REQUIRED`で拒否します。位置を省略すると先頭ページを繰り返し返すためです。snapshotを先頭から読み直すときは`--offset 0 --event-offset 0`を付けます。`details_omitted:true`ならeventのtokenまたは担当行のdetail_tokenから詳細を取得します。
 
 ### 停止済みの担当を読むのを終える
 
@@ -115,7 +115,7 @@ waitは、自分を起動したコマンドが生きているかも確かめま�
 
 承認・質問のフラグは、読了済みcursorとは別に、各担当の基準に対応する直近の観測を保存します。同じフラグが立ち続ける間は通知せず、消えたことを観測した後の再出現は同じ実行turnでも通知します。この観測はtimeout後のwait再起動にも引き継ぎ、その担当の基準が更新されたときに初期化します。`attention:null`など現在のフラグが不明な場合は空配列と区別し、`PROJECT_WAIT_ATTENTION_UNKNOWN`の読み取り失敗として扱います。その担当のcursorと基準は進めません。
 
-wait終了後に出力を失った場合、次の`project sync`が返す`wait_sync_token`を`project sync --continue TOKEN`へ渡すと、最新のwait結果を復元できます。最新のwait snapshotとその全文参照は、pruneでも上限到達時の自動削除でも保持します。プロセス終了や出力配送は読了の証明にはならないため、オーケストレーター自身がsnapshotを読み切って検収します。
+wait終了後に出力を失った場合、次の`project sync`が返す`wait_sync_token`を`project sync --continue TOKEN --offset 0 --event-offset 0`へ渡すと、最新のwait結果を先頭ページから復元できます。最新のwait snapshotとその全文参照は、pruneでも上限到達時の自動削除でも保持します。プロセス終了や出力配送は読了の証明にはならないため、オーケストレーター自身がsnapshotを読み切って検収します。
 
 同じCODEX_HOMEで0.22.0など旧版のsyncを併用すると、旧版がheadの`wait_baseline`など未対応フィールドを保存せず、次のwaitが`initial_sync`を返す場合があります。`settled`、`--exclude-unreadable`の除外、報告済みの失敗も保存されないため、停止済みの担当を読み直し、読めない停止済みの担当は除外し直す必要があります。基準不明を変化なしと扱わず、そのwaitの結果で基準を作り直す動作です。結果を読んでwaitを再開してください。以後は新しい基準で待機しますが、旧syncを再び使うと再初期化が必要になります。基準と復元tokenを維持する運用では、生成した同じ保存済みCLIを一貫して使います。
 

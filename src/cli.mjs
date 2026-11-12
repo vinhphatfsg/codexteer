@@ -29,7 +29,7 @@ import { createProjectThread } from "./thread-create.mjs";
 import { startWork } from "./work-start.mjs";
 import { tellWork } from "./work-tell.mjs";
 import { readRecord } from "./store.mjs";
-import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
+import { syncProject, continueProjectSync, continuationPosition, projectEvent } from "./project-sync.mjs";
 import { waitProject, guardProject, projectGuardStatus, withStopHook } from "./project-wait.mjs";
 import { verifyProjectThread } from "./thread-verify.mjs";
 import { withDeviceAccount, prepareDevice, recoverDeviceKey, enrollDevice, pairDevice, verifyDevice, deviceStatus, deviceIdentityInfo, readPairingCode } from "./remote-device.mjs";
@@ -275,10 +275,10 @@ async function mainOnTarget(argv) {
       if (action === "sync") {
         if (supervisor) throw Object.assign(new Error("A bound supervisor cannot sync an entire project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         const project = takeOption(args, "--project", undefined), byteBudget = Number(takeOption(args, "--byte-budget", "16000"));
-        const continuation = takeOption(args, "--continue", undefined), offset = Number(takeOption(args, "--offset", "0")), eventOffset = Number(takeOption(args, "--event-offset", "0"));
+        const continuation = takeOption(args, "--continue", undefined), offset = takeOption(args, "--offset", undefined), eventOffset = takeOption(args, "--event-offset", undefined);
         const excludeUnreadable = takeOption(args, "--exclude-unreadable", undefined), reason = takeOption(args, "--reason", undefined);
-        if (args.length || (!project && !continuation) || (continuation && (excludeUnreadable !== undefined || reason !== undefined))) throw usage("Expected: project sync --project ID [--exclude-unreadable THREAD --reason TEXT], or project sync --continue TOKEN --offset N.");
-        const data = await withStopHook(continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget, excludeUnreadable, reason }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) }));
+        if (args.length || (!project && !continuation) || (continuation && (excludeUnreadable !== undefined || reason !== undefined))) throw usage("Expected: project sync --project ID [--exclude-unreadable THREAD --reason TEXT], or project sync --continue TOKEN --offset N --event-offset N.");
+        const data = await withStopHook(continuation ? await continueProjectSync(continuation, { byteBudget, ...continuationPosition(offset, eventOffset) }) : await syncProject(project, { byteBudget, excludeUnreadable, reason }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) }));
         success("project.sync", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
       }
       if (action === "event") {

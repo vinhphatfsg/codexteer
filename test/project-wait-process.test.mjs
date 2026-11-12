@@ -90,7 +90,7 @@ test("real CLI sync and wait report the calling session's Stop hook status besid
     assert.equal(sync.data.stop_hook, "configured", connection.join(" ")); assert.equal(sync.data.works[0].thread_id, ID);
     const { stop_hook: _hook, ...page } = sync.data;
     assert.equal(sync.data.output_bytes, Buffer.byteLength(JSON.stringify(page)), "the paged envelope keeps its own size");
-    const continued = await f.cli([...connection, "project", "sync", "--continue", sync.data.sync_token, "--json"]);
+    const continued = await f.cli([...connection, "project", "sync", "--continue", sync.data.sync_token, "--offset", "0", "--event-offset", "0", "--json"]);
     assert.equal(continued.data.stop_hook, "configured");
     const waited = await f.cli([...connection, "project", "wait", "--project", "P", "--timeout-ms", "0", "--json"]);
     assert.equal(waited.data.timed_out, true); assert.equal(waited.data.stop_hook, "configured");

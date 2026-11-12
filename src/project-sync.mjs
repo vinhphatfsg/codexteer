@@ -117,7 +117,7 @@ function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0) {
     || (offset === saved.works.length ? eventOffset !== 0 : eventOffset > saved.works[offset].events.length)) throw failure("Invalid continuation offset.");
   const result = { project_id: saved.project_id, sync_token: token, wait_sync_token: saved.wait_sync_token ?? null, membership_digest: saved.membership_digest,
     membership_count: saved.works.length, complete: saved.complete, works: [], omitted_works: 0, omitted_events: 0,
-    continuation_token: null, continuation_offset: offset, continuation_event_offset: eventOffset,
+    continuation_token: null, continuation_command: null, continuation_offset: offset, continuation_event_offset: eventOffset,
     created_at: saved.created_at, output_bytes: 0, byte_budget: byteBudget };
   let wi = offset, ei = eventOffset;
   const finish = () => {
@@ -125,6 +125,7 @@ function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0) {
     result.omitted_events = saved.works.slice(wi).reduce((n, w, i) => n + w.events.length - (i === 0 ? ei : 0), 0);
     result.continuation_token = wi < saved.works.length ? token : null;
     result.next_offset = wi; result.next_event_offset = ei;
+    result.continuation_command = result.continuation_token ? `codexteer project sync --continue ${token} --offset ${wi} --event-offset ${ei} --json` : null;
     return outputSize(result);
   };
   if (bytes(finish()) > byteBudget) throw failure("The fixed sync envelope exceeds the byte budget.", "PROJECT_SYNC_BUDGET_TOO_SMALL");
@@ -156,6 +157,13 @@ function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0) {
     if (rejected) break;
   }
   return finish();
+}
+
+// A command-line continuation names its position. One that defaulted to the
+// start returned the first page again, so repeating the token never advanced.
+export function continuationPosition(offset, eventOffset) {
+  if (offset === undefined || eventOffset === undefined) throw failure("project sync --continue requires both --offset and --event-offset. Pass the next_offset and next_event_offset of the page before it (its continuation_command is the whole call), or --offset 0 --event-offset 0 to read the snapshot from its first page.", "PROJECT_SYNC_OFFSET_REQUIRED");
+  return { offset: Number(offset), eventOffset: Number(eventOffset) };
 }
 
 export async function continueProjectSync(token, options = {}, storage = {}) {
