@@ -136,7 +136,7 @@ test("the orchestrator prompt and help say what a running Desktop Cloud turn hid
     assert.match(prompt, /attention_coverage:running_turn_unobserved/); assert.match(prompt, /attention_unobserved/);
     assert.match(prompt, /実行中のDesktop Cloudターンで、codexteerには質問・承認待ちが見えません/);
     assert.match(prompt, /「待っているものはない」と伝えず、見えないこととCodexの画面で確認が必要なことをユーザーへ伝えます/);
-    assert.match(prompt, /その質問はターンが終わるとwaitが返します/);
+    assert.match(prompt, /その質問は遅くともターンが終わるとwaitが返します/);
     assert.doesNotMatch(prompt, /Desktop Cloudの質問は(?:見え|観測でき)ません/);
   }
   for (const name of ["status", "read", "project", "work", "desktop-cloud"]) {
