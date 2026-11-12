@@ -8,6 +8,7 @@ import { readRecord, withStoreLock } from "./store.mjs";
 import { readHistoryRecord, listHistoryRecords } from "./project-history.mjs";
 import { validateSyncPage } from "./sync-page.mjs";
 import { readRepositoryPolicy } from "./work-start.mjs";
+import { attentionCoverage } from "./attention-coverage.mjs";
 
 const sha = value => createHash("sha256").update(value).digest("hex");
 const fail = (message, code, details = {}) => Object.assign(new Error(message), { code, ...details });
@@ -97,7 +98,11 @@ export async function tellWork(threadInput, body, options = {}, dependencies = {
     try {
       const receipt = await (dependencies.sendTracked ?? sendWorkTellMessage)(member.thread_id, body, { supervisor: supervisor.session_id, connection: member.connection,
         basedOn: fresh.cursor, finding: finding.id, source: "codexteer", kind: "review", newTurn: !!options.newTurn, guardBeforeSend }, { ...storage, ...(dependencies.send ? { send: dependencies.send } : {}) });
-      return { ...receipt, thread_id: member.thread_id, sync_token: basis.sync_token, finding_id: finding.id, source: "codexteer", kind: "review", policy, other_work: other };
+      // The gate saw no question or approval, which a running Desktop Cloud turn
+      // would not have shown. The receipt says so; whether to send is unchanged.
+      const coverage = attentionCoverage(fresh.latest, member.connection);
+      return { ...receipt, thread_id: member.thread_id, sync_token: basis.sync_token, finding_id: finding.id, source: "codexteer", kind: "review", policy, other_work: other,
+        ...(coverage ? { attention_coverage: coverage } : {}) };
     } catch (error) {
       if (error.delivery_status === "unknown" && error.message_id) {
         try { error.reconciliation = await (dependencies.reconcile ?? ((id) => reconcileMessages(member.thread_id, id, {}, dependencies.connectionDependencies ?? {})))(error.message_id); }

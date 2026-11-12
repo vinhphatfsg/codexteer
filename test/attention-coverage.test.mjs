@@ -79,7 +79,7 @@ test("a question asked during the turn is returned by wait when the turn ends, a
   f.finish([{ id: "ask", type: "agentMessage", text: "Which one?", questions: ["A or B?"] }]);
   const ended = await f.wait(), work = row(ended.sync, ID);
   assert.equal(ended.reason, "work_changed"); assert.equal(work.attention, "human"); assert.equal(work.attention_coverage, undefined);
-  assert.deepEqual(ended.attention_unobserved, []); assert.deepEqual(ended.sync.attention_unobserved, []);
+  assert.equal(ended.attention_unobserved, undefined); assert.equal(ended.sync.attention_unobserved, undefined);
 });
 
 test("status and read carry the mark only while the Desktop Cloud turn runs", async t => {
@@ -95,11 +95,11 @@ test("status and read carry the mark only while the Desktop Cloud turn runs", as
 test("an idle and a settled Desktop Cloud member carry no mark", async t => {
   const f = await fixture(t); f.finish();
   const idle = await f.sync();
-  assert.equal(row(idle, ID).attention_coverage, undefined); assert.deepEqual(idle.attention_unobserved, []);
+  assert.equal(row(idle, ID).attention_coverage, undefined); assert.equal(idle.attention_unobserved, undefined);
   await controlSupervisor(ID, "stop", f.storage);
   const settling = await f.sync(), settled = await f.sync();
   assert.equal(row(settling, ID).settled.basis, "observed"); assert.equal(row(settled, ID).observation, "settled");
-  for (const result of [settling, settled]) { assert.equal(row(result, ID).attention_coverage, undefined); assert.deepEqual(result.attention_unobserved, []); }
+  for (const result of [settling, settled]) { assert.equal(row(result, ID).attention_coverage, undefined); assert.equal(result.attention_unobserved, undefined); }
 });
 
 test("a shared member and a Web Cloud member with a running turn carry no mark", async t => {
@@ -112,11 +112,11 @@ test("a shared member and a Web Cloud member with a running turn carry no mark",
   await registerManagedThread(WEB, { projectId: PROJECT, connection: "cloud" }, storage);
   const read = (id, options) => id === WEB ? observeThread(id, options, web) : Promise.resolve(readSnapshot(local, options));
   const result = await syncProject(PROJECT, {}, { storage, read });
-  assert.equal(result.complete, true); assert.deepEqual(result.attention_unobserved, []);
+  assert.equal(result.complete, true); assert.equal(result.attention_unobserved, undefined);
   for (const id of [LOCAL, WEB]) { assert.equal(row(result, id).execution, "active"); assert.equal(row(result, id).attention_coverage, undefined); }
   assert.equal((await observeThread(WEB, { connection: "cloud" }, web)).attention_coverage, undefined);
   const waited = await waitProject(PROJECT, { timeoutMs: 0 }, { storage, read, pollMs: 5, processIdentity: async () => "same-start" });
-  assert.deepEqual(waited.attention_unobserved, []);
+  assert.equal(waited.attention_unobserved, undefined);
 });
 
 test("work tell to a running Desktop Cloud turn still sends, and its receipt says pending questions were not observable", async t => {
@@ -134,8 +134,7 @@ test("the orchestrator prompt and help say what a running Desktop Cloud turn hid
   for (const cloudCommand of [null, "prepared-cloud --connection desktop-cloud"]) {
     const { prompt } = orchestrationPrompt("P", "goal", "prepared-command --connection shared", { cloudCommand });
     assert.match(prompt, /attention_coverage:running_turn_unobserved/); assert.match(prompt, /attention_unobserved/);
-    assert.match(prompt, /「待っているものはない」とユーザーへ伝えません/);
-    assert.match(prompt, /実行中のDesktop Cloudターンを観測できないことと、Codexの画面で確認が必要なことを伝えます/);
+    assert.match(prompt, /「待っているものはない」とユーザーへ伝えず、codexteerは実行中のDesktop Cloudターンを観測できないことと、Codexの画面で確認が必要なことを伝えます/);
     assert.match(prompt, /ターン中に出た質問は、ターンが終わるとwaitが返します/);
     assert.doesNotMatch(prompt, /Desktop Cloudの質問は(?:見え|観測でき)ません/);
   }

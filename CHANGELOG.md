@@ -4,6 +4,15 @@
 
 ## 0.25.0 — 未公開
 
+Desktop Cloudの担当は、ターンの実行中は開始時の指示しか読めません。その間の発言・コマンド・質問・承認待ちは、ターンが終わった後にまとめて現れます。codexteerはこの間も`attention`を空で返していたため、Codexの画面で質問が待っていても「待っているものはない」と読める結果になっていました。
+
+- Desktop Cloudでターンが実行中の担当は、`project sync`の担当行、`status`、`read`、`watch`に`attention_coverage:"running_turn_unobserved"`を持ちます。そのターン中の質問・承認待ち・進捗を観測できていないことを示します。観測できた担当には付きません。`attention`・`group`・`complete`など既存の値は変わりません。
+- `project sync`の全ページと`project wait`の全ての結果（timeoutを含みます）は、その担当を`attention_unobserved:[{thread_id, attention_coverage}]`に並べます。該当する担当がいなければ付きません。ページ本体の外に付き、`output_bytes`とbyte budgetには含みません。
+- ターン中に出た質問は、ターンが終わると従来どおりwaitが返し、担当行は「対応が必要」になります。
+- `work tell`は、実行中のDesktop Cloudターンに送るときも送信の可否を変えません。質問・承認待ちを観測できなかったことを、receiptの`attention_coverage`で示します。
+- Desktop Cloudの`doctor`は、この接続の制限として`attention_coverage:"running_turn_unobserved"`を返します。`approval_roundtrip`とは別の項目です。
+- オーケストレーター本文は、この印の付いた担当について「待っているものはない」とユーザーへ伝えず、Codexの画面で確認が必要だと伝えるよう指示します。
+
 `project wait`が、1回だけ読み取りに失敗した担当を`observation_failed`で返していました。担当が多く長く続くprojectでは、すぐ後に読める担当の失敗のたびにオーケストレーターが起こされていました。
 
 - `project wait`は、同じ担当が2回以上の照会で続けて読めず、最初の失敗から60秒以上経ったときにだけ、その担当を`observation_failed`で返します。1回の読み取り失敗は担当の状態を示さず、次に読めたときにcursor以後の出来事を受け取れるため、返しません。同じ照会が他の理由で返る場合は、その結果の`unreadable`で`reported:true`にし、`observation_failed`では返しません。この経過はtimeoutや他の理由で返った後に再開したwaitにも引き継ぎ、途中でwaitの照会が完全に読めれば数え直します。通常のsyncが読めただけでは数え直しません。

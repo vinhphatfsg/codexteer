@@ -10,6 +10,14 @@ codexteer project control stop --project sample --all --json
 
 基点ブランチは作成引数で指定できません。委任された作業ブランチをpushし、発注書にfetchするブランチとSHAを書きます。進行しない場合はsyncで確認し、unknownを再送しません。環境再公開が実行中の担当へ影響した運用観測があるため、共有資源として順番を管理します。影響の条件や保証は未確認として区別します。
 
+## 実行中ターンの観測範囲
+
+Desktop Cloudのタスクは、ターンの実行中は開始時の指示だけが読めます。その間の発言・コマンド・質問は、ターンが終わるとまとめて履歴に現れます。承認待ちを示すフラグ（`attention`）は、実行中は空のままです。そのため、実行中ターンの質問・承認待ち・自動レビューの拒否・進捗を、codexteerは観測できません。
+
+この間、`status`・`read`・`watch`と`project sync`の担当行は`attention_coverage:"running_turn_unobserved"`を返します。`attention`が`[]`でも、質問・承認待ちがないことは示しません。Codexの画面で確認してください。`project sync`と`project wait`の結果（timeoutを含みます）は、その担当を`attention_unobserved`に並べます。`doctor`も同じ値をこの接続の制限として返します。
+
+ターンが終わると印は付かなくなります。その間に出た質問は`read`で読め、`project wait`が変化として返します。`work tell`は実行中ターンへの送信の可否を変えず、receiptの`attention_coverage`で観測できなかったことを示します。
+
 ## 既定のモデルとエフォート
 
 ```sh

@@ -63,6 +63,7 @@ ${command} project sync --project <PROJECT> --json
 ${command} project sync --continue <TOKEN> --offset <OFFSET> --event-offset <EVENT-OFFSET> --json
 ${command} project event <EVENT-TOKEN> --json
 未完了の担当（pausedも含む）がいる間は、次を終了通知の届くバックグラウンドタスクとして動かし続けます。質問・承認・URLをユーザーへ伝えた後も監視を続け、waitが返ったら結果と続きのsyncを読み、検収・対応して再びwaitを開始します。unreadableには直近の照会で読めなかった担当が並びます。reported:falseの担当はその照会で失敗しただけで、waitは読み続け、60秒以上読めなければ報告します。報告はobservation_failedの結果か、他の理由で返った結果のreported:trueで1回行い、その後は読めた担当の変化を待ちます。reported:trueの担当は、次に読めるまで監視されていません。${command} status <THREAD>やそのbranchで別に確認してユーザーへ報告し、waitを静かにする目的でstopしません。timeout・エラーの終了後も監視があると扱いません。
+attention_coverage:running_turn_unobservedの担当（attention_unobservedにも並ぶ）は、実行中で質問・承認待ちを観測できていません。「待っているものはない」とユーザーへ伝えず、codexteerは実行中のDesktop Cloudターンを観測できないことと、Codexの画面で確認が必要なことを伝えます。ターン中に出た質問は、ターンが終わるとwaitが返します。
 ${command} project wait --project <PROJECT> --json
 同じCODEX_HOME・host・projectは1オーケストレーターで扱います。guardは自分のセッションのwaitだけを数えます。RECORD_BUSYなら他セッションのwaitを引き継がず、所有セッションでwaitを終了して引継ぎを調整し、阻害要因を報告します。異常終了した前のセッションのwaitは次の照会で自分で終わるため、再開直後のRECORD_BUSYは少し待って再実行します。lock削除や担当のcontrol stopを競合回避に使いません。
 ${command} work tell <THREAD> - --json < <INSTRUCTION-FILE>

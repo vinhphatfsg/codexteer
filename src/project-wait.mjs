@@ -10,6 +10,7 @@ import { getSupervisor } from "./supervision.mjs";
 import { readRecord, listRecords, writeRecord, removeRecord, withStoreLock } from "./store.mjs";
 import { shellArgument } from "./prompt-command.mjs";
 import path from "node:path";
+import { attentionCoverage } from "./attention-coverage.mjs";
 
 const exec = promisify(execFile);
 const failure = (message, code = "PROJECT_WAIT_INVALID") => Object.assign(new Error(message), { code });
@@ -205,7 +206,7 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
             && Number.isFinite(streak.since) && Number.isSafeInteger(streak.polls) && streak.polls > 0))) {
           throw failure("Invalid project wait attention observations. Inspect local state before restarting wait.");
         }
-        let savedAttention = JSON.stringify(observedAttention), failures = {}, reported = new Set();
+        let savedAttention = JSON.stringify(observedAttention), failures = {}, reported = new Set(), unobserved = [];
         // A recovery that an earlier version recorded is no longer used.
         delete observedAttention.recovered;
         const deadline = timeoutMs === undefined ? Infinity : performance.now() + timeoutMs;
@@ -214,15 +215,22 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
         const graceMs = dependencies.unreadGraceMs ?? UNREAD_GRACE_MS;
         // Outside the paged sync envelope, on every return: the members the last read
         // could not complete, and whether the head holds each as reported.
-        const unreadable = () => Object.entries(failures).map(([thread_id, error]) => ({ thread_id, error, reported: reported.has(thread_id) }));
+        // attention_unobserved names the members the last read did reach but whose
+        // running turn hides questions and approvals, so no return vouches for them.
+        const coverage = () => ({ unreadable: Object.entries(failures).map(([thread_id, error]) => ({ thread_id, error, reported: reported.has(thread_id) })),
+          ...(unobserved.length ? { attention_unobserved: unobserved } : {}) });
         // A wait that outlives its session would hold the project lock forever and
         // publish changes nobody reads. An inspection error is not proof of exit.
         const ownerExited = async () => !!owner && await identity(owner.pid).then(start => start !== owner.process_start, () => false);
         for (;;) {
-          if (await ownerExited()) return { project_id: projectId, changed: false, timed_out: false, reason: "owner_exited", unreadable: unreadable(), sync: null };
+          if (await ownerExited()) return { project_id: projectId, changed: false, timed_out: false, reason: "owner_exited", ...coverage(), sync: null };
           let reason;
           const sync = await syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => {
             failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete ? [] : [[id, state.error]]));
+            unobserved = [...snapshot.states].flatMap(([thread_id, state]) => {
+              const attention_coverage = attentionCoverage(state.latest, state.member.connection);
+              return attention_coverage ? [{ thread_id, attention_coverage }] : [];
+            });
             const { lasting, report } = unreadStreaks(snapshot.previous, observedAttention, failures, graceMs);
             // A quiet poll adds no member, so this is also what the head holds.
             reported = report;
@@ -239,8 +247,8 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
           if (observed !== savedAttention) {
             await writeRecord("project-wait-attention", key, observedAttention, storage); savedAttention = observed;
           }
-          if (sync) return { project_id: projectId, changed: reason !== "observation_failed", timed_out: false, reason, unreadable: unreadable(), sync };
-          if (performance.now() >= deadline) return { project_id: projectId, changed: false, timed_out: true, reason: "timeout", unreadable: unreadable(), sync: null };
+          if (sync) return { project_id: projectId, changed: reason !== "observation_failed", timed_out: false, reason, ...coverage(), sync };
+          if (performance.now() >= deadline) return { project_id: projectId, changed: false, timed_out: true, reason: "timeout", ...coverage(), sync: null };
           await delay(Math.max(0, Math.min(pollMs, deadline - performance.now())));
         }
       } finally { await removeRecord("project-waits", key, storage); }

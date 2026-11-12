@@ -149,7 +149,7 @@ export const topics = {
     when: "レビューや送信の前、または前回のcursorから何が変わったかを1回確認するとき。変化を待つならwatch、状態だけならstatus。",
     usage: ["read <THREAD> [--since CURSOR] [--limit N] [--max-chars N] [--include-output] [--full-history]"],
     options: [THREAD_OPTION, SINCE_OPTION, ...READ_PAGE_OPTIONS],
-    returns: "data.events（各項目にchange: added|updated）、status・active_turn_id・attention、running_commands、次回用cursor、changed、has_more、omitted_older_events、history_scope、observed_at。高速方式ではrunning_commands_completeも返す。--jsonなしは状態行・イベント行・cursor行。",
+    returns: "data.events（各項目にchange: added|updated）、status・active_turn_id・attention、running_commands、次回用cursor、changed、has_more、omitted_older_events、history_scope、observed_at。Desktop Cloudでターンが実行中の間だけattention_coverage:running_turn_unobserved。高速方式ではrunning_commands_completeも返す。--jsonなしは状態行・イベント行・cursor行。",
     errors: [...CURSOR_ERRORS, ...SUPERVISOR_ERRORS, ...RUNTIME_ERRORS, ...TARGET_ERRORS],
     examples: [
       "codexteer read <THREAD> --json",
@@ -169,6 +169,7 @@ export const topics = {
       "omitted_older_events:nullは省略した古い項目の件数が未集計という意味。件数のための全取得はしない。",
       "cursorは対象タスク・ホスト・remote transportに結び付く。別の対象に渡すとSTALE_CURSOR。",
       "観測対象は履歴APIに現れた項目だけ。",
+      "Desktop Cloudでは、実行中ターンの発言・コマンド・質問はターンが終わるまで履歴に現れない。その間はattention_coverage:running_turn_unobservedを返し、attentionが[]でも質問・承認待ちがないことを示さない。Codexの画面で確認する。ターンが終わると返さない。",
       "Codexの版によっては、実行開始の通知後、コマンドが完了してから履歴に現れる場合がある。",
       "内部推論は出力しない。",
       "観測でタスクを再開・送信・前面化しない。",
@@ -184,7 +185,7 @@ export const topics = {
       THREAD_OPTION,
       { name: "--full-history", text: "readの--full-historyと同じ全取得方式で状態とcursorを得る。返るcursorはv1。" },
     ],
-    returns: "data.status（active・idle・notLoaded・systemErrorなど。取得できなければunknown）、active_turn_id、attention、running_commands、cursor、history_scope。eventsは返さない。--jsonなしは状態行・実行中ターン・cursor行。",
+    returns: "data.status（active・idle・notLoaded・systemErrorなど。取得できなければunknown）、active_turn_id、attention、running_commands、cursor、history_scope。Desktop Cloudでターンが実行中の間だけattention_coverage:running_turn_unobserved。eventsは返さない。--jsonなしは状態行・実行中ターン・cursor行。",
     errors: [OBSERVATION_CHANGED_ERROR, CURSOR_TOO_LARGE_ERROR, ...SUPERVISOR_ERRORS, ...RUNTIME_ERRORS, ...TARGET_ERRORS, OPTIONS_INVALID],
     examples: ["codexteer status <THREAD> --json"],
     notes: [
@@ -193,6 +194,7 @@ export const topics = {
       "notLoadedは保存済みタスクが未ロードという意味。statusはタスクをロードしない。",
       "attentionはApp Serverが報告した値で、本文から推測しない。nullはactiveでフラグ未報告、[]は該当なし。",
       "Web Cloudのタスクではattentionは常に[]で、承認待ちを表さない。",
+      "Desktop Cloudのタスクは、ターンの実行中は質問・承認待ちを観測できず、attentionは[]のままになる。その間はattention_coverage:running_turn_unobservedを返す。「待っているものはない」とは読まず、Codexの画面で確認する。ターンが終わると返さず、その間に出た質問はreadで読める。",
       "承認や質問には回答しない。",
       SUPERVISOR_NOTE,
     ],

@@ -32,6 +32,7 @@ import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, ve
 import { acquireResource, resourceStatus, renewResource, releaseResource, listResources, runWithResource } from "./resource.mjs";
 import { startWork } from "./work-start.mjs";
 import { tellWork } from "./work-tell.mjs";
+import { RUNNING_TURN_UNOBSERVED } from "./attention-coverage.mjs";
 import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
 import { waitProject, guardProject, withStopHook } from "./project-wait.mjs";
 import { observationConnection } from "./connection.mjs";
@@ -398,7 +399,7 @@ async function desktopCloudCommands(command, args, { supervisor, output, bound, 
     const id = target ? await bound(target, { allowUnregistered: true }) : null;
     if (id) await observeThread(id, { connection: "desktop-cloud", limit: 1 }, dependencies);
     else { if (supervisor) throw failure("A supervisor doctor needs its target."); await desktopCloudEnvironments(); }
-    output("doctor", { ready: true, connection_mode: "desktop-cloud", observation: target ? "verified" : "unverified", project_membership: id ? await desktopCloudProjectDoctor(id, project) : { membership: { status: "unverified" }, assignment_api: { status: "unverified" } }, approval_roundtrip: "unverified", atomic_server_freshness: "unverified" }); return true;
+    output("doctor", { ready: true, connection_mode: "desktop-cloud", observation: target ? "verified" : "unverified", project_membership: id ? await desktopCloudProjectDoctor(id, project) : { membership: { status: "unverified" }, assignment_api: { status: "unverified" } }, approval_roundtrip: "unverified", attention_coverage: RUNNING_TURN_UNOBSERVED, atomic_server_freshness: "unverified" }); return true;
   }
   if (command === "open") { exact(args, 1); output("open", { deep_link: desktopCloudLink(await bound(args[0])) }); return true; }
   throw failure("Desktop Cloud diff retrieval is not verified. Inspect file-change events with read --include-output.", "CAPABILITY_UNVERIFIED");

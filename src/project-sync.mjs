@@ -7,6 +7,7 @@ import { listManagedThreads, updateManagedThreadCursor, managedMembershipDigest 
 import { getSupervisor } from "./supervision.mjs";
 import { normalizeTaskId } from "./task-id.mjs";
 import { readRecord, writeRecord, withStoreLock } from "./store.mjs";
+import { attentionCoverage, unobservedAttention } from "./attention-coverage.mjs";
 
 const hash = value => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
@@ -105,6 +106,7 @@ function compactWork(work) {
   return { thread_id: work.thread_id, group: work.group, execution: work.execution, attention: work.attention,
     observation: work.observation, complete: work.complete, history_gap: work.history_gap, retry_after_ms: work.retry_after_ms,
     error: work.error, attention_repeated: work.attention_repeated, resolution_unconfirmed: work.resolution_unconfirmed,
+    ...(work.attention_coverage ? { attention_coverage: work.attention_coverage } : {}),
     detail_token: work.detail_token, details_omitted: true,
     // The operator's reason is unbounded; a compact row must always fit.
     ...(work.settled ? { settled: { basis: work.settled.basis, settled_at: work.settled.settled_at } } : {}) };
@@ -158,12 +160,20 @@ function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0) {
   return finish();
 }
 
+// Outside the paged envelope, on every page of a result: the members of the
+// whole result whose running turn could not be observed. Their number is not
+// bounded by the byte budget, which the envelope alone must meet.
+const withUnobserved = (page, works) => {
+  const unobserved = unobservedAttention(works);
+  return unobserved.length ? Object.assign(page, { attention_unobserved: unobserved }) : page;
+};
+
 export async function continueProjectSync(token, options = {}, storage = {}) {
   const byteBudget = validateBudget(options.byteBudget ?? 16000);
   if (typeof token !== "string" || !/^[0-9a-f-]{36}$/i.test(token)) throw failure("Invalid sync token.");
   const saved = await readHistoryRecord("project-sync-results", token, null, storage);
   if (!saved) throw failure("Project sync continuation was not found or was removed by project prune.", "PROJECT_SYNC_CONTINUATION_NOT_FOUND");
-  return pageResult(saved, token, byteBudget, options.offset ?? 0, options.eventOffset ?? 0);
+  return withUnobserved(pageResult(saved, token, byteBudget, options.offset ?? 0, options.eventOffset ?? 0), saved.works);
 }
 
 // Attention is a reducer over the entire delta, not a property of its last page.
@@ -348,7 +358,8 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       axes.attention = currentAttention.attention; axes.reason = currentAttention.reason; axes.group = currentAttention.attention === "unknown" ? "未確認" : "対応が必要";
     }
     const repeatedEvents = currentAttention?.events.filter(e => !eventSummaries.some(s => s.token === e.token)) ?? [];
-    works.push({ thread_id: state.member.thread_id, title: state.latest?.title ?? null, ...axes, history_gap: state.history_gap,
+    const coverage = attentionCoverage(state.latest, state.member.connection);
+    works.push({ thread_id: state.member.thread_id, title: state.latest?.title ?? null, ...axes, ...(coverage ? { attention_coverage: coverage } : {}), history_gap: state.history_gap,
       retry_after_ms: state.retry_after_ms, complete: state.complete, cursor: state.complete ? state.cursor : null, events: [...repeatedEvents, ...eventSummaries], error: state.error,
       turn_identity: state.latest?.latest_turn_id ?? state.latest?.current_turn_id ?? state.latest?.turn_id ?? state.latest?.active_turn_id ?? null,
       history_notes: historical[state.member.thread_id] ?? [],
@@ -490,7 +501,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       for (const record of records) await historyWrite(...record, storage);
     }, storage);
   }
-  const page = pageResult({ project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, syncToken, byteBudget);
+  const page = withUnobserved(pageResult({ project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, syncToken, byteBudget), works);
   // Outside the paged envelope, whose byte count is already final. Only this
   // marker tells a result that was never published from one where every read failed.
   if (conflict) page.publication_conflict = conflict;
