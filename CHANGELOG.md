@@ -2,7 +2,7 @@
 
 公開日は日本時間です。
 
-## 0.24.3 — 未公開
+## 0.25.0 — 未公開
 
 `project wait`が、1回だけ読み取りに失敗した担当を`observation_failed`で返していました。担当が多く長く続くprojectでは、すぐ後に読める担当の失敗のたびにオーケストレーターが起こされていました。
 
@@ -22,8 +22,14 @@
 - 上限の確認は、今回書くrecord（イベント・sync結果・担当詳細）の保存後のサイズを使います。recordが空きに収まるpublicationは保存されます。sync結果と担当詳細はcursorの更新後に確定するため、完全に読めた担当の行はcursorを進めた場合と更新が拒否された場合の大きい方で数え、確認を通ったpublicationが途中で容量不足になることはありません。
 - recordが収まらない場合、sync・wait・`work start`はそのprojectの古い履歴を`project prune`と同じ基準で自動的に削除し、もう一度確認します。最新sync、最新のwait結果、未提示の初回結果、未解決attentionの根拠とそれらの参照先は、`project prune`と同じく保持します。他projectの履歴は削除しません。
 - 自動削除をした結果は`history_pruned`を持ちます。`deleted`（`events`・`results`・`initial_payloads`の件数）と`reclaimed_bytes`で、syncとwaitではページ本体の外に付き、`output_bytes`とbyte予算には含まれません。自動削除の後、その時点の最新syncと最新のwait結果より古い結果のcontinuation tokenとevent tokenは使えません。
-- `PROJECT_HISTORY_LIMIT`は、自動削除の後も収まらない場合に返ります。1回のpublicationが残りの空きより大きい場合と、同じ`CODEX_HOME`のhost namespaceにある他projectの履歴や保護対象が上限を占めている場合です。エラーの`storage_bytes`は自動削除後の使用量で、行った自動削除を`history_pruned`で返します。従来どおり何も保存せず、cursorも進めません。
-- `project prune`の動作と結果は変わりません。
+- `PROJECT_HISTORY_LIMIT`は、自動削除の後も収まらない場合に返ります。1回のpublicationが残りの空きより大きい場合と、保護対象がそのprojectの上限を占めている場合です。エラーの`storage_bytes`は自動削除後の使用量で、行った自動削除を`history_pruned`で返します。従来どおり何も保存せず、cursorも進めません。
+
+同じ`CODEX_HOME`の全projectが、履歴の上限（256 MiB）、保存と整理の排他、整理の読み取りを共有していました。あるprojectの履歴が上限を占めると他projectのsync・wait・`work start`が`PROJECT_HISTORY_LIMIT`で拒否され、あるprojectの保存中は他projectの保存と整理が`RECORD_BUSY`で失敗し、あるprojectの壊れたrecordが他projectの整理と`work tell`を失敗させていました。
+
+- 履歴（イベント・sync結果・担当詳細・work startの記録）は、projectごとに別の場所へ保存します。256 MiBの上限はprojectごとで、そのprojectが保存した量だけを数えます。保存と整理の排他もprojectごとで、別のprojectの保存・整理は互いを待たせません。
+- `project prune`と自動削除は、そのprojectの履歴だけを読んで削除します。他projectの壊れたrecordで失敗することはありません。結果の形は変わらず、`storage_bytes`は整理後の、そのprojectの使用量です。`PROJECT_HISTORY_LIMIT`の`storage_bytes`も同じです。
+- 0.24.x以前が保存した履歴は、移動も書き換えもせず元の場所のまま使います。tokenはどちらの場所のrecordでも使え、`project event`・`project sync --continue`・`work tell`・waitの結果の復元は従来どおりです。古い履歴はどのprojectの上限にも数えず、新しく書き足すこともないため、その総量は減る一方です。そのprojectの`project prune`と自動削除が、従来と同じ基準で古い履歴のうち自分のprojectのものも削除し、`deleted`と`reclaimed_bytes`に含めます。読めない古いrecordは飛ばします。
+- 0.24.x以前に戻すと、このversionが保存した履歴は見えません。そのversionでは、このversionが返したtokenは見つからず、`work tell`は次の`project sync`まで`WORK_TELL_SYNC_INCOMPLETE`になり、同じ引数の`work start`は別の担当を作ります。戻したversionが保存した履歴は、再びこのversionにしたときに古い履歴として使えます。
 
 ## 0.24.2 — 2026-11-11公開
 

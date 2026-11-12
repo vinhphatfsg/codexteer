@@ -163,7 +163,7 @@ macOSの起動識別は、起動日時とcommandのSHA-256だけを保存・比�
 
 ## 保存量と整理
 
-`CODEX_HOME`のhost namespaceごとに、`project-sync-events`・`project-sync-results`・`work-starts`のJSONファイル総量を256 MiBまでに制限します。work-startのreceipt・方針本文も含みます。最新headなど他の管理メタデータ、ジャーナルやバックエンド履歴はこの上限の対象外です。表示byte予算とは別の制限です。1担当1回の全文観測は16 MiBまでで、超過は`PROJECT_HISTORY_BATCH_LIMIT`としてcursorを進めません。
+履歴（`project-sync-events`・`project-sync-results`・`work-starts`のJSONファイル）は、projectごとに別の場所へ保存し、総量をprojectごとに256 MiBまでに制限します。work-startのreceipt・方針本文も含みます。上限の確認、保存と整理の排他、整理はprojectごとに独立しています。同じ`CODEX_HOME`の他projectの履歴が、そのprojectのsync・wait・work start・work tellを拒否・待機・失敗させることはありません。最新headなど他の管理メタデータ、ジャーナルやバックエンド履歴はこの上限の対象外です。表示byte予算とは別の制限です。1担当1回の全文観測は16 MiBまでで、超過は`PROJECT_HISTORY_BATCH_LIMIT`としてcursorを進めません。
 
 保存の前に、今回書くrecord（イベント・sync結果・担当詳細）の保存後のサイズを合計し、置き換えるrecordの分を引いて、上限に収まるかを確認します。recordが空きに収まるpublicationは保存されます。sync結果と担当詳細はcursorの更新後に確定するため、完全に読めた担当の行は、cursorを進めた場合と更新が拒否された場合の大きい方で数えます。確認する量は実際に保存する量と同じか、その差の分だけ大きくなります。確認を通ったpublicationが途中で容量不足になることはありません。
 
@@ -172,14 +172,16 @@ macOSの起動識別は、起動日時とcommandのSHA-256だけを保存・比�
 それでも収まらなければ`PROJECT_HISTORY_LIMIT`で拒否し、何も保存せずcursorも進めません。これが起きるのは次の場合です。
 
 - 1回のpublicationが、自動削除の後に残る空きより大きい。
-- 同じ`CODEX_HOME`のhost namespaceにある他projectの履歴や、保護対象が上限を占めている。他projectの履歴は、そのprojectの`project prune`で整理します。
+- 保護対象がそのprojectの上限を占めている。
 
-エラーはstorage_bytes（自動削除後の使用量）・required_bytes（今回必要な量）・limit_bytes（上限）と、行った自動削除の`history_pruned`を返します。`--json`のerrorとtext出力の両方に表示します。上限を満たさない全文を黙って切ることはありません。初回観測や作成段階の保存が失敗しても、同じ担当を自動で作り直しません。
+エラーはstorage_bytes（自動削除後の、そのprojectの使用量）・required_bytes（今回必要な量）・limit_bytes（上限）と、行った自動削除の`history_pruned`を返します。`--json`のerrorとtext出力の両方に表示します。上限を満たさない全文を黙って切ることはありません。初回観測や作成段階の保存が失敗しても、同じ担当を自動で作り直しません。
 
 ```sh
 codexteer project prune --project sample --json
 ```
 
-整理は明示したprojectの古いsync結果・担当詳細・イベントを削除し、最新syncと最新のwait結果、それらの参照先、未解決attentionの根拠、未提示の初回結果を保持します。途中で中断したpublicationの世代も保持します。`settled`の担当の行はheadが持つため、その担当の古いイベントと詳細を削除した後も結果に残ります。提示済み初回結果は最新syncとの対応を確認してwork-startの重複全文だけを削除し、作成receiptと再送防止情報は残します。他projectの履歴は削除しません。
+整理は明示したprojectの古いsync結果・担当詳細・イベントを削除し、最新syncと最新のwait結果、それらの参照先、未解決attentionの根拠、未提示の初回結果を保持します。途中で中断したpublicationの世代も保持します。`settled`の担当の行はheadが持つため、その担当の古いイベントと詳細を削除した後も結果に残ります。提示済み初回結果は最新syncとの対応を確認してwork-startの重複全文だけを削除し、作成receiptと再送防止情報は残します。他projectの履歴は削除せず、読めなくても整理を失敗させません。
 
-期限による失効や常駐GCはありません。履歴は、整理を実行するか、保存が上限に達して自動削除が行われるまで残ります。削除したtokenはeventなら`PROJECT_EVENT_NOT_FOUND`、continuationなら`PROJECT_SYNC_CONTINUATION_NOT_FOUND`になります。古いtokenが必要なら、次のsync・waitより前に取得してください。保護対象だけで上限に達した場合は整理で解放できず、新しい保存は拒否されます。整理結果のdeleted・reclaimed_bytes・storage_bytesとprotected_sync_tokenで確認できます。保存・整理の競合は`RECORD_BUSY`として拒否します。
+期限による失効や常駐GCはありません。履歴は、整理を実行するか、保存が上限に達して自動削除が行われるまで残ります。削除したtokenはeventなら`PROJECT_EVENT_NOT_FOUND`、continuationなら`PROJECT_SYNC_CONTINUATION_NOT_FOUND`になります。古いtokenが必要なら、次のsync・waitより前に取得してください。保護対象だけで上限に達した場合は整理で解放できず、新しい保存は拒否されます。整理結果のdeleted・reclaimed_bytes・storage_bytes（整理後の、そのprojectの使用量）とprotected_sync_tokenで確認できます。同じprojectの保存・整理の競合は`RECORD_BUSY`として拒否します。別のprojectの保存・整理は互いを待たせません。
+
+0.24.x以前が保存した履歴は、元の場所に残したまま使います。移動や書き換えはしません。tokenはどちらの場所のrecordでも使えます。古い履歴はどのprojectの上限にも数えず、新しく書き足すこともありません。そのprojectの`project prune`と自動削除が、同じ基準で古い履歴のうち自分のprojectのものも削除し、`deleted`と`reclaimed_bytes`に含めます。読めない古いrecordは飛ばします。0.24.x以前に戻すと、このversionが保存した履歴は見えません。そのversionでは、このversionが返したtokenは見つからず、`work tell`は次の`project sync`まで`WORK_TELL_SYNC_INCOMPLETE`になり、同じ引数の`work start`は別の担当を作ります。戻したversionが保存した履歴は、再びこのversionにしたときに古い履歴として使えます。
