@@ -1,11 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- Desktop Cloud に `models select/list/show/set/reset` を追加しました。現在のモデルと対応エフォートを選択して CODEX_HOME ごとに保存し、保存後の新しい `work start`／`thread create` に反映します。Cloud 作成の `--model`／`--thinking` で今回だけ上書きでき、初回ターンへ両方を明示します。
-- モデル選択を中止したときは、設定を変えず、短い日本語の案内を表示して正常終了します。`q`・Ctrl-C・EOF で表示を統一しました。
-- 発注開始時のモデル選択を固定し、設定変更後の同じ発注の再実行や照合で選択が変わらないようにしました。既存スレッドへの継続は従来どおりスレッド自身の設定を引き継ぎます。未対応の組合せは保存・作成前に拒否します。
-
 公開日は日本時間です。
 
 ## 0.25.0 — 未公開
@@ -38,6 +32,17 @@
 - `project prune`と自動削除は、そのprojectのsync・waitが公開している途中（0.24.x以前の公開も含みます）は何も削除しません。公開途中のheadは未解決の質問を一時的に示さないため、その根拠を消すおそれがありました。`project prune`は`deleted`がすべて0の結果に`publication_in_progress: true`を付けて返し、上限に達した`work start`の保存と公開競合で返るsync・waitの保存は、`PROJECT_HISTORY_LIMIT`に`publication_in_progress: true`を付けて拒否します。公開が終わってから再実行してください。公開中のsync・wait自身の自動削除は従来どおりです。
 - アップグレードの後、実行中の`project wait`を再起動してください。アップグレード前に始めたwaitは古いコードのまま動き続けます。
 - 0.24.x以前に戻すと、このversionが保存した履歴は見えません。そのversionでは、このversionが返したtokenは見つからず、`work tell`は次の`project sync`まで`WORK_TELL_SYNC_INCOMPLETE`になります。このversionで始めた`work start`の記録も見えないため、同じ引数で再実行すると別の担当を作ります。戻した後は、`work start`を再実行する前に`project sync`でその担当がすでにprojectにいるかを確認してください。戻したversionが保存した履歴は、再びこのversionにしたときに古い履歴として使えます。
+
+Desktop Cloudの`work start`と`thread create`は、常にCloudの既定モデルで担当を作り、初回ターンのエフォートを指定していませんでした。担当に使うモデルとエフォートを選べませんでした。
+
+- `codexteer --connection desktop-cloud models select`（`models`だけでも同じ）は、現在のCloudのモデル一覧を読み、モデルと、そのモデルで使えるエフォートを端末で番号から選んで保存します。Enterは表示中の現在値を選びます。`models list`は一覧と保存値、`models show`は保存値を返します。`models set --model MODEL --thinking EFFORT`は対話なしで保存し、`models reset`は保存値を解除します。`select`は対話端末専用で、`--json`を付けられません。
+- 保存先は`CODEX_HOME/codex-steer/settings/desktop-cloud-model.json`です。モデルとエフォートを一組で保存し、保存後の新しい`work start`と`thread create`が毎回読みます。再起動は要りません。既存の担当への送信と継続は、その担当自身の設定のままです。
+- 作成時のモデルは、`--model`、保存値、Cloudの既定の順に決まります。エフォートは、`--thinking`、同じモデルの保存値、選んだモデルの既定の順です。`--model`／`--thinking`は今回の作成だけに効きます。決めた組は`thread/start`と初回の`turn/start`の両方に明示し、結果の`model_selection`（`model`・`thinking`・`model_source`・`thinking_source`）で返します。`thread create --dry-run`も現在の一覧と照合した`model_selection`を返し、作成・送信・receiptの保存はしません。
+- `work start`は、発注を最初に保存するときの組をその発注の記録に残します。保存値を変えた後に同じ発注を再実行しても、最初の組で作成・照合します。同じ発注を別の`--model`／`--thinking`で再実行すると`WORK_START_CONFLICT`で拒否します。
+- Desktop Cloudの`work start`が作成の要求を送る前に失敗した場合（接続の失敗、使えないモデルなど）、同じ発注の再実行は同じattemptで作成をやり直します。これまでは送信済みかどうかを区別できず、再実行が`WORK_CREATE_UNKNOWN`で止まり続けていました。要求を送った後の失敗は、従来どおり読み取りの照合だけで、作成を繰り返しません。
+- 一覧にないモデル、そのモデルが対応しないエフォート、非表示のモデルは、保存も作成もせず`DESKTOP_CLOUD_MODEL_INVALID`で拒否します。別の組に自動で変えることはありません。一覧が不完全・矛盾している場合は`DESKTOP_CLOUD_MODELS_UNVERIFIED`、保存値が壊れている場合は`DESKTOP_CLOUD_MODEL_SETTINGS_INVALID`を返します。
+- `select`をq・Ctrl-C・EOFで中止すると、保存値を変えず、「選択を中止しました。設定は変更していません。」と表示して終了値0で終わります。対話端末以外から実行すると`DESKTOP_CLOUD_MODEL_TTY_REQUIRED`を返します。
+- 監督に紐づく実行（`--supervisor`）は`models`を使えません。詳しくは`help models`と`docs/desktop-cloud.md`を参照してください。
 
 ## 0.24.2 — 2026-11-11公開
 

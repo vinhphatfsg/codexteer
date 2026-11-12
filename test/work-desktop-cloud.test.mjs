@@ -9,7 +9,7 @@ import { startWork } from "../src/work-start.mjs";
 import { createDesktopCloudTask, reconcileDesktopCloudCreation, desktopCloudReceipt, sendDesktopCloudInput } from "../src/desktop-cloud.mjs";
 import { DesktopCloudClient } from "../src/desktop-cloud-api.mjs";
 import { fetchThread, readSnapshot, observeThread } from "../src/observe.mjs";
-import { listRecords } from "../src/store.mjs";
+import { listRecords, storePath } from "../src/store.mjs";
 import { historyBucket } from "../src/project-history.mjs";
 import { getManagedThread, managedMembershipDigest } from "../src/project-index.mjs";
 import { getSupervisor, registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
@@ -69,6 +69,9 @@ test("new work reads saved defaults immediately and a reserved order keeps its o
   const result = await startWork(f.input, f.deps);
   assert.equal(result.model_selection.thinking, "high");
   assert.equal(f.state.calls.find(c => c.method === "turn/start").params.effort, "high");
+  const [saved] = await listRecords(historyBucket("work-starts", "coordination-only"), f.storage);
+  assert.equal(result.receipt_path, storePath(historyBucket("work-starts", "coordination-only"), saved.idempotency_key, f.home));
+  assert.deepEqual([saved.model_selection.model, saved.model_selection.thinking], ["neutral-default", "high"]);
   await startWork(f.input, f.deps); assert.equal(creates(f), 1); assert.equal(deliveries(f), 1);
   await assert.rejects(startWork({ ...f.input, thinking: "low" }, f.deps), { code: "WORK_START_CONFLICT" });
   // A separate new order resolves the newly saved value before allocation.
@@ -76,6 +79,16 @@ test("new work reads saved defaults immediately and a reserved order keeps its o
   f.deps.hook = async (boundary, record) => { if (boundary === "attempt_saved") { resolved = record.model_selection; throw Object.assign(Error("pause"), { code: "INTERRUPTED" }); } };
   await assert.rejects(startWork({ ...f.input, title: "next worker" }, f.deps), { code: "INTERRUPTED" });
   assert.equal(resolved.thinking, "low"); assert.equal(creates(f), 1);
+});
+
+test("a work start that fails before the creation request retries the same attempt and creates once", async t => {
+  const f = await fixture(t); let down = true;
+  const transport = { ...f.transport, connect: async () => { if (down) throw Object.assign(Error("offline"), { code: "CONNECTION_FAILED" }); return f.transport.connect(); } };
+  f.deps.create = ({ environmentConfigId, prompt, title, attemptId, modelSelection }) => createDesktopCloudTask(environmentConfigId, prompt, { title, attemptId, modelSelection }, transport);
+  await assert.rejects(startWork(f.input, f.deps), { code: "CONNECTION_FAILED", stage: "create_not_dispatched", creation_dispatched: false });
+  assert.equal(creates(f), 0); down = false;
+  const result = await startWork(f.input, f.deps);
+  assert.equal(result.stage, "observed"); assert.equal(creates(f), 1); assert.equal(deliveries(f), 1);
 });
 
 test("Desktop Cloud work start pins configuration, policy bytes and provenance without Desktop project assignment", async t => {
