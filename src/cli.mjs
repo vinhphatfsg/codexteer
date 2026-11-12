@@ -254,7 +254,7 @@ async function mainOnTarget(argv) {
           read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),
         }));
         success("project.wait", data, json); if (!json) console.log(JSON.stringify(data, null, 2));
-        if (["observation_failed", "owner_exited"].includes(data.reason)) process.exitCode = 1;
+        if (["observation_failed", "owner_exited", "launcher_exited"].includes(data.reason)) process.exitCode = 1;
         return;
       }
       if (action === "control") {

@@ -102,7 +102,7 @@ export async function mainCloud(argv) {
       const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
         read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),
       }));
-      output("project.wait", data); if (["observation_failed", "owner_exited"].includes(data.reason)) process.exitCode = 1; return;
+      output("project.wait", data); if (["observation_failed", "owner_exited", "launcher_exited"].includes(data.reason)) process.exitCode = 1; return;
     }
     if (action === "control") {
       if (supervisor) throw failure("A bound supervisor cannot control project supervision.", "SUPERVISOR_CONTROL_FORBIDDEN");

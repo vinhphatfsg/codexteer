@@ -262,6 +262,20 @@ test("invalid wait options and inspection failures do not masquerade as monitori
   assert.equal(guard.decision, undefined); assert.match(guard.systemMessage, /could not verify.*EPERM/);
 });
 
+test("a wait between slow polls ends within about a second of its launcher going, and one started detached keeps waiting", async t => {
+  const f = await fixture(t);
+  let parent = 4242;
+  const started = performance.now();
+  setTimeout(() => { parent = 1; }, 50);
+  const stopped = await waitProject("P", {}, { ...f.dependencies, pollMs: 15000, parentPid: () => parent });
+  assert.deepEqual(stopped, { project_id: "P", changed: false, timed_out: false, reason: "launcher_exited", unreadable: [], sync: null });
+  assert.ok(performance.now() - started < 3000, "not after the 15 second poll interval");
+  assert.deepEqual(await listRecords("project-waits", f.storage), []);
+  let detachedParent = 1;
+  setTimeout(() => { detachedParent = 77; }, 10);
+  assert.equal((await waitProject("P", { timeoutMs: 40 }, { ...f.dependencies, parentPid: () => detachedParent })).reason, "timeout");
+});
+
 test("a wait whose orchestrator exited ends without publishing and frees the project for the next session", async t => {
   const f = await fixture(t), headKey = createHash("sha256").update("P").digest("hex").slice(0, 40);
   let owner = "owner-start", reads = 0;
