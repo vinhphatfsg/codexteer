@@ -44,7 +44,7 @@ sharedの作成先はDesktopの実在project ID・完全一致名とrootsを照�
 
 作成結果の担当IDとreceiptを記録します。`create_not_dispatched`は作成側が未作成・作成RPC未送信・指示未送信・担当IDなしを明示した段階です。原因を直して同じ発注・開始オプションを再実行すると同じattempt_idで作成をやり直せます。部分成功・unknown・観測不能では同じ担当を読み取り照合し、createを繰り返しません。membershipを先に登録してから監督を結び、stoppedを自動で置き換えません。初回観測で省略件数が0と確認できない場合は、sharedとDesktop Cloudの双方でhistory gapとして止まり、cursorを保存しません。完全な初回観測の公開イベント全文は未提示として保存し、次のsyncで返します。
 
-syncは全担当を一巡してからbacklogを読み、動作中・対応が必要・検収待ち・未確認へ分類します。未解決attentionは解消証拠が得られるまで根拠とtokenを再掲します。バックエンドの待機フラグは完全な最新観測で消えたら解消します。質問は後続の人間入力または同じイベントの回答済み状態、失敗は該当turnの状態更新または後続turnの成功を根拠に解消します。空の待機フラグだけでは質問や失敗を消しません。根拠不足の古いattentionは、完全な成功観測後にhistory_notesへ分け、現在の分類を上書きしません。履歴の欠落、429、不完全な取得を変化なしと扱いません。idleで直近turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ちです。開始前idleや証明不足は未確認として区別します。旧Cloudの質問・承認状態は未確認なので、completedだけでは検収待ちとしません。再起動・要約後はsyncから再開します。
+syncは全担当を一巡してからbacklogを読み、動作中・対応が必要・検収待ち・未確認へ分類します。Desktop Cloudのスレッドは、最後のターンが終わった後も`status`が`active`のまま残ることがあります。そのためDesktop Cloudの担当の`execution`は、ターンの状態（最新ターンの状態と実行中ターンの数）で決めます。実行中のターンがあれば`active`、全てのターンが終わっていれば`idle`です。スレッドの`status`と食い違うときはターンの状態を採り、行の`reason`に`backend_status`（スレッドの`status`）と`execution_basis:"turn_status"`・`latest_turn_status`・`active_turn_count`を残します。最後のターンが`completed`なら検収待ちになります。ターンの状態が欠けているか矛盾するときは、スレッドの`status`のままにします。他の接続の`execution`は従来どおりスレッドの`status`で決めます。未解決attentionは解消証拠が得られるまで根拠とtokenを再掲します。バックエンドの待機フラグは完全な最新観測で消えたら解消します。質問は後続の人間入力または同じイベントの回答済み状態、失敗は該当turnの状態更新または後続turnの成功を根拠に解消します。空の待機フラグだけでは質問や失敗を消しません。根拠不足の古いattentionは、完全な成功観測後にhistory_notesへ分け、現在の分類を上書きしません。履歴の欠落、429、不完全な取得を変化なしと扱いません。idleで直近turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ちです。開始前idleや証明不足は未確認として区別します。旧Cloudの質問・承認状態は未確認なので、completedだけでは検収待ちとしません。再起動・要約後はsyncから再開します。
 
 ```sh
 codexteer project sync --continue <TOKEN> --offset <NEXT_OFFSET> --event-offset <NEXT_EVENT_OFFSET> --json
@@ -59,7 +59,7 @@ codexteer project event <EVENT-TOKEN> --json
 
 最後のターンが未回答の質問や失敗で終わった担当も、同じ条件で`settled`になります。停止済みの担当には誰も回答しないため、その質問や失敗は解消しないからです。`settled`にする回の担当行は、その質問・失敗を`attention`と`events`で示します。以後の行も同じ`attention`と根拠のイベントを再掲し、「対応が必要」のまま残ります。未解決attentionは消えません。未解決attentionのない`settled`の行は`events:[]`です。
 
-承認・質問のフラグが立っている担当、ターン実行中の担当、フラグが不明な担当は、停止済みでも読み続けます。フラグの解消とidleを完全な観測で確認した回に`settled`になります。
+承認・質問のフラグが立っている担当、ターン実行中の担当、フラグが不明な担当は、停止済みでも読み続けます。idleの担当を`settled`にするのは、全てのターンが終わったと確認できた場合だけです。実行中ターンの数が不明な担当、最新ターンの状態が不明か実行中の担当、数と最新ターンが食い違う担当は、どの接続でも読み続けます。フラグの解消とidleを完全な観測で確認した回に`settled`になります。
 
 読めない担当が残り`complete:false`になる通常のsyncは、オーケストレーターが確認した観測ではありません。このsyncでは、waitの基準（最後にwaitが返した観測か完全なsyncで示した観測）から新しいターン終了・質問・バックエンド失敗がなく、未解決attentionも残っていない担当だけを`settled`にします。停止時に実行中だったターンがその後に終わった担当や、基準を作ったときに読めなかった担当は、次のwaitが変化として返し、そのwaitの回に`settled`になります。未解決attentionが残る担当は、次にwaitが返した回か完全なsyncの回に`settled`になります。waitの回と完全なsyncの回は、この確認なしに`settled`にします。waitも完全なsyncも一度も公開していないprojectでは、通常のsyncだけで`settled`になります。
 

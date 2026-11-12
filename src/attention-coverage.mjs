@@ -11,6 +11,9 @@ export function turnEvidence(observation) {
   return ended.has(latest) || (latest === null && (observation.latest_turn_id ?? null) === null) ? "none" : "unknown";
 }
 
+// Any sign of a running turn, even one the rest of the evidence contradicts.
+export const turnRuns = observation => observation?.active_turn_count > 0 || running.has(observation?.latest_turn_status);
+
 export const RUNNING_TURN_UNOBSERVED = "running_turn_unobserved";
 
 // A Desktop Cloud turn shows only its opening message until it ends: questions,

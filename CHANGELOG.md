@@ -13,6 +13,14 @@ Desktop Cloudの担当は、ターンの実行中は開始時の指示しか読�
 - Desktop Cloudの`doctor`は、この接続の制限として`attention_coverage:"running_turn_unobserved"`を返します。`approval_roundtrip`とは別の項目です。
 - オーケストレーター本文は、この印の付いた担当について「待っているものはない」とユーザーへ伝えず、Codexの画面で確認が必要だと伝えるよう指示します。
 
+Desktop Cloudのスレッドは、最後のターンが終わった後も`status`が`active`のまま残ることがあります。codexteerはその担当を「動作中」と表示し、停止済みでも`settled`にせず読み続けていました。
+
+- Desktop Cloudの担当の`execution`は、ターンの状態（最新ターンの状態と実行中ターンの数）で決めます。実行中のターンがあれば`active`、全てのターンが終わっていれば、スレッドの`status`が`active`でも`idle`です。最後のターンが`completed`なら「検収待ち」、`failed`なら「対応が必要」になります。
+- スレッドの`status`と食い違うときはターンの状態を採ります。その行の`reason`は、`backend_status`（スレッドの`status`）と`execution_basis:"turn_status"`・`latest_turn_status`・`active_turn_count`を持ちます。ターンの状態が欠けているか矛盾するときは、スレッドの`status`のままです。
+- `project control stop`したDesktop Cloudの担当は、スレッドの`status`が`active`のままでも、全てのターンが終わり承認・質問のフラグが空と分かれば`settled`になります。
+- idleの担当を`settled`にするのは、全てのターンが終わったと確認できた場合だけになりました。実行中ターンの数が0でも最新ターンが実行中か状態不明の担当は、どの接続でも読み続けます。これまでは`settled`になることがありました。
+- shared・Web Cloudの担当の`execution`は変わりません。
+
 `project wait`が、1回だけ読み取りに失敗した担当を`observation_failed`で返していました。担当が多く長く続くprojectでは、すぐ後に読める担当の失敗のたびにオーケストレーターが起こされていました。
 
 - `project wait`は、同じ担当が2回以上の照会で続けて読めず、最初の失敗から60秒以上経ったときにだけ、その担当を`observation_failed`で返します。1回の読み取り失敗は担当の状態を示さず、次に読めたときにcursor以後の出来事を受け取れるため、返しません。同じ照会が他の理由で返る場合は、その結果の`unreadable`で`reported:true`にし、`observation_failed`では返しません。この経過はtimeoutや他の理由で返った後に再開したwaitにも引き継ぎ、途中でwaitの照会が完全に読めれば数え直します。通常のsyncが読めただけでは数え直しません。

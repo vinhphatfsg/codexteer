@@ -7,7 +7,7 @@ import { listManagedThreads, updateManagedThreadCursor, managedMembershipDigest 
 import { getSupervisor } from "./supervision.mjs";
 import { normalizeTaskId } from "./task-id.mjs";
 import { readRecord, writeRecord, withStoreLock } from "./store.mjs";
-import { attentionCoverage, unobservedAttention } from "./attention-coverage.mjs";
+import { attentionCoverage, unobservedAttention, turnEvidence, turnRuns } from "./attention-coverage.mjs";
 
 const hash = value => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
@@ -63,8 +63,15 @@ function classify(observation, complete, connection) {
   const events = observation?.events ?? [], questions = events.some(event => Array.isArray(event.questions) && event.questions.length);
   const failed = failedWork(observation);
   const human = questions || (Array.isArray(flags) && flags.length > 0);
-  const execution = active.has(status) ? "active" : ["idle", "notLoaded"].includes(status) ? "idle" : terminal.has(status) ? "terminal" : "unknown";
-  const idleCompleted = status === "idle" && observation.latest_turn_status === "completed"
+  const coarse = active.has(status) ? "active" : ["idle", "notLoaded"].includes(status) ? "idle" : terminal.has(status) ? "terminal" : "unknown";
+  // A Desktop Cloud thread can stay active long after its last turn ended, and
+  // only a turn's own status says whether it runs. So there the turns decide
+  // when they disagree with the thread status. Unproven turns leave the status
+  // in charge, and settlement then refuses to call the member quiet.
+  const turns = connection === "desktop-cloud" ? turnEvidence(observation) : "unknown";
+  const execution = turns === "running" ? "active" : turns === "none" && coarse === "active" ? "idle" : coarse;
+  const byTurns = execution !== coarse;
+  const idleCompleted = (status === "idle" || (byTurns && execution === "idle")) && observation.latest_turn_status === "completed"
     && typeof observation.latest_turn_id === "string" && !!observation.latest_turn_id && observation.active_turn_count === 0;
   const attentionKnown = Array.isArray(flags);
   const attention = human ? "human" : failed ? "failure" : !complete || connection === "cloud" || !attentionKnown ? "unknown"
@@ -72,9 +79,15 @@ function classify(observation, complete, connection) {
   const observationState = complete ? "current" : "incomplete";
   const group = observationState !== "current" ? "未確認" : ["human", "failure"].includes(attention) ? "対応が必要" : attention === "review" ? "検収待ち" : execution === "unknown" || attention === "unknown" ? "未確認" : "動作中";
   return { execution, attention, observation: observationState, group, reason: { backend_status: status, attention_flags: flags ?? null, question_event: questions, failure_event: failed,
+    ...(byTurns ? { execution_basis: "turn_status", latest_turn_status: observation.latest_turn_status ?? null, active_turn_count: observation.active_turn_count } : {}),
     ...(attention === "review" && idleCompleted ? { review_basis: "idle_after_completed_turn", latest_turn_id: observation.latest_turn_id,
       latest_turn_status: observation.latest_turn_status, active_turn_count: observation.active_turn_count } : {}) } };
 }
+
+// Unresolved attention replaces a row's reason. Where the turns decided the
+// execution, the raw thread status and that evidence stay in the new reason.
+const turnBasis = reason => reason?.execution_basis ? { backend_status: reason.backend_status, execution_basis: reason.execution_basis,
+  latest_turn_status: reason.latest_turn_status, active_turn_count: reason.active_turn_count } : {};
 
 function summarizeEvent(event, threadId, store) {
   const token = randomUUID(), text = event.text ?? event.output ?? null;
@@ -249,9 +262,11 @@ const cursorError = error => typeof error.code === "string" && /^[A-Z0-9_]+$/.te
 // operator's word.
 function settlement(decision, work, state, settledAt) {
   if (!decision.stopped) return null;
-  // A coarse idle or notLoaded status with a running or unprovable turn is not
-  // quiet, nor is work whose approval and question flags are unknown.
-  const quiet = (work.execution === "terminal" || (work.execution === "idle" && state.latest?.active_turn_count === 0))
+  // An idle member is quiet only when its turns prove that none runs: a missing
+  // count, an unknown status or a count that disagrees with the latest turn is
+  // not proof. A terminal member is not quiet while a turn is shown running.
+  // Work whose approval and question flags are unknown is not quiet either.
+  const quiet = (work.execution === "terminal" ? !turnRuns(state.latest) : work.execution === "idle" && turnEvidence(state.latest) === "none")
     && Array.isArray(state.latest?.attention) && state.latest.attention.length === 0;
   if (work.complete) return quiet ? { basis: "observed", settled_at: settledAt, row: settledRow(work) } : null;
   return decision.excludeReason && state.unreadable ? { basis: "excluded", reason: decision.excludeReason, error: state.error, settled_at: settledAt, row: settledRow(work) } : null;
@@ -355,7 +370,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     if (state.historyNotes?.length) historical[state.member.thread_id] = [...new Map([...historical[state.member.thread_id] ?? [], ...state.historyNotes].map(entry => [JSON.stringify(entry), entry])).values()];
     if (currentAttention) {
       unresolved[state.member.thread_id] = currentAttention;
-      axes.attention = currentAttention.attention; axes.reason = currentAttention.reason; axes.group = currentAttention.attention === "unknown" ? "未確認" : "対応が必要";
+      axes.attention = currentAttention.attention; axes.reason = { ...currentAttention.reason, ...turnBasis(axes.reason) }; axes.group = currentAttention.attention === "unknown" ? "未確認" : "対応が必要";
     }
     const repeatedEvents = currentAttention?.events.filter(e => !eventSummaries.some(s => s.token === e.token)) ?? [];
     const coverage = attentionCoverage(state.latest, state.member.connection);
@@ -403,7 +418,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     const prior = previous?.unresolved_attention?.[work.thread_id];
     const retained = reduceAttention({ ...state, complete: false }, prior, state.eventSummaries);
     return { retained, row: { ...work, complete: false, cursor: null, error: code, observation: "incomplete",
-      ...(retained ? { attention: retained.attention, reason: retained.reason, group: retained.attention === "unknown" ? "未確認" : "対応が必要",
+      ...(retained ? { attention: retained.attention, reason: { ...retained.reason, ...turnBasis(work.reason) }, group: retained.attention === "unknown" ? "未確認" : "対応が必要",
         resolution_unconfirmed: true, attention_repeated: !!prior,
         events: [...new Map([...retained.events, ...work.events].map(e => [e.token, e])).values()] } : {}) } };
   };

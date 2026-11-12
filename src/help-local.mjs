@@ -527,6 +527,8 @@ export const topics = {
       "project prune --project IDで過去のsync履歴を整理する。最新sync・最新のwait結果・未提示初回結果・参照中の根拠は保持する。保存総量はprojectごとに256 MiB、全文観測は1担当1回16 MiBまで。容量不足では省略保存せず拒否する。履歴の保存場所・上限・排他・整理はprojectごとに独立し、他projectの履歴が拒否・待機・失敗の原因になることはない。0.24.x以前が保存した履歴は元の場所のまま使い、どのprojectの上限にも数えず、そのprojectの整理が同じ基準で削除する。",
       "保存の前に、今回書くrecordの保存後のサイズが上限に収まるかを確認する。収まらなければ、そのprojectの古い履歴をproject pruneと同じ基準で自動削除してもう一度確認し、結果のhistory_pruned（ページ本体の外）で報告する。その時点の最新syncと最新のwait結果より古い結果のtokenは使えなくなる。",
       "PROJECT_HISTORY_LIMITは、自動削除の後も収まらないときに返る。1回のpublicationが残りの空きより大きい場合と、保護対象がそのprojectの上限を占めている場合に起きる。そのprojectの公開の途中（0.24.x以前の公開も含む）は自動削除せず、work startや公開競合の保存はpublication_in_progress:true付きで拒否される。project pruneも公開の途中は何も削除せず、publication_in_progress:trueを返す。公開が終わってから再実行する。何も保存せずcursorも進めない。storage_bytes（自動削除後の、そのprojectの使用量）・required_bytes（今回必要な量）・limit_bytes（上限）・history_prunedを返し、text出力にも表示する。",
+      "Desktop Cloudのスレッドは、最後のターンが終わった後もstatusがactiveのまま残ることがある。Desktop Cloudの担当のexecutionはターンの状態（最新ターンのstatusと実行中ターンの数）で決め、実行中のターンがあればactive、全てのターンが終わっていればidleにする。スレッドのstatusと食い違うときはターンの状態を採り、行のreasonにbackend_status（スレッドのstatus）とexecution_basis:turn_status・latest_turn_status・active_turn_countを残す。ターンの状態が欠けているか矛盾するときはスレッドのstatusのままにする。他の接続のexecutionは従来どおりスレッドのstatusで決める。",
+      "idleの担当をsettledにするのは、全てのターンが終わったと確認できた場合だけ。実行中ターンの数が不明、最新ターンのstatusが不明か実行中、数と最新ターンが食い違う担当は、どの接続でも読み続ける。",
       "idleかつ最新turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ち。開始前idleや情報不足は未確認。検収待ちは全体の完了認定ではない。",
       "未確認・history_gap・complete:falseの担当を変化なしとして扱わない。既存read/watchは引き続き利用できる。",
     ],
