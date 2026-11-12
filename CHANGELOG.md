@@ -55,7 +55,7 @@ Desktop Cloudの`work start`と`thread create`は、常にCloudの既定モデ�
 - 有効にするには、codexteerを実行する環境（オーケストレーターのセッションと、そこから起動する`project wait`）に`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=on`を設定します。`on`以外の値は無効です。
 - 有効なら、`read`・`status`・`project sync`・`project wait`・`work tell`・`doctor --thread`は、実行中のターンが1つだけで最新の担当を、別の接続で`thread/resume`して、そのターンのここまでの項目を読みます。読めた項目は履歴と同じ形のイベントで返り、結果は`live_turn_id`を持ち、`attention_coverage`は付きません。`watch`と`work start`の作成直後の確認は読みません。`doctor`は`running_turn_attention:"live"`を返します。
 - 費用は、実行中のDesktop Cloud担当1つにつき、1回の`project sync`と`project wait`の1回の照会ごとに接続1本（認証・`initialize`・`thread/resume`）です。resumeの後、サーバー要求を0.5秒待ってから閉じ、全体で10秒を超えると打ち切ります。同じコマンドの2回目以降の読み取りは同じ結果を使います。
-- `work tell`は、実行中のターンを最初の確認で1回、送信の直前にもう1回、別の接続で読みます。最初の確認の後に出た質問・サーバー要求（`WORK_TELL_HUMAN_REQUIRED`）と新しい項目（`WORK_TELL_STALE_SYNC`）にも送りません。送信の直前に読めなかったときは送り、receiptに`attention_coverage`を付けます。実行中のターンへ送るtellの接続は2本、`--new-turn`は0本です。送信直前の読み取りは担当のcursorを変えません。
+- `work tell`は、実行中のターンを最初の確認で1回、送信の直前にもう1回、別の接続で読みます。最初の確認の後に出た質問・サーバー要求（`WORK_TELL_HUMAN_REQUIRED`）と新しい項目（`WORK_TELL_STALE_SYNC`）にも送りません。送信の直前に読めなかったときは送り、receiptに`attention_coverage`を付けます。実行中のターンへ送るtellの接続は2本、実行中のターンがない担当へのtell（`--new-turn`を含みます）は0本です。送信直前の読み取りは担当のcursorを変えません。
 - しないこと：実行中のターンがない担当、状態の確かでない担当、`settled`の担当はresumeしません。resumeした接続はサーバー要求に応答せず、メソッド名だけを記録して閉じます。届いた要求は`attention`の`pendingRequest:<メソッド名>`と`pending_requests`で返り、担当行は「対応が必要」になり、`work tell`は送りません。回答はCodexの画面で行います。
 - 読んだ項目は、ターンが終わって履歴に現れても、同じ内容なら再び返しません。内容が変わった項目は`change:"updated"`で返ります。
 - 実行中のターンを読めずに履歴だけで読んだ担当は、従来どおり`attention_coverage`の印が付き、理由を`live_fallback`で返します。`read`の結果、`project sync`の担当行（詳細を省いた行を含みます）、`attention_unobserved`のその担当が持ちます。値は`unavailable`・`ledger_full`・`view_mismatch`・`mismatch`です。

@@ -466,9 +466,21 @@ test("work tell does not steer over a question, a pending request or progress th
     // An unanswered question stays on the member's later rows, so it is counted on the row that first shows it.
     assert.equal(eventIds(rows[1]).filter(id => id === changed[0]?.id).length, name === "request" ? 0 : 1, `${name}: what appeared late reaches the next sync once`);
     assert.deepEqual([opening.id, note.id, ...(name === "progress" ? [changed[0].id] : [])].map(count).filter(n => n !== 1), [], `${name}: nothing is delivered twice or skipped`);
-    const next = await f.tell(ID, "Continue the same delegation.", { newTurn: true }).catch(error => error);
+    const before = f.resumes(), next = await f.tell(ID, "Continue the same delegation.", { newTurn: true }).catch(error => error);
+    assert.equal(f.resumes(), before, `${name}: a tell to a task with no running turn resumes nothing`);
     assert.equal(name === "question" ? next.code : next.delivery_status, name === "question" ? "WORK_TELL_HUMAN_REQUIRED" : "accepted", `${name}: the next sync is a usable basis`);
   }
+});
+
+test("work tell does not steer a turn that ends after its first read", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  f.start(); f.progress(agent("Working."));
+  await f.sync();
+  const reviewed = await basis(f), resumes = f.resumes();
+  await assert.rejects(lateTell(f, () => f.complete([agent("Finished.")])), { code: "STALE_OBSERVATION", delivery_status: "not_sent" }, "the send's own check of its basis sees the turn end");
+  assert.equal(steers(f), 0); assert.equal(f.resumes() - resumes, 1, "an ended turn is not resumed");
+  assert.deepEqual(await basis(f), reviewed);
 });
 
 test("work tell that cannot take its second live view sends as on an unread turn, and its receipt says so", async t => {
@@ -495,7 +507,9 @@ test("work tell that cannot take its second live view sends as on an unread turn
     if (name !== "ended") f.complete([agent("Done.")]);
     rows.push((await f.sync(WIDE)).works[0]);
     assert.deepEqual(itemIds(rows, [turn]).sort(), f.state.turns.at(-1).items.map(item => item.id).sort(), `${name}: every item arrives exactly once`);
+    const before = f.resumes();
     assert.equal((await f.tell(ID, "Continue the same delegation.", { newTurn: true })).delivery_status, "accepted", `${name}: the next sync is a usable basis`);
+    assert.equal(f.resumes(), before, `${name}: a new turn on a task with no running turn resumes nothing`);
   }
 });
 
