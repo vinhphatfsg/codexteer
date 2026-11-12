@@ -44,6 +44,17 @@ Desktop Cloudの`work start`と`thread create`は、常にCloudの既定モデ�
 - `select`をq・Ctrl-C・EOFで中止すると、保存値を変えず、「選択を中止しました。設定は変更していません。」と表示して終了値0で終わります。対話端末以外から実行すると`DESKTOP_CLOUD_MODEL_TTY_REQUIRED`を返します。
 - 監督に紐づく実行（`--supervisor`）は`models`を使えません。詳しくは`help models`と`docs/desktop-cloud.md`を参照してください。
 
+Desktop Cloudのタスクは、読むたびに全ターンを項目ごと取得し、cursor以後だけを残していました。長く続く担当ほど1回の照会が重くなり、履歴が受信上限（16 MiB）や時間制限を超えると、その担当は`TIMEOUT`・`PAYLOAD_TOO_LARGE`・接続エラーで読めなくなりました。読めない担当への`work tell`は`WORK_TELL_SYNC_INCOMPLETE`で止まり続け、送信前の状態確認も全履歴を取得していました。
+
+- Desktop Cloudの`read`・`watch`・`status`・`project sync`・`project wait`・`work tell`は、ターンを新しい順に1ターンずつ取得し、cursorが指すターンで止めます。1回の読み取りは、cursorのターンとそれより新しいターンの分だけになります。結果の`history_scope`は`tail-turns`です。
+- cursorはv3になります。v1 cursorと同じ判定を、cursorのターンから最新までに適用するため、返るイベント・`has_more`・`changed`は全履歴を読んだ場合と同じです。最新ターンが完了済みで全て読み終え、状態も変わらなければ、そのターンのIDと状態だけを確認します（`itemsView: notLoaded`）。
+- 完了・失敗・中断・取消したターンは後から変わらず、ターンは末尾にだけ追加される前提です。cursorのターンとそれより新しいターンは毎回cursorと照合します。cursorのターンが消えた場合は、開始時刻から古い履歴を読まずに判定し、従来どおり`STALE_CURSOR`（history gap）になります。新しい順でない一覧、同じターンや位置の繰り返しは`DESKTOP_CLOUD_PROTOCOL_ERROR`で拒否します。cursorのターンより前への挿入と、それより古い完了済みターンの書き換えは検出しません。最新の完了済みターンの項目の書き換えは、次にそのターンを取得した読み取りで検出します。
+- `--since`なしの初回の`read`は`--limit`件に達した所で止まり、最古のターンまで読まなければ`omitted_older_events`は`null`です。`work start`と`project sync`は従来どおり、初回の境界を証明できない担当を`WORK_INITIAL_HISTORY_GAP`にします。
+- 前の版が保存したv1 cursor（担当のcursor、waitの基準、`work start`の記録、`--based-on`）はそのまま使えます。Desktop Cloudではv1 cursorを一度だけ全履歴で読み、同じイベントを返してv3 cursorを返します。担当のcursorは次の完全な`project sync`でv3になります。waitの基準は、waitが返るか完全な`project sync`が公開するまでv1のままで、その間のwaitは照会ごとに全履歴を読みます。全履歴がすでに受信上限を超えている担当のv1 cursorは読めないままです。`--full-history`は従来どおり全取得とv1 cursorで、v3 cursorとは併用できません（`OPTIONS_INVALID`）。
+- 送信前の状態確認は、タスクの情報と最新ターン1つ（項目なし）だけを読み、そのターンをsteerの対象にします。v3の`--based-on`はcursorのターン以後だけで鮮度を確認し、v1の`--based-on`は従来どおり全履歴で確認します。
+- 最新ターン1つだけで受信上限（16 MiB）を超える担当は、従来どおり`PAYLOAD_TOO_LARGE`で読めません。`history check`と作成の照合は従来どおり全履歴を読みます。
+- 0.24.x以前に戻すと、このversionが保存したv3 cursorは読めず`STALE_CURSOR`になります。担当のcursor・waitの基準・`work start`の記録がv3の担当は、戻したversionではhistory gapになり、`work tell`は`WORK_TELL_SYNC_INCOMPLETE`になります。保存されたcursorは変わらないため、このversionに戻せば続きから読めます。
+
 ## 0.24.2 — 2026-11-11公開
 
 読めない担当が残るprojectで、停止済みの担当のターン終了を`project wait`が返さないことがありました。
