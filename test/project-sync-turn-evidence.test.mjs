@@ -83,9 +83,11 @@ for (const [name, evidence] of Object.entries(unproven)) {
     const f = await fixture(t); Object.assign(f.work, evidence); await f.stop();
     const active = row(await f.sync(), f.id);
     assert.equal(active.execution, "active"); assert.equal(active.reason.execution_basis, undefined); assert.equal(active.settled, undefined);
+    assert.equal(active.attention_coverage, "running_turn_unobserved", "a turn that may be running hides what it asks");
     f.work.status = "idle";
     const idle = row(await f.sync(), f.id);
     assert.equal(idle.execution, "idle"); assert.equal(idle.settled, undefined, "an idle status does not prove that no turn runs");
+    assert.equal(idle.attention_coverage, "running_turn_unobserved");
     assert.ok(f.calls.includes(f.id));
   });
 }

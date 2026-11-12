@@ -6,11 +6,11 @@
 
 Desktop Cloudの担当は、ターンの実行中は開始時の指示しか読めません。その間の発言・コマンド・質問・承認待ちは、ターンが終わった後にまとめて現れます。codexteerはこの間も`attention`を空で返していたため、Codexの画面で質問が待っていても「待っているものはない」と読める結果になっていました。
 
-- Desktop Cloudでターンが実行中の担当は、`project sync`の担当行、`status`、`read`、`watch`に`attention_coverage:"running_turn_unobserved"`を持ちます。そのターン中の質問・承認待ち・進捗を観測できていないことを示します。観測できた担当には付きません。`attention`・`group`・`complete`など既存の値は変わりません。
+- Desktop Cloudでターンが実行中の担当は、`project sync`の担当行、`status`、`read`、`watch`（`--stream`を除きます）に`attention_coverage:"running_turn_unobserved"`を持ちます。そのターン中の質問・承認待ち・進捗を観測できていないことを示します。ターンが実行中でないと確認できない担当にも付きます。全てのターンが終わったと確認できた担当には付きません。`attention`・`group`・`complete`など既存の値は変わりません。
 - `project sync`の全ページと`project wait`の全ての結果（timeoutを含みます）は、その担当を`attention_unobserved:[{thread_id, attention_coverage}]`に並べます。該当する担当がいなければ付きません。ページ本体の外に付き、`output_bytes`とbyte budgetには含みません。
 - ターン中に出た質問は、ターンが終わると従来どおりwaitが返し、担当行は「対応が必要」になります。
 - `work tell`は、実行中のDesktop Cloudターンに送るときも送信の可否を変えません。質問・承認待ちを観測できなかったことを、receiptの`attention_coverage`で示します。
-- Desktop Cloudの`doctor`は、この接続の制限として`attention_coverage:"running_turn_unobserved"`を返します。`approval_roundtrip`とは別の項目です。
+- Desktop Cloudの`doctor`は、この接続の制限として`running_turn_attention:"unobserved"`を常に返します。`approval_roundtrip`とは別の項目です。
 - オーケストレーター本文は、この印の付いた担当について「待っているものはない」とユーザーへ伝えず、Codexの画面で確認が必要だと伝えるよう指示します。
 
 Desktop Cloudのスレッドは、最後のターンが終わった後も`status`が`active`のまま残ることがあります。codexteerはその担当を「動作中」と表示し、停止済みでも`settled`にせず読み続けていました。

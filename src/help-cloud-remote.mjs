@@ -136,7 +136,7 @@ export const topics = {
       { name: "--dry-run", text: "作成・送信をせず、計画または受付記録だけを返す。" },
       { name: "--resolve-unknown --note TEXT", text: "ユーザー専用。受付不明のまま確かめられないthread assignの試行（thread receipt）または送信（history mark）を、理由付きで解除する。--noteは必須。" },
     ],
-    returns: "environments listは環境構成、projects listはDesktopのプロジェクト一覧。thread createはthread_id・deep_link・attempt_id・creation_status・delivery_status。thread assignはverification_status（verified以外は終了コード1）。thread receiptは作成の受付記録か所属割当の試行記録で、--resolve-unknownではresolution（by:user・at・note）付きの試行記録。doctorはready・observation・project_membership（membershipとassignment_api）・approval_roundtrip:unverified・attention_coverage:running_turn_unobserved（この接続では実行中ターンの質問・承認待ちを観測できない）。read/watch/sendは共通の観測・配送形式。",
+    returns: "environments listは環境構成、projects listはDesktopのプロジェクト一覧。thread createはthread_id・deep_link・attempt_id・creation_status・delivery_status。thread assignはverification_status（verified以外は終了コード1）。thread receiptは作成の受付記録か所属割当の試行記録で、--resolve-unknownではresolution（by:user・at・note）付きの試行記録。doctorはready・observation・project_membership（membershipとassignment_api）・approval_roundtrip:unverified・running_turn_attention:unobserved（この接続では実行中ターンの質問・承認待ちを観測できない。対象の状態によらず常に返す）。read/watch/sendは共通の観測・配送形式。",
     errors: [
       CONNECTION_MISMATCH,
       CLOUD_LOGIN,
@@ -184,7 +184,7 @@ export const topics = {
       "履歴に見えないことは未送信の証明ではない。",
       ATTEMPT_WEB_ONLY,
       "実行中のターンで読めるのは開始時の指示だけ。ターンが終わると、その間の発言・コマンド・質問がまとめて現れる。",
-      "ターンの実行中は質問・承認待ち・自動レビューの拒否・進捗を観測できず、attentionは[]のままになる。status・read・project syncの担当行・work tellのreceiptはその間attention_coverage:running_turn_unobservedを返す。Codexの画面で確認する。",
+      "ターンの実行中は質問・承認待ち・自動レビューの拒否・進捗を観測できず、attentionは[]のままになる。status・read・project syncの担当行・work tellのreceiptはその間attention_coverage:running_turn_unobservedを返す。ターンが実行中でないと確認できないときも返す。Codexの画面で確認する。",
       "承認の往復と差分専用APIは未検証。",
       "通常のCloud実行環境へのプロジェクト登録は未対応。",
       "詳細はdocs/desktop-cloud.md。",

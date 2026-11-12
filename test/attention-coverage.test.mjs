@@ -144,6 +144,6 @@ test("the orchestrator prompt and help say what a running Desktop Cloud turn hid
   }
   assert.match(helpData("project").returns, /attention_unobserved/);
   assert.match(helpData("project").notes.join(" "), /ターンが終わった後の質問は従来どおり返す/);
-  assert.match(helpData("desktop-cloud").returns, /attention_coverage:running_turn_unobserved/);
+  assert.match(helpData("desktop-cloud").returns, /running_turn_attention:unobserved/);
   assert.match(helpData("desktop-cloud").notes.join(" "), /ターンが終わると、その間の発言・コマンド・質問がまとめて現れる/);
 });
