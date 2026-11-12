@@ -12,6 +12,16 @@ const modes = {
   "full-access": { permissions: ":danger-full-access", approvalPolicy: "never", approvalsReviewer: "user" },
 };
 
+const entries = value => value !== null && typeof value === "object" && !Array.isArray(value) ? Object.entries(value) : [];
+
+// Desktop keeps account atoms under its current content owner and device atoms
+// in the older map; it reads the two merged, the device map winning.
+function desktopAtoms(state) {
+  const owner = state?.["electron-renderer-content-owner"];
+  const owned = typeof owner === "string" ? state[`electron-owner-atoms:${owner}`] : undefined;
+  return Object.fromEntries([...entries(owned), ...entries(state?.["electron-persisted-atom-state"])]);
+}
+
 // Read only the selected mode, never heartbeat permissions from another chat.
 // Desktop has both a permission-selection picker and an older agent-mode picker.
 export async function readDesktopPermissionSelection(home) {
@@ -20,7 +30,7 @@ export async function readDesktopPermissionSelection(home) {
     file = await open(path.join(home, ".codex-global-state.json"), constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
     const info = await file.stat();
     if (!info.isFile() || info.uid !== process.getuid() || (info.mode & 0o022) || info.size > 16 * 1024 * 1024) throw failure();
-    const atoms = JSON.parse(await file.readFile("utf8"))["electron-persisted-atom-state"];
+    const atoms = desktopAtoms(JSON.parse(await file.readFile("utf8")));
     const selected = atoms?.["permission-selection-by-host-id:local"];
     const legacy = atoms?.["agent-mode-by-host-id"]?.local;
     if (selected !== undefined) {
