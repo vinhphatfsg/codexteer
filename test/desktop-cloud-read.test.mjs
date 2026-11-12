@@ -10,6 +10,8 @@ import { registerManagedThread, getManagedThread } from "../src/project-index.mj
 import { registerSupervisor } from "../src/supervision.mjs";
 import { syncProject, projectEvent } from "../src/project-sync.mjs";
 import { waitProject } from "../src/project-wait.mjs";
+import { tellWork } from "../src/work-tell.mjs";
+import { sendDesktopCloudInput } from "../src/desktop-cloud.mjs";
 
 const UUID = "aaaaaaaa-aaaa-4aaa-8aaa-0000000000c1", ID = `durable_${UUID}`, ENV = "fixture~asenvcfg_read", SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-0000000000c2";
 let serial = 0;
@@ -234,6 +236,28 @@ test("a --based-on check from a tail cursor refuses new user input in the runnin
     if (change === "steer") f.state.turns.at(-1).items.push(user("steer"));
     else { f.complete(); f.append([user("next")], { status: "inProgress" }); }
     await assert.rejects(directive.beforeSend({}, client), { code: "STALE_OBSERVATION" }, change);
+  }
+});
+
+test("work tell to a long-history member reads its newest turn, not its history", async t => {
+  const f = await member(t, 150);
+  await syncProject("P", {}, f.deps);
+  f.resetServed();
+  const sent = await tellWork(ID, "Review the result.", { newTurn: true }, { storage: f.storage, read: f.read,
+    send: (id, body, options) => sendDesktopCloudInput(id, body, options, { ...f.storage, connect: f.connect }) });
+  assert.equal(sent.delivery_status, "accepted"); assert.equal(f.state.turns.at(-1).status, "inProgress");
+  assert.ok(f.state.served.turns <= 1, `work tell read ${f.state.served.turns} turns`);
+});
+
+test("a v1 --based-on check still reads the full history before a send", async t => {
+  const { prepareDirective } = await import("../src/directive.mjs");
+  for (const change of [false, true]) {
+    const f = await member(t, 5), v1 = (await f.fullRead(ID, { limit: 1000 })).cursor;
+    if (change) f.append(work(5));
+    const directive = await prepareDirective(ID, "Continue.", { basedOn: v1, source: "test" }, "fixture-message");
+    const send = sendDesktopCloudInput(ID, directive.wireText, { newTurn: true, beforeSend: directive.beforeSend }, { ...f.storage, connect: f.connect });
+    if (change) await assert.rejects(send, { code: "STALE_OBSERVATION" });
+    else assert.equal((await send).delivery_status, "accepted");
   }
 });
 

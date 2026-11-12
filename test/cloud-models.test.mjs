@@ -20,6 +20,7 @@ async function fixture(t) {
     if (method === "thread/start") { if (state.lostCreate) throw Object.assign(Error("lost"), { uncertain: true }); return { thread: { id: threadId } }; }
     if (method === "thread/name/set") return {};
     if (method === "thread/read") return { thread: { id: threadId, status: { type: "idle" }, turns: state.turns, environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config }] } };
+    if (method === "thread/turns/list") return { data: state.turns.slice(-1).map(turn => ({ ...turn, items: [], itemsView: "notLoaded" })), nextCursor: state.turns.length > 1 ? "older" : null };
     if (method === "turn/start") return { turn: { id: "turn-fixture" } };
     throw Error(`Unexpected ${method}`);
   } };

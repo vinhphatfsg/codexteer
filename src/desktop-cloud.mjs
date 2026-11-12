@@ -4,6 +4,7 @@ import { cloudModelsOnClient, resolveCloudModelSelection, validateCloudModelOpti
 import { desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
 import { getManagedThread } from "./project-index.mjs";
 import { fetchThread } from "./observe.mjs";
+import { newestTurn } from "./desktop-cloud-read.mjs";
 import { readRecord, writeRecord, storePath, withStoreLock, listRecords } from "./store.mjs";
 const failure = (message, code = "DESKTOP_CLOUD_OPTIONS_INVALID", uncertain = false) => Object.assign(new Error(message), { code, uncertain });
 const hash = value => createHash("sha256").update(value).digest("hex");
@@ -67,6 +68,15 @@ async function createTask(selector, prompt, options = {}, { environments = deskt
     Object.assign(error, { execution_environment: "cloud", creation_status: receipt.creation_status, creation_dispatched: dispatched, thread_id: receipt.thread_id, attempt_id: attempt, receipt_path: receipt.receipt_path, sent: receipt.sent, delivery_status: receipt.delivery_status }); throw error;
   } finally { try { client?.close(); } catch { receipt.runtime_cleanup_required = true; } }
 }
+// A send needs the task's status, environment and newest turn, not its history.
+// The newest turn is the steer candidate, and turn/steer checks expectedTurnId.
+// It is marked notLoaded so that a v1 --based-on check still reads the history.
+async function sendState(client, id) {
+  const { thread } = await client.request("thread/read", { threadId: id, includeTurns: false }), newest = await newestTurn(client, id);
+  if (thread?.id !== id) throw failure("Cannot verify the task.", "DESKTOP_CLOUD_PROTOCOL_ERROR");
+  return { ...thread, turns: newest ? [{ ...newest, items: [], itemsView: "notLoaded" }] : [] };
+}
+
 export async function sendDesktopCloudInput(target, text, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend, expectedEnvironmentConfigId, initialModelSelection } = {}, { connect = connectDesktopCloud, ...storage } = {}) {
   const id = desktopCloudId(target);
   if (typeof text !== "string" || !text.trim()) throw failure("A non-empty message is required.");
@@ -79,7 +89,7 @@ export async function sendDesktopCloudInput(target, text, { dryRun = false, newT
     const save = () => writeRecord("desktop-cloud-sends", clientMessageId, receipt, storage);
     try {
       client = await connect();
-      const thread = await fetchThread(client, id), active = thread.turns.filter(turn => turn.status === "inProgress");
+      const thread = await sendState(client, id), active = thread.turns.filter(turn => turn.status === "inProgress");
       if (newTurn ? thread.status?.type !== "idle" || active.length !== 0 : active.length !== 1) throw failure("The task state does not match the requested send. Read it again; idle continuation requires --new-turn.", "STALE_OBSERVATION");
       const environments = thread.environments;
       if (!Array.isArray(environments) || environments.length !== 1 || typeof environments[0].environmentId !== "string" || !environments[0].environmentId.startsWith("ccarenv_") || typeof environments[0].environmentConfigId !== "string") throw failure("Cannot verify the task's Cloud environment.");

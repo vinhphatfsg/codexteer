@@ -69,14 +69,19 @@ function rebase(turns, s, cursor) {
     user_revision: digest(rest.filter(event => event.type === "userMessage")) };
 }
 
+// The newest turn's id and status, without its items where the service allows.
+export async function newestTurn(client, threadId) {
+  const list = itemsView => client.request("thread/turns/list", { threadId, itemsView, sortDirection: "desc", limit: 1 });
+  const page = await list("notLoaded").catch(error => error.rpcCode === -32602 ? list("full") : Promise.reject(error));
+  const newest = page?.data?.[0];
+  if (!Array.isArray(page?.data) || (newest && (typeof newest.id !== "string" || !newest.id || typeof newest.status !== "string"))) throw failure("Invalid Cloud turn page.");
+  return newest ? { id: newest.id, status: newest.status } : null;
+}
+
 // While a settled window's turn is still the newest and the state is the same,
 // its items are as delivered, so the read lists that turn's id and status only.
 async function quietRead(client, thread, claim, since) {
-  let page;
-  try { page = await client.request("thread/turns/list", { threadId: thread.id, itemsView: "notLoaded", sortDirection: "desc", limit: 1 }); }
-  catch (error) { if (error.rpcCode === -32602) return null; throw error; }
-  const newest = page?.data?.[0];
-  if (!Array.isArray(page?.data) || (newest && (typeof newest.id !== "string" || typeof newest.status !== "string"))) throw failure("Invalid Cloud turn page.");
+  const newest = await newestTurn(client, thread.id);
   if (newest?.id !== claim.window) return null;
   const { state } = threadSnapshot({ ...thread, turns: [{ id: newest.id, status: newest.status, items: [] }] });
   if (digest(state) !== claim.state) return null;
