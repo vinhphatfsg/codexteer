@@ -28,8 +28,9 @@
 
 - 履歴（イベント・sync結果・担当詳細・work startの記録）は、projectごとに別の場所へ保存します。256 MiBの上限はprojectごとで、そのprojectが保存した量だけを数えます。保存と整理の排他もprojectごとで、別のprojectの保存・整理は互いを待たせません。
 - `project prune`と自動削除が削除するのは、そのprojectの履歴だけです。他projectの保存場所は読まず、他projectの壊れたrecordで失敗することもありません。結果の形は変わらず、`storage_bytes`は整理後の、そのprojectの使用量です。`PROJECT_HISTORY_LIMIT`の`storage_bytes`も同じです。
-- 0.24.x以前が保存した履歴は、新しい場所へ移さず元の場所のまま使います。tokenはどちらの場所のrecordでも使え、`project event`・`project sync --continue`・`work tell`・waitの結果の復元は従来どおりです。古い履歴はどのprojectの上限にも数えず、新しく書き足すこともないため、その総量は減る一方です。そのprojectの`project prune`と自動削除が、従来と同じ基準で古い履歴のうち自分のprojectのものも削除し、`deleted`と`reclaimed_bytes`に含めます。提示済み初回結果の重複全文は、従来どおり元の場所のrecordから削除します。古い履歴が残る間は、各projectの整理がその全体を読みます。読めない古いrecordは飛ばします。
-- 0.24.x以前に戻すと、このversionが保存した履歴は見えません。そのversionでは、このversionが返したtokenは見つからず、`work tell`は次の`project sync`まで`WORK_TELL_SYNC_INCOMPLETE`になり、同じ引数の`work start`は別の担当を作ります。戻したversionが保存した履歴は、再びこのversionにしたときに古い履歴として使えます。
+- 0.24.x以前が保存した履歴は、新しい場所へ移さず元の場所のまま使います。tokenはどちらの場所のrecordでも使え、`project event`・`project sync --continue`・`work tell`・waitの結果の復元は従来どおりです。古い履歴はどのprojectの上限にも数えず、新しく書き足すこともないため、その総量は減る一方です。そのprojectの`project prune`と自動削除が、従来と同じ基準で古い履歴のうち自分のprojectのものも削除し、`deleted`と`reclaimed_bytes`に含めます。提示済み初回結果の重複全文は、従来どおり元の場所のrecordから削除します。古い履歴が残る間は、各projectの整理がその全体を読みます。読めない古いrecordは飛ばします。古い履歴の削除と書き換えは、0.24.x以前が保存に使う共通の排他を待たずに取れたときだけ行い、取れなければ今回は見送って次の整理で行います。0.24.x以前の保存中のrecordを消すことはなく、他projectを待たせることもありません。
+- アップグレードの後、実行中の`project wait`を再起動してください。アップグレード前に始めたwaitは古いコードのまま動き続けます。
+- 0.24.x以前に戻すと、このversionが保存した履歴は見えません。そのversionでは、このversionが返したtokenは見つからず、`work tell`は次の`project sync`まで`WORK_TELL_SYNC_INCOMPLETE`になります。このversionで始めた`work start`の記録も見えないため、同じ引数で再実行すると別の担当を作ります。戻した後は、`work start`を再実行する前に`project sync`でその担当がすでにprojectにいるかを確認してください。戻したversionが保存した履歴は、再びこのversionにしたときに古い履歴として使えます。
 
 ## 0.24.2 — 2026-11-11公開
 
