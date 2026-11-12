@@ -187,6 +187,7 @@ export async function observeThread(threadInput, options = {}, { discover = disc
     if (!options.watch) {
       // A Desktop Cloud read sees a running turn live when the switch is on,
       // and shares that view with the other reads of the same command.
+      // `liveTurn: false` reads the history only.
       const result = await readOnClient(client, threadId, { ...options, liveTurn: options.liveTurn ?? new Map() });
       if (options.supervisor) await recordSupervisorObservation(threadId, options.supervisor, result);
       return marked(result);

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tempPrefix } from "../test-support/temp.mjs";
 import { desktopCloudService } from "../test-support/desktop-cloud-service.mjs";
 import { DesktopCloudClient, connectDesktopCloud } from "../src/desktop-cloud-api.mjs";
@@ -12,7 +12,9 @@ import { syncProject } from "../src/project-sync.mjs";
 import { waitProject } from "../src/project-wait.mjs";
 import { controlProject } from "../src/project-control.mjs";
 import { tellWork } from "../src/work-tell.mjs";
-import { sendDesktopCloudInput } from "../src/desktop-cloud.mjs";
+import { sendDesktopCloudInput, createDesktopCloudTask, reconcileDesktopCloudCreation } from "../src/desktop-cloud.mjs";
+import { startWork } from "../src/work-start.mjs";
+import { resolveCloudModelSelection } from "../src/desktop-cloud-models.mjs";
 
 const UNOBSERVED = "running_turn_unobserved", APPROVAL = "item/commandExecution/requestApproval", FLAG = `pendingRequest:${APPROVAL}`;
 const uuid = n => `aaaaaaaa-aaaa-4aaa-8aaa-${String(n).padStart(12, "0")}`, ID = `durable_${uuid(901)}`;
@@ -23,7 +25,7 @@ const question = text => ({ id: `item-${++serial}`, type: "agentMessage", text, 
 const command = (status = "inProgress") => ({ id: `item-${++serial}`, type: "commandExecution", command: "make test", cwd: "/workspace", status, exitCode: null, aggregatedOutput: "" });
 
 // One Desktop Cloud task behind the real client, reader and project commands.
-// The service shows a running turn's items only when it ends, as measured;
+// The service shows a running turn's items only when it ends, as the service does;
 // `live: false` is the switch left off.
 function task(n, { live = true } = {}) {
   const id = `durable_${uuid(n)}`, service = desktopCloudService(uuid(n), { environment: `fixture~asenvcfg_${n}`, liveTurn: true });
@@ -254,6 +256,27 @@ test("work tell reads the running turn live once, and refuses on a question, a p
   await f.sync();
   await assert.rejects(f.tell(ID, "Also run the linter."), { code: "WORK_TELL_HUMAN_REQUIRED" }, "a question in the reviewed sync");
   assert.equal(f.state.calls.filter(call => call.method === "turn/steer").length, 1);
+});
+
+test("work start reads the new task's history only, and the first sync reads its running turn once", async t => {
+  const home = await mkdtemp(tempPrefix("ct-dc-live-start-")), root = await mkdtemp(tempPrefix("ct-dc-live-root-"));
+  t.after(() => Promise.all([rm(home, { recursive: true, force: true }), rm(root, { recursive: true, force: true })]));
+  await writeFile(`${root}/CODEXTEER.md`, "policy\n");
+  const x = task(941), storage = { home }, environment = { id: x.environment, name: "Fixture" };
+  const transport = { ...storage, connect: x.connect, environments: async () => ({ environments: [environment] }) };
+  const read = (id, options) => observeThread(id, options, { connect: x.connect });
+  const started = await startWork({ project: "P", title: "live", order: "Report a focused result.", root, environment: "Fixture", connection: "desktop-cloud" }, { storage,
+    resolveEnvironment: async () => environment, resolveModelSelection: options => resolveCloudModelSelection(options, transport),
+    create: ({ environmentConfigId, prompt, title, attemptId, modelSelection }) => createDesktopCloudTask(environmentConfigId, prompt, { title, attemptId, modelSelection }, transport),
+    reconcile: record => reconcileDesktopCloudCreation(record, transport), read });
+  assert.equal(started.thread_id, x.id); assert.equal(x.resumes(), 0, "the creation check does not resume the task");
+  const note = agent("Reading the order.");
+  x.progress(note);
+  const sync = await syncProject("P", {}, { storage, read });
+  assert.equal(sync.complete, true); assert.equal(sync.works[0].error, null); assert.equal(sync.works[0].attention_coverage, undefined);
+  const ids = eventIds(sync.works[0]);
+  assert.equal(ids.filter(id => id === note.id).length, 1); assert.equal(new Set(ids).size, ids.length, "nothing is delivered twice");
+  assert.equal(x.resumes(), 1);
 });
 
 test("one sync and one wait poll resume each running member once", async t => {

@@ -23,7 +23,7 @@ Desktop Cloudのタスクは、ターンの実行中は開始時の指示だけ�
 環境変数`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=on`を設定すると、codexteerは実行中のターンを、別の接続でタスクを`thread/resume`して読みます。そのターンのここまでの発言・コマンド・質問と、届いたサーバー要求が分かります。既定は無効です。承認待ちで止まったターンのresumeと、ターンが終わった直後のresumeを、サービスで確認していないためです。
 
 - resumeするのは、同じ読み取りで取得したターンの一覧で、実行中のターンが1つだけで、それが最新のターンのときだけです。idle・終了済み・状態不明の担当、終わったターンの後ろで古いターンが実行中の担当、`settled`の担当はresumeしません。一覧を取得してからresumeするまでの間にターンが終わると、終わった直後のタスクをresumeすることがあります。この間隔はなくせません。
-- 読むのは`read`・`status`・`project sync`・`project wait`・`work tell`・`doctor --thread`です。`watch`（`--stream`を含みます）は読みません。1回の`project sync`、`project wait`の1回の照会、1回の`work tell`は、実行中の担当ごとに1回だけresumeします。同じコマンドの2回目の読み取りは、実行中のターンが同じなら同じ結果を使います。
+- 読むのは`read`・`status`・`project sync`・`project wait`・`work tell`・`doctor --thread`です。`watch`（`--stream`を含みます）と、`work start`の作成直後の確認は読みません。1回の`project sync`、`project wait`の1回の照会、1回の`work tell`は、実行中の担当ごとに1回だけresumeします。同じコマンドの2回目の読み取りは、実行中のターンが同じなら同じ結果を使います。
 - resumeは読み取り・送信とは別の接続で行います。その接続は、届いたサーバー要求に応答せず、通知を無視し、要求のメソッド名だけを記録して閉じます。
 - 読めた項目は、履歴が返すものと同じ形のイベントとして返ります。ターン中の質問は、ターンの実行中に`read`で読め、`project wait`が返します。その読み取りの結果は`live_turn_id`（読んだターンのID）を持ち、`attention_coverage`は付きません。読んだ項目は、ターンが終わって履歴に現れても、内容が同じなら再び返しません。内容が変わった項目は`change:"updated"`で返ります。
 - resumeした接続に届いたサーバー要求（承認や入力の要求）は、`attention`に`pendingRequest:<メソッド名>`として加わり、結果の`pending_requests`にメソッド名が並びます。担当行は「対応が必要」になり、`work tell`は`WORK_TELL_HUMAN_REQUIRED`で送りません。回答はCodexの画面で行います。次の読み取りでresumeできなくても、最後に見た要求を残します。同じターンを読めて要求がなくなったとき、またはターンが終わったときに外します。
