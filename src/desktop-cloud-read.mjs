@@ -132,9 +132,9 @@ export async function readCloudTail(client, thread, options = {}) {
     ...(live.refused ? { live_refused: live.refused } : {}) }, thread.id), ...(ended ? {} : { omitted_older_events: null }), history_scope: "tail-turns" };
 }
 
-// A command's reads of one task share a live view while the history lists the
-// same running turn, so a command resumes each running task once. `scope` is
-// that command's, never the process's.
+// The reads of one task that share a `scope` share a live view while the
+// history lists the same running turn, so they resume the task once. A sync
+// or a wait poll has one scope; a tell has one per check. Never the process's.
 function liveView(client, threadId, turnId, scope) {
   const shared = scope.get(threadId);
   if (shared?.turn_id === turnId) return shared.view;

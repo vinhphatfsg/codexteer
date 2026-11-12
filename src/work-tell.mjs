@@ -58,7 +58,8 @@ function assertNoHumanAttention(observation) {
   if (observation.attention.length || questions) throw fail("The task is waiting for a human question or approval. work tell cannot answer it.", "WORK_TELL_HUMAN_REQUIRED", { attention: observation.attention, events: observation.events ?? [] });
 }
 
-// `liveTurn` is this tell's: its reads of a running Desktop Cloud turn share one live view.
+// `liveTurn` scopes one live view of a running Desktop Cloud turn: the pages of
+// one check share it, and each check of a tell takes its own.
 async function freshObservation(threadId, member, basis, read, liveTurn) {
   let cursor = basis.work.cursor, latest, pages = 0; const seen = new Set([cursor]), events = [];
   do {
@@ -83,7 +84,7 @@ export async function tellWork(threadInput, body, options = {}, dependencies = {
   return withStoreLock(`work-tell-${sha(member.thread_id).slice(0, 40)}`, async () => {
     const basis = await syncBasis(member.thread_id, member, options.syncToken, storage);
     if (options.newTurn && !["idle", "terminal"].includes(basis.work.execution)) throw fail("A new turn requires an idle or terminal task and the same unfinished delegation.", "WORK_TELL_NEW_TURN_INVALID");
-    const liveTurn = new Map(), fresh = await freshObservation(member.thread_id, member, basis, read, liveTurn);
+    const fresh = await freshObservation(member.thread_id, member, basis, read, new Map());
     const policy = await policyStatus(member.thread_id, member, storage, dependencies.readPolicy ?? readRepositoryPolicy);
     const other = await otherWork(member.thread_id, member, basis.head, storage);
     const supervisor = await getSupervisor(member.thread_id, storage);
@@ -91,18 +92,20 @@ export async function tellWork(threadInput, body, options = {}, dependencies = {
     const key = `work-tell-${sha(JSON.stringify([member.thread_id, body.trim(), !!options.newTurn])).slice(0, 40)}`;
     const finding = await (dependencies.createFinding ?? createFinding)(member.thread_id, { key, title: `work tell: ${body.trim().slice(0, 120)}`,
       condition: `Deliver the reviewed instruction with sha256 ${sha(body)} exactly once and track its response.`, basedOn: fresh.cursor, ...storage });
+    // The last read before the send decides what the receipt says was observed.
+    let sentOn = fresh.latest;
     const guardBeforeSend = async (thread, client) => {
       if (thread) assertNoHumanAttention({ attention: observationAttention(thread.status), events: [] });
-      await freshObservation(member.thread_id, member, { work: { ...basis.work, cursor: fresh.cursor } },
-        (id, options) => client ? readOnClient(client, id, options) : Promise.resolve(readSnapshot(thread, options)), liveTurn);
+      ({ latest: sentOn } = await freshObservation(member.thread_id, member, { work: { ...basis.work, cursor: fresh.cursor } },
+        (id, options) => client ? readOnClient(client, id, options) : Promise.resolve(readSnapshot(thread, options)), new Map()));
       await syncBasis(member.thread_id, member, basis.sync_token, storage);
     };
     try {
       const receipt = await (dependencies.sendTracked ?? sendWorkTellMessage)(member.thread_id, body, { supervisor: supervisor.session_id, connection: member.connection,
         basedOn: fresh.cursor, finding: finding.id, source: "codexteer", kind: "review", newTurn: !!options.newTurn, guardBeforeSend }, { ...storage, ...(dependencies.send ? { send: dependencies.send } : {}) });
       // The gate saw no question or approval, which a running Desktop Cloud turn
-      // would not have shown. The receipt says so; whether to send is unchanged.
-      const coverage = attentionCoverage(fresh.latest, member.connection);
+      // not read live would not have shown. The receipt says so; whether to send is unchanged.
+      const coverage = attentionCoverage(sentOn, member.connection);
       return { ...receipt, thread_id: member.thread_id, sync_token: basis.sync_token, finding_id: finding.id, source: "codexteer", kind: "review", policy, other_work: other,
         ...(coverage ? { attention_coverage: coverage } : {}) };
     } catch (error) {

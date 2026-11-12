@@ -562,7 +562,7 @@ export const topics = {
       "Desktop Cloudのprojectはローカルの調整用namespaceで、Desktop DBのproject所属を要求しない。ローカルcheckoutとCloud側の一致は自動保証しない。",
       "ローカルのwork startはDesktopの保存済み権限モードに揃え、未確認ならDESKTOP_PERMISSION_UNVERIFIEDで作成しない。work tell --new-turnは対象スレッド自身の権限設定を継承する。",
       "work tellは最新のproject syncで対象の担当が完全に読めていること（complete:true）を要求し、送信直前に差分をdrainする。対象の新event、質問・承認待ち、attention不明、不完全な観測では送らない。他の担当の未読・不完全は妨げず、receiptのother_work（incomplete・human_attention・membership_changed）で返す。settledの担当はincompleteにもhuman_attentionにも含めない。--sync-tokenで以前のsyncを指定できるのは、対象がその後に完全に再読されていない間だけ。",
-      "実行中のDesktop Cloudターンでは質問・承認待ちを観測できない。work tellはその場合も送信の可否を変えず、receiptにattention_coverage:running_turn_unobservedを付ける。対象が質問で止まっていないかはCodexの画面で確認する。CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=onでは送信前の確認でそのターンを1回だけ読み、質問かサーバー要求が見えればWORK_TELL_HUMAN_REQUIRED、sync後に新しい項目が出ていればWORK_TELL_STALE_SYNCで送らない。",
+      "実行中のDesktop Cloudターンでは質問・承認待ちを観測できない。work tellはその場合も送信の可否を変えず、receiptにattention_coverage:running_turn_unobservedを付ける。対象が質問で止まっていないかはCodexの画面で確認する。CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=onでは最初の確認と送信の直前にそれぞれthread/resumeしてそのターンを読み（1回のtellでresumeは2回まで）、どちらかで質問かサーバー要求が見えればWORK_TELL_HUMAN_REQUIRED、sync後に新しい項目が出ていればWORK_TELL_STALE_SYNCで送らない。送信の直前に読めなかったときは送り、receiptにattention_coverageを付ける。",
       "finding・source・kind・監督IDは内部化する。質問・承認への回答を代理生成するflagは提供しない。",
     ],
     errors: [OPTIONS_INVALID, supervisorForbiddenError, ...managedStoppedErrors,

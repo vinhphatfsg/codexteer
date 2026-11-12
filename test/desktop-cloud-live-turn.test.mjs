@@ -6,7 +6,7 @@ import { tempPrefix } from "../test-support/temp.mjs";
 import { desktopCloudService } from "../test-support/desktop-cloud-service.mjs";
 import { DesktopCloudClient, connectDesktopCloud } from "../src/desktop-cloud-api.mjs";
 import { observeThread } from "../src/observe.mjs";
-import { registerManagedThread } from "../src/project-index.mjs";
+import { getManagedThread, registerManagedThread } from "../src/project-index.mjs";
 import { registerSupervisor } from "../src/supervision.mjs";
 import { syncProject } from "../src/project-sync.mjs";
 import { waitProject } from "../src/project-wait.mjs";
@@ -341,8 +341,9 @@ test("work tell that is first to meet a refused live view sends as on an unread 
   f.start(); f.progress(agent("Working."));
   await f.sync();
   f.state.live.itemId = id => `live-${id}`;
-  const receipt = await f.tell(ID, "Also update the changelog.");
+  const resumes = f.resumes(), receipt = await f.tell(ID, "Also update the changelog.");
   assert.equal(receipt.delivery_status, "accepted"); assert.equal(receipt.attention_coverage, UNOBSERVED);
+  assert.equal(f.resumes() - resumes, 1, "the refusal found by the first read holds for the check before sending");
 });
 
 test("past 256 live items the member is read from the history for the rest of the turn, and the row says so", async t => {
@@ -401,7 +402,15 @@ test("a turn that ends interrupted or failed without an item the live view showe
   }
 });
 
-test("work tell reads the running turn live once, and refuses on a question, a pending request or new progress", async t => {
+const steers = x => x.state.calls.filter(call => call.method === "turn/steer").length;
+const basis = async f => { const row = await getManagedThread(ID, f.storage); return [row.sync_cursor, row.sync_revision]; };
+// A tell whose target changes after the send verified the task's state, right
+// before the check that precedes the send.
+const lateTell = (f, change) => tellWork(ID, "Also update the changelog.", {}, { storage: f.storage, read: f.read,
+  send: (id, wire, options) => f.send(id, wire, { ...options, beforeSend: async (...args) => { await change(); await options.beforeSend(...args); } }) });
+const WIDE = { byteBudget: 1024 * 1024 };
+
+test("work tell reads the running turn live at its first read and again right before sending", async t => {
   const f = await member(t);
   f.append([user("first order"), agent("first report")]);
   f.start(); f.progress(agent("Working."));
@@ -409,19 +418,85 @@ test("work tell reads the running turn live once, and refuses on a question, a p
   let resumes = f.resumes();
   const steered = await f.tell(ID, "Also update the changelog.");
   assert.equal(steered.delivery_status, "accepted"); assert.equal(steered.attention_coverage, undefined);
-  assert.equal(f.resumes() - resumes, 1, "the freshness read and the check before sending share one live read");
+  assert.equal(f.resumes() - resumes, 2, "the freshness read and the check before sending each take their own live view");
 
   f.progress(agent("Updating the changelog."));
   await f.sync();
   f.progress(agent("Still going."));
+  resumes = f.resumes();
   await assert.rejects(f.tell(ID, "Also run the linter."), { code: "WORK_TELL_STALE_SYNC" }, "new progress after the sync makes it stale, as on local threads");
+  assert.equal(f.resumes() - resumes, 1, "a tell refused at its first read does not reach the second");
 
   await f.sync();
   f.progress(question("Should the linter be strict?"));
+  resumes = f.resumes();
   await assert.rejects(f.tell(ID, "Also run the linter."), { code: "WORK_TELL_HUMAN_REQUIRED" });
+  assert.equal(f.resumes() - resumes, 1);
   await f.sync();
+  resumes = f.resumes();
   await assert.rejects(f.tell(ID, "Also run the linter."), { code: "WORK_TELL_HUMAN_REQUIRED" }, "a question in the reviewed sync");
-  assert.equal(f.state.calls.filter(call => call.method === "turn/steer").length, 1);
+  assert.equal(f.resumes(), resumes, "a tell refused by its sync basis reads nothing");
+  assert.equal(steers(f), 1);
+});
+
+test("work tell does not steer over a question, a pending request or progress that appears after its first read", async t => {
+  const late = { question: [f => f.progress(question("Should the linter be strict?")), "WORK_TELL_HUMAN_REQUIRED"],
+    request: [f => { f.state.live.requests = [APPROVAL]; }, "WORK_TELL_HUMAN_REQUIRED"],
+    progress: [f => f.progress(agent("Still going.")), "WORK_TELL_STALE_SYNC"] };
+  for (const [name, [change, code]] of Object.entries(late)) {
+    const f = await member(t);
+    f.append([user("first order"), agent("first report")]);
+    await f.sync();
+    const { turn, opening } = f.start(), note = agent("Working.");
+    f.progress(note);
+    const rows = [await f.row()], reviewed = await basis(f), resumes = f.resumes();
+    let changed = [];
+    const error = await lateTell(f, () => { changed = change(f) ?? []; }).catch(error => error);
+    assert.equal(error.code, code, name); assert.equal(error.delivery_status, "not_sent", name);
+    assert.equal(steers(f), 0, `${name}: nothing is steered`);
+    assert.equal(f.resumes() - resumes, 2, `${name}: the check before sending resumed the task itself`);
+    assert.deepEqual(await basis(f), reviewed, `${name}: the refused tell leaves the member's cursor as the sync saved it`);
+
+    rows.push(await f.row());
+    assert.equal(rows[1].attention, name === "progress" ? "none" : "human", name);
+    f.state.live.requests = [];
+    f.complete([agent("Done.")]);
+    rows.push(await f.row());
+    const ids = itemIds(rows, [turn]), count = id => ids.filter(other => other === id).length;
+    // An unanswered question stays on the member's later rows, so it is counted on the row that first shows it.
+    assert.equal(eventIds(rows[1]).filter(id => id === changed[0]?.id).length, name === "request" ? 0 : 1, `${name}: what appeared late reaches the next sync once`);
+    assert.deepEqual([opening.id, note.id, ...(name === "progress" ? [changed[0].id] : [])].map(count).filter(n => n !== 1), [], `${name}: nothing is delivered twice or skipped`);
+    const next = await f.tell(ID, "Continue the same delegation.", { newTurn: true }).catch(error => error);
+    assert.equal(name === "question" ? next.code : next.delivery_status, name === "question" ? "WORK_TELL_HUMAN_REQUIRED" : "accepted", `${name}: the next sync is a usable basis`);
+  }
+});
+
+test("work tell that cannot take its second live view sends as on an unread turn, and its receipt says so", async t => {
+  const blind = { error: f => { f.state.live.failure = "error"; }, timeout: f => { f.state.live.failure = "timeout"; },
+    view: f => { f.state.live.itemId = id => `live-${id}`; },
+    ledger: f => { f.progress(...Array.from({ length: 257 }, (_, n) => agent(`late ${n}`))); },
+    ended: f => { f.state.live.beforeResume = () => { f.complete([agent("Finished.")]); f.state.live.beforeResume = null; }; } };
+  for (const [name, change] of Object.entries(blind)) {
+    const f = await member(t);
+    f.append([user("first order"), agent("first report")]);
+    await f.sync(WIDE);
+    const { turn } = f.start();
+    f.progress(agent("Working."));
+    const rows = [(await f.sync(WIDE)).works[0]], reviewed = await basis(f), resumes = f.resumes();
+    assert.equal(rows[0].attention_coverage, undefined, name);
+    const receipt = await lateTell(f, () => change(f));
+    assert.equal(receipt.delivery_status, "accepted", name);
+    assert.equal(receipt.attention_coverage, UNOBSERVED, `${name}: the turn was not read right before the send`);
+    assert.equal(steers(f), 1, name); assert.equal(f.resumes() - resumes, 2, name);
+    assert.deepEqual(await basis(f), reviewed, `${name}: the tell leaves the member's cursor as the sync saved it`);
+
+    f.state.live.failure = null; f.state.live.itemId = id => id;
+    rows.push((await f.sync(WIDE)).works[0]);
+    if (name !== "ended") f.complete([agent("Done.")]);
+    rows.push((await f.sync(WIDE)).works[0]);
+    assert.deepEqual(itemIds(rows, [turn]).sort(), f.state.turns.at(-1).items.map(item => item.id).sort(), `${name}: every item arrives exactly once`);
+    assert.equal((await f.tell(ID, "Continue the same delegation.", { newTurn: true })).delivery_status, "accepted", `${name}: the next sync is a usable basis`);
+  }
 });
 
 test("work start reads the new task's history only, and the first sync reads its running turn once", async t => {
