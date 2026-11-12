@@ -517,7 +517,7 @@ export const topics = {
       "サーバーが読み取りを拒否した担当（error:RPC_REJECTED）の行は、error_detail（rpc_code、サーバーが返した場合はrpc_reason・rpc_message）を持つ。byte budgetに収まらず詳細を省いた行のerror_detailはrpc_codeとrpc_reasonだけ。",
       "フラグの解除・再出現は読了済みcursorと別に保存し、timeout後も再要求を検知する。attention:nullなど現在のフラグ不明はPROJECT_WAIT_ATTENTION_UNKNOWNの読み取り失敗として扱い、その担当のcursorと基準を進めない。",
       "未完了の担当（paused・binding不在も含む）がいる間、waitを終了通知のあるバックグラウンドタスクとして動かし、終了後は結果を読んで再開する。質問・承認・URLの伝達後も続け、検収後にcontrol stopする。guardはpidと起動の同一性を照合し、異常終了記録を許可に使わない。macOS/Linux対応。",
-      "同じCODEX_HOME・host・projectは1オーケストレーターで扱う。guardは最も近いClaude/Codex CLI親プロセスのpid・起動識別が一致するwaitだけを数える。所有者不明・旧版のwaitは許可に使わない。起動したコマンド（親プロセス）が停止したwaitも、プロセスが残っていても数えない（起動時に親から切り離されていたwaitは数える）。別セッションのwaitが生きていても停止は拒否し、重複waitはRECORD_BUSYのまま引継ぎを案内する。所有セッションでwaitを終了してから再開し、lock削除やcontrol stopで競合を迂回しない。",
+      "同じCODEX_HOME・host・projectは1オーケストレーターで扱う。guardは最も近いClaude/Codex CLI親プロセスのpid・起動識別が一致するwaitだけを数える。所有者不明・旧版のwaitは許可に使わない。起動したコマンド（親プロセス）が停止したwaitも、プロセスが残っていても数えない（起動時に親から切り離されていたwaitは所有セッションを記録できないため数えない。waitは終了通知のあるバックグラウンドタスクで動かす）。別セッションのwaitが生きていても停止は拒否し、重複waitはRECORD_BUSYのまま引継ぎを案内する。所有セッションでwaitを終了してから再開し、lock削除やcontrol stopで競合を迂回しない。",
       "guard --statusのstop_hook:configuredは直接Claude起動の設定印を検証できた状態。prompt生成・手動起動・Codex起動・検査不能はunverified。最初の報告で監視漏れを止める仕組みがない（有効なhookを確認できない）ことと、このtopicの設定例を伝える。手動設定はセッションの有効なhook一覧で確認する。ファイルの存在や設定印は実行中の無効化・信頼設定・継続上限を保証しない。",
       "syncとwaitのJSONもdata.stop_hook（configured|unverified、guard --statusと同じ判定）を返す。ページ本体の外に付くため、output_bytesとbyte予算には含まれない。",
       "guardは接続・sync・送信を行わず、stop_hook_activeでも条件を再確認する。ローカル状態の読取りやプロセス検査が不能ならsystemMessageで警告して停止を許す。ユーザーの中断・hook無効化・CLI側の継続上限は阻止できない。",
