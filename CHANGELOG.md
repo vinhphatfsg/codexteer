@@ -24,7 +24,7 @@ Desktop Cloudのスレッドは、最後のターンが終わった後も`status
 - shared・Web Cloudの担当の`execution`は変わりません。
 - `status`・`read`・`watch`は、Desktop Cloudのタスクで`execution`（`active`・`idle`・`terminal`・`unknown`）を返します。担当行と同じ規則で決まり、ターンの状態がスレッドの`status`と食い違ったときは`execution_basis:"turn_status"`も返します。`status`はサービスが返した値のままで、変えません。他の接続の出力は変わりません。
 - `watch --until idle`は、Desktop Cloudでは`execution`が`idle`になったときに返ります。これまでは、スレッドの`status`が`active`のまま残る担当では返らず、`status`が`idle`でもターンが実行中なら返っていました。
-- Desktop Cloudへの送信も同じ規則で判断します。`--new-turn`（`work tell --new-turn`を含みます）は、スレッドの`status`が`active`のままでも最新ターンが終わっていれば送れます。これまでは、担当行が「検収待ち」でも`STALE_OBSERVATION`で拒否していました。通常の送信は最新ターンが実行中のときに送れます。実行中のターンがある担当への`--new-turn`、ターンの状態を確認できず`status`も`idle`でない担当、`status`が`idle`でも`active`でもない担当には、従来どおり送信しません。
+- Desktop Cloudへの送信も同じ規則で判断します。`--new-turn`（`work tell --new-turn`を含みます）は、スレッドの`status`が`active`のままでも全てのターンが終わっていれば送れます。これまでは、担当行が「検収待ち」でも`STALE_OBSERVATION`で拒否していました。`status`が`active`のままの担当への`--new-turn`は、全てのターンの状態（項目なし）を読んで、実行中のターンが残っていないことを確かめてから送ります。通常の送信は最新ターンが実行中のときに送れます。実行中のターンがある担当への`--new-turn`、ターンの状態を確認できず`status`も`idle`でない担当、`status`が`idle`でも`active`でもない担当には、従来どおり送信しません。
 
 Desktop Cloudのタスクは、読むたびに全ターンを項目ごと取得し、cursor以後だけを残していました。長く続く担当ほど1回の照会が重くなり、履歴が受信上限（16 MiB）や時間制限を超えると、その担当は`TIMEOUT`・`PAYLOAD_TOO_LARGE`・接続エラーで読めなくなりました。読めない担当への`work tell`は`WORK_TELL_SYNC_INCOMPLETE`で止まり続け、送信前の状態確認も全履歴を取得していました。
 
@@ -114,7 +114,7 @@ Desktop Cloudの`work start`と`thread create`は、常にCloudの既定モデ�
 
 ### 0.24.x以前へ戻すときの注意
 
-- 戻す前に、このversionのプロセス（実行中の`project wait`・`project sync`・`work start`・`project prune`）を全て止めてください。このversionは履歴の保存と整理をprojectごとの排他で行い、0.24.x以前は共通の排他で行います。新旧のversionが同じprojectの履歴を同時に保存・整理しないようにするためです。
+- 戻す前に、このversionのプロセス（実行中の`project wait`・`project sync`・`work start`・`project prune`）を全て止めてください。
 - 0.24.x以前に戻すと、このversionが保存したv3 cursorは読めず`STALE_CURSOR`になります。担当のcursor・waitの基準・`work start`の記録がv3の担当は、戻したversionではhistory gapになり、`work tell`は`WORK_TELL_SYNC_INCOMPLETE`になります。保存されたcursorは変わらないため、このversionに戻せば続きから読めます。
 - 0.24.x以前に戻すと、このversionが保存した履歴は見えません。そのversionでは、このversionが返したtokenは見つからず、`work tell`は次の`project sync`まで`WORK_TELL_SYNC_INCOMPLETE`になります。このversionで始めた`work start`の記録も見えないため、同じ引数で再実行すると別の担当を作ります。戻した後は、`work start`を再実行する前に`project sync`でその担当がすでにprojectにいるかを確認してください。戻したversionが保存した履歴は、再びこのversionにしたときに古い履歴として使えます。
 

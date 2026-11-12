@@ -5,7 +5,7 @@ import { desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
 import { getManagedThread } from "./project-index.mjs";
 import { fetchThread, turnObservation } from "./observe.mjs";
 import { turnEvidence, turnRuns } from "./attention-coverage.mjs";
-import { newestTurn } from "./desktop-cloud-read.mjs";
+import { newestTurn, turnStatuses } from "./desktop-cloud-read.mjs";
 import { readRecord, writeRecord, storePath, withStoreLock, listRecords } from "./store.mjs";
 const failure = (message, code = "DESKTOP_CLOUD_OPTIONS_INVALID", uncertain = false) => Object.assign(new Error(message), { code, uncertain });
 const hash = value => createHash("sha256").update(value).digest("hex");
@@ -92,9 +92,11 @@ export async function sendDesktopCloudInput(target, text, { dryRun = false, newT
       client = await connect();
       // The turns decide, as they do for the member's project row: a thread
       // status left active after its last turn ended does not refuse a new
-      // turn. Only the newest turn can run, and it is the one to steer.
+      // turn. The newest turn alone cannot show that an older turn still
+      // runs, so that case is proved from every turn's status.
       const thread = await sendState(client, id), turns = turnObservation(thread.turns), evidence = turnEvidence(turns), active = thread.turns;
-      const startable = !turnRuns(turns) && (thread.status?.type === "idle" || (thread.status?.type === "active" && evidence === "none"));
+      const ended = async () => { const all = await turnStatuses(client, id); return !!all && turnEvidence(turnObservation(all)) === "none"; };
+      const startable = !turnRuns(turns) && (thread.status?.type === "idle" || (thread.status?.type === "active" && evidence === "none" && await ended()));
       if (newTurn ? !startable : evidence !== "running") throw failure("The task state does not match the requested send. Read it again; idle continuation requires --new-turn.", "STALE_OBSERVATION");
       const environments = thread.environments;
       if (!Array.isArray(environments) || environments.length !== 1 || typeof environments[0].environmentId !== "string" || !environments[0].environmentId.startsWith("ccarenv_") || typeof environments[0].environmentConfigId !== "string") throw failure("Cannot verify the task's Cloud environment.");

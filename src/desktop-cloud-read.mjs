@@ -78,6 +78,25 @@ export async function newestTurn(client, threadId) {
   return newest ? { id: newest.id, status: newest.status } : null;
 }
 
+// Every turn's id and status, oldest first, without items. Null when the
+// service does not list turns without their items.
+export async function turnStatuses(client, threadId) {
+  const turns = [], positions = new Set();
+  let position = null;
+  for (let page = 0; page < PAGES; page++) {
+    const result = await client.request("thread/turns/list", { threadId, itemsView: "notLoaded", sortDirection: "desc", limit: 100, ...(position ? { cursor: position } : {}) })
+      .catch(error => error.rpcCode === -32602 ? null : Promise.reject(error));
+    if (result === null) return null;
+    const next = result?.nextCursor ?? null;
+    if (!Array.isArray(result?.data) || result.data.some(turn => typeof turn?.id !== "string" || !turn.id || typeof turn.status !== "string")
+      || (next !== null && (typeof next !== "string" || !next || positions.has(next) || !result.data.length))) throw failure("Invalid Cloud turn page.");
+    turns.push(...result.data.map(turn => ({ id: turn.id, status: turn.status })));
+    if (next === null) return turns.reverse();
+    positions.add(next); position = next;
+  }
+  throw failure("Cloud history exceeded its pagination limit.");
+}
+
 // While a settled window's turn is still the newest and the state is the same,
 // its items are as delivered, so the read lists that turn's id and status only.
 async function quietRead(client, thread, claim, since) {

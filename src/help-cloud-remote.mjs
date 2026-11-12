@@ -132,7 +132,7 @@ export const topics = {
       { name: "--title TEXT", text: "作成後にタスク名を設定する。1000文字以内。" },
       { name: "--project ID_OR_EXACT_NAME", text: "thread assignで必須。doctorでは--threadと併用時だけ。thread createに付けると作成前にDESKTOP_CLOUD_PROJECT_UNAVAILABLE。" },
       { name: "--limit N（threads list）", default: "20", text: "1〜100。続きは応答のnext_cursorを--cursorへ渡す。" },
-      { name: "--new-turn", text: "実行中のターンがないタスクで新しいターンを始める。statusがidleのとき、またはstatusがactiveのままでも最新ターンが終わっているときに送れる。ユーザーが再開を許可した場合だけ使う。省略時は実行中の最新ターンへexpectedTurnId付きで送る。" },
+      { name: "--new-turn", text: "実行中のターンがないタスクで新しいターンを始める。statusがidleのとき、またはstatusがactiveのままでも全てのターンが終わっているとき（全ターンの状態を項目なしで読んで確かめる）に送れる。ユーザーが再開を許可した場合だけ使う。省略時は実行中の最新ターンへexpectedTurnId付きで送る。" },
       { name: "--dry-run", text: "作成・送信をせず、計画または受付記録だけを返す。" },
       { name: "--resolve-unknown --note TEXT", text: "ユーザー専用。受付不明のまま確かめられないthread assignの試行（thread receipt）または送信（history mark）を、理由付きで解除する。--noteは必須。" },
     ],
