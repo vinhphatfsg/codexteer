@@ -58,10 +58,11 @@ function assertNoHumanAttention(observation) {
   if (observation.attention.length || questions) throw fail("The task is waiting for a human question or approval. work tell cannot answer it.", "WORK_TELL_HUMAN_REQUIRED", { attention: observation.attention, events: observation.events ?? [] });
 }
 
-async function freshObservation(threadId, member, basis, read) {
+// `liveTurn` is this tell's: its reads of a running Desktop Cloud turn share one live view.
+async function freshObservation(threadId, member, basis, read, liveTurn) {
   let cursor = basis.work.cursor, latest, pages = 0; const seen = new Set([cursor]), events = [];
   do {
-    latest = validateSyncPage(await read(threadId, { connection: member.connection, since: cursor, limit: 1000 }), threadId, cursor, seen);
+    latest = validateSyncPage(await read(threadId, { connection: member.connection, since: cursor, limit: 1000, liveTurn }), threadId, cursor, seen);
     if (member.environment_config_id && latest.environment_config_id !== member.environment_config_id) throw fail("The task environment differs from its managed route.", "WORK_TELL_ROUTE_MISMATCH");
     assertNoHumanAttention(latest);
     if (!latest?.cursor || ++pages > 1000 || (latest.has_more && seen.has(latest.cursor))) throw fail("Freshness read did not advance its cursor.", "WORK_TELL_FRESHNESS_INCOMPLETE");
@@ -82,7 +83,7 @@ export async function tellWork(threadInput, body, options = {}, dependencies = {
   return withStoreLock(`work-tell-${sha(member.thread_id).slice(0, 40)}`, async () => {
     const basis = await syncBasis(member.thread_id, member, options.syncToken, storage);
     if (options.newTurn && !["idle", "terminal"].includes(basis.work.execution)) throw fail("A new turn requires an idle or terminal task and the same unfinished delegation.", "WORK_TELL_NEW_TURN_INVALID");
-    const fresh = await freshObservation(member.thread_id, member, basis, read);
+    const liveTurn = new Map(), fresh = await freshObservation(member.thread_id, member, basis, read, liveTurn);
     const policy = await policyStatus(member.thread_id, member, storage, dependencies.readPolicy ?? readRepositoryPolicy);
     const other = await otherWork(member.thread_id, member, basis.head, storage);
     const supervisor = await getSupervisor(member.thread_id, storage);
@@ -93,7 +94,7 @@ export async function tellWork(threadInput, body, options = {}, dependencies = {
     const guardBeforeSend = async (thread, client) => {
       if (thread) assertNoHumanAttention({ attention: observationAttention(thread.status), events: [] });
       await freshObservation(member.thread_id, member, { work: { ...basis.work, cursor: fresh.cursor } },
-        (id, options) => client ? readOnClient(client, id, options) : Promise.resolve(readSnapshot(thread, options)));
+        (id, options) => client ? readOnClient(client, id, options) : Promise.resolve(readSnapshot(thread, options)), liveTurn);
       await syncBasis(member.thread_id, member, basis.sync_token, storage);
     };
     try {

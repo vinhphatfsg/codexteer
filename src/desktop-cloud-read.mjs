@@ -7,12 +7,15 @@
 // are not read again: this relies on the service appending turns and never
 // changing a final turn. The window turn and every newer turn are read and
 // checked against the cursor on every read.
-import { assertReadOptions, digest, fetchThread, mutableStatus, prefixHash, project, snapshotRead, threadSnapshot } from "./observe.mjs";
+import { assertReadOptions, digest, fetchThread, mutableStatus, prefixHash, project, snapshotRead, threadSnapshot, trimEvent } from "./observe.mjs";
 import { encodeCursor, invalidCursor, parseCursor } from "./cursor.mjs";
 import { hostFields } from "./target.mjs";
+import { turnEvidence } from "./attention-coverage.mjs";
 
-const FINAL = new Set(["completed", "failed", "interrupted", "cancelled"]);
+const FINAL = new Set(["completed", "failed", "interrupted", "cancelled"]), RUNNING = new Set(["inProgress", "in_progress", "running", "pending", "queued"]);
 const PAGES = 1000, BYTES = 32 * 1024 * 1024;
+// The live ledger lives in the cursor, so its size bounds the cursor's.
+const LIVE_ITEMS = 256, REQUEST = "pendingRequest:";
 const failure = message => Object.assign(new Error(message), { code: "DESKTOP_CLOUD_PROTOCOL_ERROR" });
 const startedAt = turn => Number.isSafeInteger(turn?.startedAt) && turn.startedAt >= 0 ? turn.startedAt : null;
 
@@ -124,8 +127,83 @@ export async function readCloudTail(client, thread, options = {}) {
     ({ turns, ended } = await newestTurns(client, thread.id, turn => (events += 1 + turn.items.filter(item => project(item, turn.id)).length) >= limit));
   }
   const view = { ...thread, turns }, s = threadSnapshot(view), result = snapshotRead(view, s, old, options);
-  return { ...result, cursor: encodeCursor(rebase(turns, s, result.cursor), thread.id),
-    ...(ended ? {} : { omitted_older_events: null }), history_scope: "tail-turns" };
+  const cursor = rebase(turns, s, result.cursor), live = await withLiveTurn(client, thread.id, turns, s, old, result, options);
+  return { ...result, ...live.fields, cursor: encodeCursor({ ...cursor, settled: cursor.settled && !live.ledger, ...(live.ledger ? { live: live.ledger } : {}),
+    ...(live.refused ? { live_refused: true } : {}) }, thread.id), ...(ended ? {} : { omitted_older_events: null }), history_scope: "tail-turns" };
+}
+
+// A command's reads of one task share a live view while the history lists the
+// same running turn, so a command resumes each running task once. `scope` is
+// that command's, never the process's.
+function liveView(client, threadId, turnId, scope) {
+  const shared = scope.get(threadId);
+  if (shared?.turn_id === turnId) return shared.view;
+  const view = client.liveTurn(threadId).catch(() => null);
+  scope.set(threadId, { turn_id: turnId, view });
+  return view;
+}
+
+// The events of the running turn `turn` that the live view adds to the
+// history, with their hashes. Null when the view is not of this turn while it
+// runs, an item is malformed, or an item the history lists differs in it.
+function liveEvents(view, turn, s) {
+  const items = view?.turn?.id === turn.id && RUNNING.has(view.turn.status) && Array.isArray(view.turn.items) ? view.turn.items : null;
+  if (!items || items.some(item => !item || typeof item !== "object" || typeof item.id !== "string" || !item.id || typeof item.type !== "string" || !item.type
+    || (item.questions != null && !Array.isArray(item.questions)))) return null;
+  const events = items.map(item => project(item, turn.id)).filter(Boolean), hashes = new Map(events.map(event => [event.id, digest(event)]));
+  if (hashes.size !== events.length) return null;
+  const listed = s.events.flatMap((event, i) => event.turn_id === turn.id && event.type !== "turn" ? [[event.id, s.hashes[i]]] : []);
+  if (listed.some(([id, hash]) => hashes.get(id) !== hash)) return null;
+  const known = new Set(listed.map(([id]) => id));
+  return events.filter(event => !known.has(event.id)).map(event => ({ event, hash: hashes.get(event.id) }));
+}
+
+// What the live view says the task waits on: its flags and the methods of the
+// server requests replayed to the reader.
+const liveAttention = view => [...new Set([...(Array.isArray(view.status?.activeFlags) ? view.status.activeFlags.filter(flag => typeof flag === "string") : []),
+  ...view.requests.map(method => REQUEST + method)])].sort();
+
+// Desktop Cloud lists a running turn's items only when it ends. The cursor's
+// ledger records what a read delivered from the live view of that turn, so the
+// history cursor stays as the history proves it and a read without the live
+// view still validates. Each item is delivered once, whichever view lists it
+// first; a changed one is an update. Completed history that does not list an
+// item the live view delivered refuses live reads of the task from then on.
+async function withLiveTurn(client, threadId, turns, s, old, result, { liveTurn: scope, limit = 50, maxChars = 2000, includeOutput = false, fullEvents = false }) {
+  const ledger = old?.v === 3 ? old.live ?? null : null, delivered = new Map(ledger?.items.map(item => [item.id, item.hash]) ?? []);
+  let events = result.events, hasMore = result.has_more, attention = ledger?.attention ?? [], turnId = ledger?.turn ?? null, refused = !!old?.live_refused;
+  const fields = {}, commands = [], trim = event => fullEvents ? event : trimEvent(event, maxChars, includeOutput);
+  if (ledger) {
+    const items = new Map(s.events.flatMap((event, i) => event.turn_id === turnId && event.type !== "turn" ? [[event.id, i]] : []));
+    events = events.flatMap(event => event.turn_id !== turnId || event.type === "turn" || !delivered.has(event.id) ? [event]
+      : s.hashes[items.get(event.id)] === delivered.get(event.id) ? [] : [{ ...event, change: "updated" }]);
+    for (const [id, i] of items) if (i < result.cursor.count) delivered.delete(id);
+    const listed = turns.find(turn => turn.id === turnId);
+    if (!listed || FINAL.has(listed.status)) attention = [];
+    if (!listed || (FINAL.has(listed.status) && !hasMore)) {
+      if (delivered.size) { fields.live_mismatch = { turn_id: turnId, unlisted: delivered.size }; refused = true; }
+      delivered.clear(); turnId = null;
+    }
+  }
+  const running = turns.at(-1);
+  if (scope instanceof Map && typeof client.liveTurn === "function" && !refused && !hasMore && turnEvidence(s.state) === "running" && s.state.active_turn_count === 1
+    && running && RUNNING.has(running.status) && (turnId === null || turnId === running.id)) {
+    const view = await liveView(client, threadId, running.id, scope), fresh = view && liveEvents(view, running, s);
+    const changed = fresh?.filter(({ event, hash }) => delivered.get(event.id) !== hash) ?? [];
+    if (fresh && delivered.size + changed.filter(({ event }) => !delivered.has(event.id)).length <= LIVE_ITEMS) {
+      const sent = changed.slice(0, Math.max(0, limit - events.length));
+      events = [...events, ...sent.map(({ event }) => ({ ...trim(event), change: delivered.has(event.id) ? "updated" : "added" }))];
+      for (const { event, hash } of sent) delivered.set(event.id, hash);
+      hasMore = changed.length > sent.length; attention = liveAttention(view); turnId = running.id; fields.live_turn_id = running.id;
+      commands.push(...fresh.map(({ event }) => event).filter(event => event.type === "commandExecution" && mutableStatus.has(event.status)).map(event => trimEvent(event, maxChars, includeOutput)));
+    }
+  }
+  const before = old?.v === 3 ? old.live?.attention ?? [] : [], requests = attention.filter(flag => flag.startsWith(REQUEST)).map(flag => flag.slice(REQUEST.length));
+  if (requests.length) fields.pending_requests = requests;
+  return { refused, ledger: turnId !== null && (delivered.size || attention.length) ? { turn: turnId, items: [...delivered].map(([id, hash]) => ({ id, hash })), attention } : null,
+    fields: { ...fields, events, has_more: hasMore, running_commands: [...result.running_commands, ...commands],
+      attention: Array.isArray(result.attention) ? [...new Set([...result.attention, ...attention])] : result.attention,
+      changed: !old || events.length > 0 || old.state !== result.cursor.state || JSON.stringify(before) !== JSON.stringify(attention) } };
 }
 
 // The --based-on check for a v3 cursor: no new user input and the same latest

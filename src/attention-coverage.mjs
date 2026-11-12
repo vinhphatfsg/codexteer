@@ -32,9 +32,12 @@ export const RUNNING_TURN_UNOBSERVED = "running_turn_unobserved";
 
 // A Desktop Cloud turn shows only its opening message until it ends: questions,
 // approval requests and progress made during it are not readable. The mark is
-// set unless the turns prove that none is running.
+// set unless the turns prove that none is running, or the one running turn,
+// the newest, was read live.
 export function attentionCoverage(observation, connection) {
-  return connection === "desktop-cloud" && observation && turnEvidence(observation) !== "none" ? RUNNING_TURN_UNOBSERVED : undefined;
+  const live = turnEvidence(observation) === "running" && observation.active_turn_count === 1
+    && typeof observation.live_turn_id === "string" && observation.live_turn_id === observation.latest_turn_id;
+  return connection === "desktop-cloud" && observation && turnEvidence(observation) !== "none" && !live ? RUNNING_TURN_UNOBSERVED : undefined;
 }
 
 export function withAttentionCoverage(observation, connection) {

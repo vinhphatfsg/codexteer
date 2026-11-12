@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { setTimeout as delay } from "node:timers/promises";
 import { cloudCredentials } from "./cloud-api.mjs";
 import { RpcClient, RpcFailure } from "./rpc.mjs";
 import { VERSION } from "./version.mjs";
@@ -51,7 +52,19 @@ export async function desktopCloudEnvironments(options = {}, { get = desktopClou
   }
   return { environments: [...rows.values()], source: "desktop-cloud-configurations", execution_environment: "cloud", connection_mode: "desktop-cloud" };
 }
-export async function connectDesktopCloud(options = {}, { credentials = cloudCredentials, Socket = WebSocket } = {}) {
+// Whether reads resume a running task to see its turn so far. Off unless the
+// environment turns it on: a replayed approval request and a turn that ends
+// just before the resume have not been observed on the service.
+export const LIVE_TURN_SWITCH = "CODEXTEER_DESKTOP_CLOUD_LIVE_TURN";
+export const liveTurnEnabled = (env = process.env) => env[LIVE_TURN_SWITCH] === "on";
+const LIVE_TIMEOUT_MS = 10000, LIVE_DRAIN_MS = 500;
+
+export async function connectDesktopCloud(options = {}, { credentials = cloudCredentials, Socket = WebSocket, env = process.env } = {}) {
+  const client = await openDesktopCloud(options, { credentials, Socket });
+  return new DesktopCloudClient(client, liveTurnEnabled(env) ? { openLive: () => openDesktopCloud({ timeoutMs: LIVE_TIMEOUT_MS }, { credentials, Socket }) } : {});
+}
+
+async function openDesktopCloud(options, { credentials, Socket }) {
   const timeoutMs = options.timeoutMs ?? 30000; let auth, socket, client;
   try {
     auth = await credentials({ timeoutMs, signal: options.signal });
@@ -74,7 +87,7 @@ export async function connectDesktopCloud(options = {}, { credentials = cloudCre
     if (options.signal?.aborted) cancelInitialization();
     try { await client.request("initialize", { clientInfo: { name: "codexteer", version: VERSION }, capabilities: { experimentalApi: true } }); } finally { options.signal?.removeEventListener("abort", cancelInitialization); }
     client.notify("initialized", {});
-    return new DesktopCloudClient(client);
+    return client;
   } catch (error) {
     client?.close(); socket?.terminate();
     // ws errors can quote the bearer subprotocol; never expose arbitrary errors.
@@ -82,8 +95,37 @@ export async function connectDesktopCloud(options = {}, { credentials = cloudCre
     throw failure("Could not initialize Desktop Cloud.", "CONNECTION_FAILED");
   } finally { if (auth) auth.token = ""; }
 }
+// The task as a resuming client sees it, which includes the items of a running
+// turn that the history lists only when the turn ends. A separate connection
+// resumes the task, records the method of every server request it is sent,
+// never answers one, ignores notifications and closes. Returns the thread
+// status, its newest turn and the requests' methods.
+async function resumeView(threadId, { openLive, timeoutMs = LIVE_TIMEOUT_MS, drainMs = LIVE_DRAIN_MS }) {
+  const uuid = desktopCloudUuid(threadId), requests = new Set();
+  let connection, abandoned = false, timer;
+  const read = (async () => {
+    const opened = await openLive();
+    if (abandoned) { opened.close(); throw failure("Live turn read timed out.", "TIMEOUT"); }
+    connection = opened;
+    connection.on("serverRequest", message => requests.add(message.method));
+    const result = await connection.request("thread/resume", { threadId: uuid });
+    await delay(drainMs);
+    if (result?.thread?.id !== uuid || !Array.isArray(result.thread.turns)) throw failure("Invalid live turn.");
+    return { status: result.thread.status ?? null, turn: result.thread.turns.at(-1) ?? null, requests: [...requests].sort() };
+  })();
+  read.catch(() => {});
+  try {
+    return await Promise.race([read, new Promise((_, reject) => { timer = setTimeout(() => reject(failure("Live turn read timed out.", "TIMEOUT")), timeoutMs); })]);
+  } finally { abandoned = true; clearTimeout(timer); connection?.close(); }
+}
+
 export class DesktopCloudClient {
-  constructor(client) { this.client = client; }
+  // `live.openLive` opens the connection a live read resumes the task on; a
+  // client without it does not read running turns live.
+  constructor(client, live = {}) {
+    this.client = client;
+    if (live.openLive) this.liveTurn = threadId => resumeView(threadId, live);
+  }
   close() { this.client.close(); }
   async history(threadId) {
     const turns = [], seen = new Set(); let cursor, bytes = 0;

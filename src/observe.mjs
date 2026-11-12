@@ -185,7 +185,9 @@ export async function observeThread(threadInput, options = {}, { discover = disc
     assertRuntimeOperation(state, options.watch ? "watch" : "read");
     client = compatibleClient(await connect(paths.socket), state);
     if (!options.watch) {
-      const result = await readOnClient(client, threadId, options);
+      // A Desktop Cloud read sees a running turn live when the switch is on,
+      // and shares that view with the other reads of the same command.
+      const result = await readOnClient(client, threadId, { ...options, liveTurn: options.liveTurn ?? new Map() });
       if (options.supervisor) await recordSupervisorObservation(threadId, options.supervisor, result);
       return marked(result);
     }
@@ -194,7 +196,7 @@ export async function observeThread(threadInput, options = {}, { discover = disc
     while (true) {
       if (options.supervisor) await assertSupervisor(threadId, options.supervisor, { connection: options.connection });
       const hadBaseline = !!baseline;
-      const result = await readOnClient(client, threadId, { ...options, since: baseline });
+      const result = await readOnClient(client, threadId, { ...options, since: baseline, liveTurn: undefined });
       if (options.supervisor) await recordSupervisorObservation(threadId, options.supervisor, result);
       const met = until === "idle" ? turnExecution(result, cloudTurns) === "idle" : until === "attention" ? result.status === "systemError" || (result.attention?.length ?? 0) > 0 : baseline && result.changed;
       if (met) return { ...marked(result), timed_out: false, reason: until };
