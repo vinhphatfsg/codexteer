@@ -254,6 +254,21 @@ test("real CLI wait keeps running under a launcher that stays alive and under no
   assert.equal((await readFile(`${f.home}/nohup.json`, "utf8")).trim(), "", "and has returned nothing");
 });
 
+test("real CLI wait started with nohup ends when the shell that launched it exits later", { timeout: 30000 }, async t => {
+  const f = await fixture(t), env = { ...process.env, CODEX_HOME: f.home }, out = `${f.home}/late.json`;
+  // nohup blocks the hangup signal. It does not keep the shell as the parent.
+  const shell = spawn("/bin/sh", ["-c", `nohup ${waitCommand([], out)} 2>/dev/null & sleep 2`], { env, stdio: "ignore" });
+  const record = await waitRecord(f.home);
+  t.after(() => { for (const pid of [shell.pid, record.pid]) try { process.kill(pid, "SIGKILL"); } catch { /* Already gone. */ } });
+  assert.equal(await processIdentity(record.pid), record.process_start, "the wait runs while its shell lives");
+  await once(shell, "close");
+  for (let n = 0; n < 300 && (await listRecords("project-waits", { home: f.home })).length; n++) await delay(10);
+  assert.deepEqual(await listRecords("project-waits", { home: f.home }), [], "the record goes within seconds of the shell");
+  let result;
+  for (let n = 0; n < 300 && !result; n++) { try { result = JSON.parse(await readFile(out, "utf8")).data; } catch { await delay(10); } }
+  assert.equal(result.reason, "launcher_exited"); assert.equal(result.sync, null); assert.deepEqual(result.unreadable, []);
+});
+
 for (const connection of [[], ["--connection", "desktop-cloud"]]) test(`real CLI wait${connection.length ? " (Desktop Cloud CLI)" : ""} ends with exit 1 when its agent session dies, and the next session's wait starts`, { timeout: 20000 }, async t => {
   const f = await fixture(t), dir = `${f.home}/dying-agent`, out = `${dir}/wait.json`, code = `${dir}/wait.code`;
   await mkdir(dir);

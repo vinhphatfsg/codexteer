@@ -22,7 +22,7 @@ Desktop Cloudのタスクは、ターンの実行中は開始時の指示だけ�
 
 Desktop Cloudのスレッドは、最後のターンが終わった後も`status`が`active`のまま残ることがあります。そのため`status`・`read`・`watch`は、`status`に加えて`execution`（`active`・`idle`・`terminal`・`unknown`）を返します。`execution`は`project sync`の担当行と同じ規則で決まります。実行中のターンがあれば`active`、全てのターンが終わっていれば`idle`です。ターンの状態が欠けているか矛盾するときは`status`のとおりです。ターンの状態が`status`と食い違ったときは`execution_basis:"turn_status"`も返します。`status`はサービスが返した値のままで、変えません。実行中かどうかは`execution`で判断してください。
 
-`watch --until idle`は`execution`が`idle`になったときに返ります。`send`も同じ規則で判断します。`--new-turn`は、`status`が`idle`のとき、または`status`が`active`のままでも最新ターンが終わっているときに送れます。通常の`send`は最新ターンが実行中のときだけ送れます。実行中のターンがある、ターンの状態を確認できない、`status`が`idle`でも`active`でもない、のいずれかなら`STALE_OBSERVATION`で送信しません。
+`watch --until idle`は`execution`が`idle`になったときに返ります。`send`も同じ規則で判断します。`--new-turn`は、`status`が`idle`のとき、または`status`が`active`のままでも最新ターンが終わっているときに送れます。通常の`send`は最新ターンが実行中のときだけ送れます。`--new-turn`は、実行中のターンがある、`status`が`idle`でも`active`でもない、`status`が`active`でターンが終わったと確認できない、のいずれかなら`STALE_OBSERVATION`で送信しません。
 
 ## 既定のモデルとエフォート
 

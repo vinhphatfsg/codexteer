@@ -4,6 +4,8 @@
 
 ## 0.25.0 — 未公開
 
+### Desktop Cloudの観測と送信
+
 Desktop Cloudの担当は、ターンの実行中は開始時の指示しか読めません。その間の発言・コマンド・質問・承認待ちは、ターンが終わった後にまとめて現れます。codexteerはこの間も`attention`を空で返していたため、Codexの画面で質問が待っていても「待っているものはない」と読める結果になっていました。
 
 - Desktop Cloudでターンが実行中の担当は、`project sync`の担当行、`status`、`read`、`watch`（`--stream`を除きます）に`attention_coverage:"running_turn_unobserved"`を持ちます。そのターン中の質問・承認待ち・進捗を観測できていないことを示します。ターンが実行中でないと確認できない担当にも付きます。全てのターンが終わったと確認できた担当には付きません。`attention`・`group`・`complete`など既存の値は変わりません。
@@ -20,31 +22,50 @@ Desktop Cloudのスレッドは、最後のターンが終わった後も`status
 - `project control stop`したDesktop Cloudの担当は、スレッドの`status`が`active`のままでも、全てのターンが終わり承認・質問のフラグが空と分かれば`settled`になります。
 - idleの担当を`settled`にするのは、全てのターンが終わったと確認できた場合だけになりました。実行中ターンの数が0でも最新ターンが実行中か状態不明の担当は、どの接続でも読み続けます。これまでは`settled`になることがありました。
 - shared・Web Cloudの担当の`execution`は変わりません。
+- `status`・`read`・`watch`は、Desktop Cloudのタスクで`execution`（`active`・`idle`・`terminal`・`unknown`）を返します。担当行と同じ規則で決まり、ターンの状態がスレッドの`status`と食い違ったときは`execution_basis:"turn_status"`も返します。`status`はサービスが返した値のままで、変えません。他の接続の出力は変わりません。
+- `watch --until idle`は、Desktop Cloudでは`execution`が`idle`になったときに返ります。これまでは、スレッドの`status`が`active`のまま残る担当では返らず、`status`が`idle`でもターンが実行中なら返っていました。
+- Desktop Cloudへの送信も同じ規則で判断します。`--new-turn`（`work tell --new-turn`を含みます）は、スレッドの`status`が`active`のままでも最新ターンが終わっていれば送れます。これまでは、担当行が「検収待ち」でも`STALE_OBSERVATION`で拒否していました。通常の送信は最新ターンが実行中のときに送れます。実行中のターンがある担当への`--new-turn`、ターンの状態を確認できず`status`も`idle`でない担当、`status`が`idle`でも`active`でもない担当には、従来どおり送信しません。
 
-サーバーが要求を拒否したエラー（`RPC_REJECTED`）は、JSON-RPCのcodeだけを返し、サーバーのmessageと`data.reason`を捨てていました。過負荷（-32001）やサーバーの停止中（-32600、`serverShuttingDown`）のような一時的な拒否を、結果から見分けられませんでした。
+Desktop Cloudのタスクは、読むたびに全ターンを項目ごと取得し、cursor以後だけを残していました。長く続く担当ほど1回の照会が重くなり、履歴が受信上限（16 MiB）や時間制限を超えると、その担当は`TIMEOUT`・`PAYLOAD_TOO_LARGE`・接続エラーで読めなくなりました。読めない担当への`work tell`は`WORK_TELL_SYNC_INCOMPLETE`で止まり続け、送信前の状態確認も全履歴を取得していました。
 
-- `RPC_REJECTED`のエラーは、`--json`の`error`に`rpc_code`に加えて`rpc_reason`と`rpc_message`を返します。`rpc_reason`は`data.reason`が短い識別子のときだけ、`rpc_message`は読み取り（`thread/read`・`thread/turns/list`など）の拒否のときだけ返します。`--json`なしでは`rpc: CODE REASON: MESSAGE`の行を出します。
-- `rpc_message`は1行・300バイトまでに切り詰め、認証情報に見える長い文字列を伏せます。指示文や題名を含む要求（送信・作成）の拒否では、サーバーが要求を引用しうるため`rpc_message`を返しません。エラー本文（`message`）は変わりません。
-- `project sync`と`project wait`の担当行は、サーバーが読み取りを拒否した場合に`error_detail`（`rpc_code`・`rpc_reason`・`rpc_message`）を持ちます。byte budgetに収まらず詳細を省いた行では`rpc_code`と`rpc_reason`だけです。
-- `doctor`の`failure`も`rpc_reason`と`rpc_message`を返します。
-- どのエラーを再試行するかは変わりません。
+- Desktop Cloudの`read`・`watch`・`status`・`project sync`・`project wait`・`work tell`は、ターンを新しい順に1ターンずつ取得し、cursorが指すターンで止めます。1回の読み取りは、cursorのターンとそれより新しいターンの分だけになります。結果の`history_scope`は`tail-turns`です。
+- cursorはv3になります。v1 cursorと同じ判定を、cursorのターンから最新までに適用するため、返るイベント・`has_more`・`changed`は全履歴を読んだ場合と同じです。最新ターンが完了済みで全て読み終え、状態も変わらなければ、そのターンのIDと状態だけを確認します（`itemsView: notLoaded`）。
+- 完了・失敗・中断・取消したターンは後から変わらず、ターンは末尾にだけ追加される前提です。cursorのターンとそれより新しいターンは毎回cursorと照合します。cursorのターンが消えた場合は、開始時刻から古い履歴を読まずに判定し、従来どおり`STALE_CURSOR`（history gap）になります。新しい順でない一覧、同じターンや位置の繰り返しは`DESKTOP_CLOUD_PROTOCOL_ERROR`で拒否します。cursorのターンより前への挿入と、それより古い完了済みターンの書き換えは検出しません。最新の完了済みターンのIDと状態が変わらない間は、後から追加された項目や項目の書き換えも読みません。新しいターンが始まるかタスクの状態が変わった後、そのターンを取得する読み取りで返すか検出します。
+- 完了していないターンは、そこからcursorのターンを進めません。それより新しいターンが続く場合、読み取りは最新からそのターンまで1ターンずつ取得し、1000回を超えると失敗します。
+- `--since`なしの初回の`read`は`--limit`件に達した所で止まり、最古のターンまで読まなければ`omitted_older_events`は`null`です。`work start`と`project sync`は従来どおり、初回の境界を証明できない担当を`WORK_INITIAL_HISTORY_GAP`にします。
+- 前の版が保存したv1 cursor（担当のcursor、waitの基準、`work start`の記録、`--based-on`）はそのまま使えます。Desktop Cloudではv1 cursorを一度だけ全履歴で読み、同じイベントを返してv3 cursorを返します。担当のcursorは、その担当を最後まで読めた`project sync`が公開するとv3になります。他の担当が読めなくても変わりません。waitの基準は、waitが返るか、全ての担当を読めた`project sync`が公開するまでv1のままで、その間のwaitは照会ごとにその担当の全履歴を読みます。全履歴がすでに受信上限を超えている担当のv1 cursorは読めないままです。`--full-history`は従来どおり全取得とv1 cursorで、v3 cursorとは併用できません（`OPTIONS_INVALID`）。
+- 送信前の状態確認は、タスクの情報と最新ターン1つ（項目なし）だけを読みます。そのターンが実行中ならsteerの対象にします。v3の`--based-on`はcursorのターン以後だけで鮮度を確認し、v1の`--based-on`は従来どおり全履歴で確認します。
+- 最新ターン1つだけで受信上限（16 MiB）を超える担当は、従来どおり`PAYLOAD_TOO_LARGE`で読めません。`history check`と作成の照合は従来どおり全履歴を読みます。
+
+Desktop Cloudの`work start`と`thread create`は、常にCloudの既定モデルで担当を作り、初回ターンのエフォートを指定していませんでした。担当に使うモデルとエフォートを選べませんでした。
+
+- `codexteer --connection desktop-cloud models select`（`models`だけでも同じ）は、現在のCloudのモデル一覧を読み、モデルと、そのモデルで使えるエフォートを端末で番号から選んで保存します。Enterは表示中の現在値を選びます。`models list`は一覧と保存値、`models show`は保存値を返します。`models set --model MODEL --thinking EFFORT`は対話なしで保存し、`models reset`は保存値を解除します。`select`は対話端末専用で、`--json`を付けられません。
+- 保存先は`CODEX_HOME/codex-steer/settings/desktop-cloud-model.json`です。モデルとエフォートを一組で保存し、保存後の新しい`work start`と`thread create`が毎回読みます。再起動は要りません。既存の担当への送信と継続は、その担当自身の設定のままです。
+- 作成時のモデルは、`--model`、保存値、Cloudの既定の順に決まります。エフォートは、`--thinking`、同じモデルの保存値、選んだモデルの既定の順です。`--model`／`--thinking`は今回の作成だけに効きます。決めた組は`thread/start`と初回の`turn/start`の両方に明示し、結果の`model_selection`（`model`・`thinking`・`model_source`・`thinking_source`）で返します。`thread create --dry-run`も現在の一覧と照合した`model_selection`を返し、作成・送信・receiptの保存はしません。
+- `work start`は、発注を最初に保存するときの組をその発注の記録に残します。保存値を変えた後に同じ発注を再実行しても、最初の組で作成・照合します。同じ発注を別の`--model`／`--thinking`で再実行すると`WORK_START_CONFLICT`で拒否します。
+- Desktop Cloudの`work start`が作成の要求を送る前に失敗した場合（接続の失敗、使えないモデルなど）、同じ発注の再実行は同じattemptで作成をやり直します。これまでは送信済みかどうかを区別できず、再実行が`WORK_CREATE_UNKNOWN`で止まり続けていました。要求を送った後の失敗は、従来どおり読み取りの照合だけで、作成を繰り返しません。
+- 一覧にないモデル、そのモデルが対応しないエフォート、非表示のモデルは、保存も作成もせず`DESKTOP_CLOUD_MODEL_INVALID`で拒否します。別の組に自動で変えることはありません。一覧が不完全・矛盾している場合は`DESKTOP_CLOUD_MODELS_UNVERIFIED`、保存値が壊れている場合は`DESKTOP_CLOUD_MODEL_SETTINGS_INVALID`を返します。
+- `select`をq・Ctrl-C・EOFで中止すると、保存値を変えず、「選択を中止しました。設定は変更していません。」と表示して終了値0で終わります。対話端末以外から実行すると`DESKTOP_CLOUD_MODEL_TTY_REQUIRED`を返します。
+- 監督に紐づく実行（`--supervisor`）は`models`を使えません。詳しくは`help models`と`docs/desktop-cloud.md`を参照してください。
+
+### project syncとproject wait
 
 `project wait`が、1回だけ読み取りに失敗した担当を`observation_failed`で返していました。担当が多く長く続くprojectでは、すぐ後に読める担当の失敗のたびにオーケストレーターが起こされていました。
 
 - `project wait`は、同じ担当が2回以上の照会で続けて読めず、最初の失敗から60秒以上経ったときにだけ、その担当を`observation_failed`で返します。1回の読み取り失敗は担当の状態を示さず、次に読めたときにcursor以後の出来事を受け取れるため、返しません。同じ照会が他の理由で返る場合は、その結果の`unreadable`で`reported:true`にし、`observation_failed`では返しません。この経過はtimeoutや他の理由で返った後に再開したwaitにも引き継ぎ、途中でwaitの照会が完全に読めれば数え直します。通常のsyncが読めただけでは数え直しません。
 - 報告した担当は、エラーcodeが変わっても、waitの照会が途中で読めた後に再び失敗しても、再び返しません。waitの結果か通常の`project sync`がその担当を完全に読めた状態で示した後に、読めない状態がまた続いた場合に、新しい失敗としてもう一度報告します。
 - 全ての結果の`unreadable`は`[{thread_id, error, reported}]`になりました。`reported:true`の担当は、次に読めるまで監視されていません。`reported:false`の担当は直近の照会で失敗しただけで、waitは読み続け、読めない状態が続けば報告します。他の理由で返る結果が続いても、最初の失敗から数え続けます。公開競合で返った結果の`reported`は、先に公開されたheadの記録を示します。
-- 読めた担当の変化は、他の担当が読めない間も従来どおり返します。全ての結果の`unreadable`は、従来どおり直近の照会で読めなかった担当を並べます。`initial_sync`・`membership_changed`・`work_changed`・公開競合・`owner_exited`・timeoutと終了値は変わりません。
+- 読めた担当の変化は、他の担当が読めない間も従来どおり返します。全ての結果の`unreadable`は、従来どおり直近の照会で読めなかった担当を並べます。`initial_sync`・`membership_changed`・`work_changed`・公開競合・`owner_exited`・timeoutと終了値は変わりません。`launcher_exited`は次の項目で加わった理由です。
 
 バックグラウンドタスクとして動かした`project wait`は、そのタスクを停止しても動き続けていました。停止で終了するのは起動したシェルだけで、waitにはシグナルも届かないためです。残ったwaitがprojectのlockを持ち続け、次のwaitは`RECORD_BUSY`になり、誰にも通知されない変化を公開していました。
 
-- `project wait`は、自分を起動したコマンド（親プロセス）が終了すると、1秒以内にwait記録とlockを解放し、何も公開せずに`reason:launcher_exited, changed:false, timed_out:false, sync:null`、終了値1で終わります。担当を読んでいる途中でも記録とlockは1秒以内に解放し、プロセスはその読み取りの終了後に何も公開せず終わります。公開しなかった変化は次のwaitが返します。公開を始めていた照会だけは、その結果を返してから終わります。
+- `project wait`は、自分を起動したコマンド（親プロセス）が終了すると、1秒以内にwait記録とlockを解放し、何も公開せずに`reason:launcher_exited, changed:false, timed_out:false, sync:null`、終了値1で終わります。この結果も`unreadable`と`attention_unobserved`を持ち、そのwaitが最後に読み終えた照会の内容を示します。一度も読み終えていなければ`unreadable`は空で、`attention_unobserved`は付きません。担当を読んでいる途中でも記録とlockは1秒以内に解放し、プロセスはその読み取りの終了後に何も公開せず終わります。公開しなかった変化は次のwaitが返します。公開を始めていた照会だけは、その結果を返してから終わります。
 - フォアグラウンドの実行、終了通知付きのバックグラウンドタスク、生き続けるラッパースクリプトからの実行は変わりません。開始時に既に親から切り離されているwait（シェルの最後のコマンドとして`nohup … &`で起動した場合など）も従来どおり動き続けます。waitを起動したシェルが後から終了する形で切り離したwaitは、そのシェルの終了時に終わるようになります。
 
 `project sync --continue TOKEN`は、`--offset`と`--event-offset`を省略すると先頭ページを返していました。結果にも次のコマンドが示されないため、tokenだけを繰り返すと同じ担当を読み続け、担当の多いprojectでは残りを読めませんでした。
 
-- syncとwaitの結果は`continuation_command`を持ちます。続きがあれば次に実行するコマンド全体（token・`--offset`・`--event-offset`入り）、最後のページでは`null`です。`null`になるまで実行すれば全ての担当を読み切れます。
-- `project sync --continue TOKEN`は`--offset`と`--event-offset`の両方を必須にしました。どちらかがなければ`PROJECT_SYNC_OFFSET_REQUIRED`で拒否し、渡す値をエラーに示します。両方を渡す呼び出しは変わりません。tokenだけの呼び出し（`wait_sync_token`からのwait結果の復元を含む）は`--offset 0 --event-offset 0`を付けてください。
+- syncとwaitの結果は`continuation_command`を持ちます。続きがあれば次に実行するコマンド全体（token・`--offset`・`--event-offset`入り）、最後のページでは`null`です。呼び出しに`--connection`を付けていれば、同じ`--connection`も入ります。`project wait`が返す`sync`のページも同じです。`null`になるまで実行すれば全ての担当を読み切れます。
+- `project sync --continue TOKEN`は`--offset`と`--event-offset`の両方を必須にしました。どちらかがなければ`PROJECT_SYNC_OFFSET_REQUIRED`で拒否し、渡す値をエラーに示します。両方を渡す呼び出しは変わりません。
 
 `--connection desktop-cloud`（と`--connection cloud`）の`project guard --project ID --status`は、helpに載っているのに`CLOUD_OPTIONS_INVALID`で失敗していました。
 
@@ -55,8 +76,10 @@ Desktop Cloudのスレッドは、最後のターンが終わった後も`status
 - `project control stop`した担当は、停止後の完全な観測で終了済みか実行中ターンのないidleで、承認・質問のフラグが空と分かれば、未解決attentionが残っていても`settled`になり、次のsyncから読みません。`settled`にする回の担当行がその質問・失敗を`attention`と`events`で示し、以後の行も同じ未解決attentionと根拠のイベントを再掲します。未解決attentionは消えません。承認・質問のフラグが立っている担当、ターン実行中の担当、フラグが不明な担当は、従来どおり読み続けます。
 - waitの基準があるprojectの`complete:false`のsyncは、未解決attentionが残る担当を従来どおり`settled`にしません。その担当は、次にwaitが返した回か完全なsyncの回に、質問・失敗を示した行で`settled`になります。waitに返すべき質問を、読めない担当が残るsyncが先に消費することはありません。
 - `settled`の担当の行は、今回読んだ全ての担当の行の後に並びます。読まなくなった担当の行が結果の最初のページを占めることはなくなりました。
-- `settled`の担当の行（`observation:"settled"`）の`group`は、新しい値「監視終了」になりました。未回答の質問や失敗で終わった担当も、`attention`・`reason`・`events`はそのまま残り、`group`だけが変わります。これまでは毎回「対応が必要」に並び、読み続けている担当の新しい質問と見分けにくくなっていました。「対応が必要」は読み続けている担当だけになります。`settled`にする回の行は、その回に読んだ結果なので従来の分類のままです。
+- `settled`の担当の行（`observation:"settled"`）の`group`は、新しい値「監視終了」になりました。未回答の質問や失敗で終わった担当も、`attention`・`reason`・`events`はそのまま残り、`group`だけが変わります。0.24.xでは最後に読んだときの分類（「検収待ち」など）のままでした。未回答の質問や失敗で終わった担当を`settled`にすると、その行が「対応が必要」に残り続け、読み続けている担当の新しい質問と見分けにくくなるため、分けました。「対応が必要」は読み続けている担当だけになります。0.24.xが保存した`settled`の行も「監視終了」で返します。`settled`にする回の行は、その回に読んだ結果なので従来の分類のままです。
 - `work tell`のreceiptの`other_work.human_attention`は、`settled`の担当を含めなくなりました。停止済みで読まれない担当には対応を続けられないためです。その担当の質問は`project sync`の「監視終了」の行で確認できます。
+
+### 履歴の上限と保存場所
 
 履歴の上限（256 MiB）の確認が、観測したデータの8倍と1 MiBの空きを求めていました。実際に書く量の数倍にあたり、使用量が上限よりずっと少なくてもsyncとwaitが`PROJECT_HISTORY_LIMIT`で拒否されました。拒否されるとcursorが進まないため、次の実行は同じ履歴を読み直していました。上限に達した後は、人が`project prune`を実行するまで保存できませんでした。
 
@@ -71,31 +94,29 @@ Desktop Cloudのスレッドは、最後のターンが終わった後も`status
 - `project prune`と自動削除が削除するのは、そのprojectの履歴だけです。他projectの保存場所は読まず、他projectの壊れたrecordで失敗することもありません。結果の形は変わらず、`storage_bytes`は整理後の、そのprojectの使用量です。`PROJECT_HISTORY_LIMIT`の`storage_bytes`も同じです。
 - 0.24.x以前が保存した履歴は、新しい場所へ移さず元の場所のまま使います。tokenはどちらの場所のrecordでも使え、`project event`・`project sync --continue`・`work tell`・waitの結果の復元は従来どおりです。古い履歴はどのprojectの上限にも数えず、新しく書き足すこともないため、その総量は減る一方です。そのprojectの`project prune`と自動削除が、従来と同じ基準で古い履歴のうち自分のprojectのものも削除し、`deleted`と`reclaimed_bytes`に含めます。提示済み初回結果の重複全文は、従来どおり元の場所のrecordから削除します。古い履歴が残る間は、各projectの整理がその全体を読みます。読めない古いrecordは飛ばします。古い履歴の削除と書き換えは、0.24.x以前が保存に使う共通の排他を待たずに取れたときだけ行い、取れなければ今回は見送って次の整理で行います。0.24.x以前の保存中のrecordを消すことはなく、他projectを待たせることもありません。
 - `project prune`と自動削除は、そのprojectのsync・waitが公開している途中（0.24.x以前の公開も含みます）は何も削除しません。公開途中のheadは未解決の質問を一時的に示さないため、その根拠を消すおそれがありました。`project prune`は`deleted`がすべて0の結果に`publication_in_progress: true`を付けて返し、上限に達した`work start`の保存と公開競合で返るsync・waitの保存は、`PROJECT_HISTORY_LIMIT`に`publication_in_progress: true`を付けて拒否します。公開が終わってから再実行してください。公開中のsync・wait自身の自動削除は従来どおりです。
+
+### エラーの詳細
+
+サーバーが要求を拒否したエラー（`RPC_REJECTED`）は、JSON-RPCのcodeだけを返し、サーバーのmessageと`data.reason`を捨てていました。過負荷（-32001）やサーバーの停止中（-32600、`serverShuttingDown`）のような一時的な拒否を、結果から見分けられませんでした。
+
+- `RPC_REJECTED`のエラーは、`--json`の`error`に`rpc_code`に加えて`rpc_reason`と`rpc_message`を返します。`rpc_reason`は`data.reason`が短い識別子のときだけ、`rpc_message`は読み取り（`thread/read`・`thread/turns/list`など）の拒否のときだけ返します。`--json`なしでは`rpc: CODE REASON: MESSAGE`の行を出します。
+- `rpc_message`は1行・300バイトまでに切り詰め、認証情報に見える長い文字列を伏せます。指示文や題名を含む要求（送信・作成）の拒否では、サーバーが要求を引用しうるため`rpc_message`を返しません。エラー本文（`message`）は変わりません。
+- `project sync`と`project wait`の担当行は、サーバーが読み取りを拒否した場合に`error_detail`（`rpc_code`・`rpc_reason`・`rpc_message`）を持ちます。byte budgetに収まらず詳細を省いた行では`rpc_code`と`rpc_reason`だけです。
+- `doctor`の`failure`も`rpc_reason`と`rpc_message`を返します。
+- どのエラーを再試行するかは変わりません。
+
+### アップグレード時の注意
+
 - アップグレードの後、実行中の`project wait`を再起動してください。アップグレード前に始めたwaitは古いコードのまま動き続けます。
-- 0.24.x以前に戻すと、このversionが保存した履歴は見えません。そのversionでは、このversionが返したtokenは見つからず、`work tell`は次の`project sync`まで`WORK_TELL_SYNC_INCOMPLETE`になります。このversionで始めた`work start`の記録も見えないため、同じ引数で再実行すると別の担当を作ります。戻した後は、`work start`を再実行する前に`project sync`でその担当がすでにprojectにいるかを確認してください。戻したversionが保存した履歴は、再びこのversionにしたときに古い履歴として使えます。
+- `project sync --continue TOKEN`は`--offset`と`--event-offset`の両方が必要になりました。続きは結果の`continuation_command`をそのまま実行してください。tokenだけで呼んでいた箇所（`wait_sync_token`からのwait結果の復元を含みます）は`--offset 0 --event-offset 0`を付けます。
+- Desktop Cloudの`thread create --dry-run`は、現在のモデル一覧を読んで`model_selection`を返すようになりました。これまでは環境の照合だけでした。一覧を読めない、一覧が不完全、保存値や指定が一覧にない場合は、`--dry-run`も`DESKTOP_CLOUD_MODELS_UNVERIFIED`・`DESKTOP_CLOUD_MODEL_INVALID`・`DESKTOP_CLOUD_MODEL_SETTINGS_INVALID`や接続エラーで失敗します。
+- `settled`の行の`group`は「監視終了」になりました。`group`が「対応が必要」「検収待ち」などの4つだけだと仮定している処理は、5つ目を扱ってください。
 
-Desktop Cloudの`work start`と`thread create`は、常にCloudの既定モデルで担当を作り、初回ターンのエフォートを指定していませんでした。担当に使うモデルとエフォートを選べませんでした。
+### 0.24.x以前へ戻すときの注意
 
-- `codexteer --connection desktop-cloud models select`（`models`だけでも同じ）は、現在のCloudのモデル一覧を読み、モデルと、そのモデルで使えるエフォートを端末で番号から選んで保存します。Enterは表示中の現在値を選びます。`models list`は一覧と保存値、`models show`は保存値を返します。`models set --model MODEL --thinking EFFORT`は対話なしで保存し、`models reset`は保存値を解除します。`select`は対話端末専用で、`--json`を付けられません。
-- 保存先は`CODEX_HOME/codex-steer/settings/desktop-cloud-model.json`です。モデルとエフォートを一組で保存し、保存後の新しい`work start`と`thread create`が毎回読みます。再起動は要りません。既存の担当への送信と継続は、その担当自身の設定のままです。
-- 作成時のモデルは、`--model`、保存値、Cloudの既定の順に決まります。エフォートは、`--thinking`、同じモデルの保存値、選んだモデルの既定の順です。`--model`／`--thinking`は今回の作成だけに効きます。決めた組は`thread/start`と初回の`turn/start`の両方に明示し、結果の`model_selection`（`model`・`thinking`・`model_source`・`thinking_source`）で返します。`thread create --dry-run`も現在の一覧と照合した`model_selection`を返し、作成・送信・receiptの保存はしません。
-- `work start`は、発注を最初に保存するときの組をその発注の記録に残します。保存値を変えた後に同じ発注を再実行しても、最初の組で作成・照合します。同じ発注を別の`--model`／`--thinking`で再実行すると`WORK_START_CONFLICT`で拒否します。
-- Desktop Cloudの`work start`が作成の要求を送る前に失敗した場合（接続の失敗、使えないモデルなど）、同じ発注の再実行は同じattemptで作成をやり直します。これまでは送信済みかどうかを区別できず、再実行が`WORK_CREATE_UNKNOWN`で止まり続けていました。要求を送った後の失敗は、従来どおり読み取りの照合だけで、作成を繰り返しません。
-- 一覧にないモデル、そのモデルが対応しないエフォート、非表示のモデルは、保存も作成もせず`DESKTOP_CLOUD_MODEL_INVALID`で拒否します。別の組に自動で変えることはありません。一覧が不完全・矛盾している場合は`DESKTOP_CLOUD_MODELS_UNVERIFIED`、保存値が壊れている場合は`DESKTOP_CLOUD_MODEL_SETTINGS_INVALID`を返します。
-- `select`をq・Ctrl-C・EOFで中止すると、保存値を変えず、「選択を中止しました。設定は変更していません。」と表示して終了値0で終わります。対話端末以外から実行すると`DESKTOP_CLOUD_MODEL_TTY_REQUIRED`を返します。
-- 監督に紐づく実行（`--supervisor`）は`models`を使えません。詳しくは`help models`と`docs/desktop-cloud.md`を参照してください。
-
-Desktop Cloudのタスクは、読むたびに全ターンを項目ごと取得し、cursor以後だけを残していました。長く続く担当ほど1回の照会が重くなり、履歴が受信上限（16 MiB）や時間制限を超えると、その担当は`TIMEOUT`・`PAYLOAD_TOO_LARGE`・接続エラーで読めなくなりました。読めない担当への`work tell`は`WORK_TELL_SYNC_INCOMPLETE`で止まり続け、送信前の状態確認も全履歴を取得していました。
-
-- Desktop Cloudの`read`・`watch`・`status`・`project sync`・`project wait`・`work tell`は、ターンを新しい順に1ターンずつ取得し、cursorが指すターンで止めます。1回の読み取りは、cursorのターンとそれより新しいターンの分だけになります。結果の`history_scope`は`tail-turns`です。
-- cursorはv3になります。v1 cursorと同じ判定を、cursorのターンから最新までに適用するため、返るイベント・`has_more`・`changed`は全履歴を読んだ場合と同じです。最新ターンが完了済みで全て読み終え、状態も変わらなければ、そのターンのIDと状態だけを確認します（`itemsView: notLoaded`）。
-- 完了・失敗・中断・取消したターンは後から変わらず、ターンは末尾にだけ追加される前提です。cursorのターンとそれより新しいターンは毎回cursorと照合します。cursorのターンが消えた場合は、開始時刻から古い履歴を読まずに判定し、従来どおり`STALE_CURSOR`（history gap）になります。新しい順でない一覧、同じターンや位置の繰り返しは`DESKTOP_CLOUD_PROTOCOL_ERROR`で拒否します。cursorのターンより前への挿入と、それより古い完了済みターンの書き換えは検出しません。最新の完了済みターンのIDと状態が変わらない間は、後から追加された項目や項目の書き換えも読みません。新しいターンが始まるかタスクの状態が変わった後、そのターンを取得する読み取りで返すか検出します。
-- 完了していないターンは、そこからcursorのターンを進めません。それより新しいターンが続く場合、読み取りは最新からそのターンまで1ターンずつ取得し、1000回を超えると失敗します。
-- `--since`なしの初回の`read`は`--limit`件に達した所で止まり、最古のターンまで読まなければ`omitted_older_events`は`null`です。`work start`と`project sync`は従来どおり、初回の境界を証明できない担当を`WORK_INITIAL_HISTORY_GAP`にします。
-- 前の版が保存したv1 cursor（担当のcursor、waitの基準、`work start`の記録、`--based-on`）はそのまま使えます。Desktop Cloudではv1 cursorを一度だけ全履歴で読み、同じイベントを返してv3 cursorを返します。担当のcursorは、その担当を最後まで読めた`project sync`が公開するとv3になります。他の担当が読めなくても変わりません。waitの基準は、waitが返るか、全ての担当を読めた`project sync`が公開するまでv1のままで、その間のwaitは照会ごとにその担当の全履歴を読みます。全履歴がすでに受信上限を超えている担当のv1 cursorは読めないままです。`--full-history`は従来どおり全取得とv1 cursorで、v3 cursorとは併用できません（`OPTIONS_INVALID`）。
-- 送信前の状態確認は、タスクの情報と最新ターン1つ（項目なし）だけを読み、そのターンをsteerの対象にします。v3の`--based-on`はcursorのターン以後だけで鮮度を確認し、v1の`--based-on`は従来どおり全履歴で確認します。
-- 最新ターン1つだけで受信上限（16 MiB）を超える担当は、従来どおり`PAYLOAD_TOO_LARGE`で読めません。`history check`と作成の照合は従来どおり全履歴を読みます。
+- 戻す前に、このversionのプロセス（実行中の`project wait`・`project sync`・`work start`・`project prune`）を全て止めてください。このversionは履歴の保存と整理をprojectごとの排他で行い、0.24.x以前は共通の排他で行います。新旧のversionが同じprojectの履歴を同時に保存・整理しないようにするためです。
 - 0.24.x以前に戻すと、このversionが保存したv3 cursorは読めず`STALE_CURSOR`になります。担当のcursor・waitの基準・`work start`の記録がv3の担当は、戻したversionではhistory gapになり、`work tell`は`WORK_TELL_SYNC_INCOMPLETE`になります。保存されたcursorは変わらないため、このversionに戻せば続きから読めます。
+- 0.24.x以前に戻すと、このversionが保存した履歴は見えません。そのversionでは、このversionが返したtokenは見つからず、`work tell`は次の`project sync`まで`WORK_TELL_SYNC_INCOMPLETE`になります。このversionで始めた`work start`の記録も見えないため、同じ引数で再実行すると別の担当を作ります。戻した後は、`work start`を再実行する前に`project sync`でその担当がすでにprojectにいるかを確認してください。戻したversionが保存した履歴は、再びこのversionにしたときに古い履歴として使えます。
 
 ## 0.24.2 — 2026-11-11公開
 
