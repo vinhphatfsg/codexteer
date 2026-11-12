@@ -414,7 +414,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   // A stale reader must not replace a newer attention head, even after a CAS miss.
   let conflict = null, pruned;
   try {
-    await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => withHistoryReservation({ projectId, records }, async (historyWrite, report) => {
+    await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => withHistoryReservation({ projectId, records, publishing: true }, async (historyWrite, report) => {
       pruned = report;
       const current = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage);
       if (hash(current ?? null) !== hash(previous ?? null)) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");

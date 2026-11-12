@@ -13,6 +13,7 @@ import { waitProject } from "../src/project-wait.mjs";
 import { startWork } from "../src/work-start.mjs";
 import { tellWork } from "../src/work-tell.mjs";
 import { pruneProjectHistory, withHistoryReservation, historyBucket } from "../src/project-history.mjs";
+import { fail } from "../src/cli.mjs";
 import { readRecord, writeRecord, removeRecord, listRecords, recordStats, storePath, withStoreLock } from "../src/store.mjs";
 
 const KiB = 1024, MiB = 1024 * KiB, P = "alpha", Q = "beta";
@@ -336,7 +337,14 @@ test("a prune without the project's sync lock deletes nothing while a previous-v
     assert.deepEqual(manual.deleted, { events: 0, results: 0, initial_payloads: 0 }); assert.equal(manual.reclaimed_bytes, 0);
     assert.equal(manual.publication_in_progress, true);
     f.storage.historyLimitBytes = await own(f) + KiB;
-    await assert.rejects(f.start(P, "at the quota", 4 * KiB), { code: "PROJECT_HISTORY_LIMIT", publication_in_progress: true });
+    const refused = await f.start(P, "at the quota", 4 * KiB).catch(error => error);
+    assert.equal(refused.code, "PROJECT_HISTORY_LIMIT"); assert.equal(refused.publication_in_progress, true);
+    for (const json of [true, false]) {
+      const printed = t.mock.method(console, json ? "log" : "error", () => {}), exit = process.exitCode;
+      try { fail(refused, json); } finally { printed.mock.restore(); process.exitCode = exit; }
+      const text = printed.mock.calls.map(call => call.arguments[0]).join("\n");
+      assert.ok(json ? JSON.parse(text).error.publication_in_progress === true : text.includes("publication_in_progress: true"));
+    }
     f.add(P, 1, 4 * KiB);
     await assert.rejects(f.sync(P), { code: "PROJECT_HISTORY_LIMIT", publication_in_progress: true }, "the conflict path's reservation prunes nothing");
     delete f.storage.historyLimitBytes;

@@ -50,43 +50,50 @@ async function usage(projectId, storage) {
   return { stats, bytes: stats.flat().reduce((sum, row) => sum + row.bytes, 0) };
 }
 const limit = storage => storage.historyLimitBytes ?? HISTORY_LIMIT_BYTES;
-function capacity(used, additional, storage, pruned) {
-  if (used + additional > limit(storage)) throw failure("PROJECT_HISTORY_LIMIT", pruned
-    ? "This project's history storage is full after pruning its old history. Protected evidence is never removed."
+function capacity(used, additional, storage, pruned, publishing = false) {
+  if (used + additional > limit(storage)) throw failure("PROJECT_HISTORY_LIMIT", publishing
+    ? "This project's history storage is full, and its old history is not pruned while the project is publishing. Retry after it finishes."
+    : pruned ? "This project's history storage is full after pruning its old history. Protected evidence is never removed."
     : "This project's history storage is full. Run project prune --project ID; protected evidence is never truncated.",
-    { storage_bytes: used, required_bytes: additional, limit_bytes: limit(storage), ...(pruned ? { history_pruned: pruned } : {}) });
+    { storage_bytes: used, required_bytes: additional, limit_bytes: limit(storage), ...(pruned ? { history_pruned: pruned } : {}), ...(publishing ? { publication_in_progress: true } : {}) });
 }
 // Under the history lock. `records` lists every [bucket, id, record] about to be
 // written. When they do not fit, the project's unprotected history is pruned
 // once, here and never between the writes: a publication's own records are
 // unprotected until its pending head names them. `earlier` is a prune the same
-// command already made.
-async function room(records, projectId, storage, earlier = null) {
+// command already made. `publishing` says the caller holds the project's
+// publication lock.
+async function room(records, projectId, storage, earlier = null, publishing = false) {
   const measure = used => {
     const sizes = new Map(used.stats.flatMap((rows, i) => rows.map(row => [`${buckets[i]}:${row.id}`, row.bytes])));
     return { total: used.bytes, sizes, need: records.reduce((sum, [bucket, id, record]) => sum + stored(record) - (sizes.get(`${bucket}:${id}`) ?? 0), 0) };
   };
   const before = await usage(projectId, storage);
-  let state = measure(before), pruned = earlier;
+  let state = measure(before), pruned = earlier, busy = false;
   if (state.total + state.need > limit(storage)) {
-    const { deleted, after, reclaimed } = await prune(projectId, storage, before);
-    const sum = earlier ?? { deleted: { events: 0, results: 0, initial_payloads: 0 }, reclaimed_bytes: 0 };
-    pruned = { deleted: Object.fromEntries(Object.entries(deleted).map(([kind, count]) => [kind, count + sum.deleted[kind]])), reclaimed_bytes: sum.reclaimed_bytes + reclaimed };
-    state = measure(after);
+    const result = await prune(projectId, storage, before, publishing);
+    if (result) {
+      const { deleted, after, reclaimed } = result, sum = earlier ?? { deleted: { events: 0, results: 0, initial_payloads: 0 }, reclaimed_bytes: 0 };
+      pruned = { deleted: Object.fromEntries(Object.entries(deleted).map(([kind, count]) => [kind, count + sum.deleted[kind]])), reclaimed_bytes: sum.reclaimed_bytes + reclaimed };
+      state = measure(after);
+    } else busy = true;
   }
-  capacity(state.total, state.need, storage, pruned);
+  capacity(state.total, state.need, storage, pruned, busy);
   return { ...state, pruned };
 }
 // Lock order: work-start OR project-publication -> that project's history ->
-// the previous version's shared history lock (prune only, never waited for) ->
-// membership. The previous version takes work-start OR project-publication ->
-// shared history -> membership, so the order stays acyclic. prune acquires
-// history only. No network/supervisor operations under history.
+// membership. A prune outside the publication's main path also takes, from
+// under the history lock, that project's publication lock (against this order)
+// and then the previous version's shared history lock. Store locks never wait:
+// a held one fails as RECORD_BUSY, and attempt() turns that into pruning
+// nothing or keeping the flat records, so no path waits on another. The
+// previous version takes work-start OR project-publication -> shared history
+// -> membership. No network/supervisor operations under history.
 // Each of `records` is at least as large as what the action writes for it: once
 // the first write succeeds, the rest fit. The action also receives what was pruned.
-export function withHistoryReservation({ projectId, records = [], pruned }, action, storage = {}) {
+export function withHistoryReservation({ projectId, records = [], pruned, publishing = false }, action, storage = {}) {
   return lock(projectId, async () => {
-    const reserved = await room(records, projectId, storage, pruned), { sizes } = reserved;
+    const reserved = await room(records, projectId, storage, pruned, publishing), { sizes } = reserved;
     let { total } = reserved;
     const write = async (bucket, id, record, options = storage) => {
       if (!buckets.includes(bucket)) throw failure("PROJECT_HISTORY_INVALID", "Unbudgeted history bucket.");
@@ -118,20 +125,29 @@ function references(value, result = new Set()) {
 export async function pruneProjectHistory(projectId, storage = {}) {
   if (typeof projectId !== "string" || !projectId) throw failure("PROJECT_HISTORY_INVALID", "project prune requires --project.");
   return lock(projectId, async () => {
-    const { deleted, head, after, reclaimed } = await prune(projectId, storage, await usage(projectId, storage));
+    const before = await usage(projectId, storage), result = await prune(projectId, storage, before, false);
+    if (!result) return { project_id: projectId, deleted: { events: 0, results: 0, initial_payloads: 0 }, storage_bytes: before.bytes, reclaimed_bytes: 0, limit_bytes: limit(storage),
+      protected_sync_token: (await readRecord("project-sync-heads", key(projectId), storage))?.sync_token ?? null, retention: "explicit-prune", publication_in_progress: true };
+    const { deleted, head, after, reclaimed } = result;
     return { project_id: projectId, deleted, storage_bytes: after.bytes, reclaimed_bytes: reclaimed, limit_bytes: limit(storage),
       protected_sync_token: head?.sync_token ?? null, retention: "explicit-prune" };
   }, storage);
 }
 
-// The previous version publishes flat records under one history lock shared by
-// every project. Flat records are removed or rewritten only while holding it,
-// taken without waiting: while it is busy they are left to a later prune.
-async function prune(projectId, storage, before) {
+// Takes a lock without waiting: null while another holds it.
+async function attempt(name, fn, storage) {
   let entered = false;
-  try { return await withStoreLock("project-history", () => { entered = true; return pruneRows(projectId, storage, before, true); }, storage); }
-  catch (error) { if (entered || error.code !== "RECORD_BUSY") throw error; }
-  return pruneRows(projectId, storage, before, false);
+  try { return { value: await withStoreLock(name, () => { entered = true; return fn(); }, storage) }; }
+  catch (error) { if (entered || error.code !== "RECORD_BUSY") throw error; return null; }
+}
+// The head is final only while no publication of the project is between its
+// pending and final head, which holding the project's publication lock proves;
+// without it nothing is pruned (null). The previous version publishes flat
+// records under one history lock shared by every project: they are removed or
+// rewritten only while holding it, and otherwise left to a later prune.
+async function prune(projectId, storage, before, publishing) {
+  const rows = async () => (await attempt("project-history", () => pruneRows(projectId, storage, before, true), storage))?.value ?? pruneRows(projectId, storage, before, false);
+  return publishing ? rows() : (await attempt(`project-sync-${key(projectId)}`, rows, storage))?.value ?? null;
 }
 // Under the project's history lock: what project prune and a publication at the
 // quota remove, from the project's buckets and from the flat ones. Flat records

@@ -66,15 +66,19 @@ test("publication and cleanup source use the modeled history boundary", async ()
   assert.match(sync, /withStoreLock\(`project-sync-[\s\S]*?withHistoryReservation/);
   assert.equal((sync.match(/await historyWrite\(\.\.\./g) ?? []).length, 4);
   assert.equal((sync.match(/withHistoryReservation\(\{ projectId, records/g) ?? []).length, 2);
-  assert.match(history, /async function room\([\s\S]*?await prune\(projectId, storage, before\)[\s\S]*?\n}\n/);
+  assert.match(history, /async function room\([\s\S]*?await prune\(projectId, storage, before, publishing\)[\s\S]*?\n}\n/);
   assert.doesNotMatch(history.slice(history.indexOf("const write = ")), /await prune\([\s\S]*?return action/);
   assert.doesNotMatch(sync, /writeRecord\("project-sync-(?:events|results)"/);
   assert.doesNotMatch(start, /\bwriteRecord\("work-starts"/);
   assert.match(history, /const lock = [^\n]*\n[^\n]*\n\s*return withStoreLock\(`project-history-\$\{key\(projectId\)\}`/);
   for (const name of ["withHistoryReservation", "writeHistoryRecord", "pruneProjectHistory"]) assert.match(history, new RegExp(`function ${name}\\([\\s\\S]*?return lock\\(`));
   assert.doesNotMatch(history, /withStoreLock\(`(?:project-sync|project-index|work-start)-/);
-  assert.equal((history.match(/withStoreLock\("project-history"/g) ?? []).length, 1);
-  assert.match(history, /async function prune\([^)]*\) \{\n[^\n]*\n\s*try \{ return await withStoreLock\("project-history"/);
+  // Every lock history takes is its own project's, or one tried without waiting.
+  assert.equal((history.match(/withStoreLock\(/g) ?? []).length, 2);
+  assert.match(history, /async function attempt\([\s\S]*?withStoreLock\(name[\s\S]*?error\.code !== "RECORD_BUSY"\) throw error; return null;/);
+  assert.match(history, /async function prune\([\s\S]*?attempt\("project-history"[\s\S]*?publishing \? rows\(\) : \(await attempt\(`project-sync-\$\{key\(projectId\)\}`/);
+  assert.equal((sync.match(/publishing: true/g) ?? []).length, 1, "only the publication's main path holds the project's publication lock");
+  assert.match(sync, /withStoreLock\(`project-sync-[^`]*`, async \(\) => withHistoryReservation\(\{ projectId, records, publishing: true \}/);
 });
 
 test("the history limit is set only through the storage argument, which no command builds from user input", async () => {
