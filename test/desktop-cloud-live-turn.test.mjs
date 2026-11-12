@@ -46,7 +46,7 @@ async function project(t, tasks) {
   const read = (id, options) => observeThread(id, options, { connect: byId.get(id).connect });
   const dependencies = { storage, read, pollMs: 5, processIdentity: async () => "same-start" };
   const send = (id, wire, options) => sendDesktopCloudInput(id, wire, options, { ...storage, connect: byId.get(id).connect });
-  return { storage, read, dependencies, send, sync: () => syncProject("P", {}, dependencies), wait: () => waitProject("P", { timeoutMs: 0 }, dependencies),
+  return { storage, read, dependencies, send, sync: (options = {}, overrides = {}) => syncProject("P", options, { ...dependencies, ...overrides }), wait: () => waitProject("P", { timeoutMs: 0 }, dependencies),
     tell: (id, body, options = {}) => tellWork(id, body, options, { storage, read, send }) };
 }
 
@@ -205,6 +205,12 @@ test("a turn that ends between the history read and the resume is read from the 
   const resumes = f.resumes(), next = await f.read(ID, { since: raced.cursor });
   assert.deepEqual(next.events.map(event => [event.id, event.change]), [[turn, "updated"], [note.id, "added"], [final.id, "added"]]);
   assert.equal(f.resumes(), resumes);
+  assert.equal(raced.live_fallback, "unavailable");
+  const again = f.start("third order");
+  f.progress(agent("More work."));
+  const live = await f.read(ID, { since: next.cursor });
+  assert.equal(live.live_turn_id, again.turn, "a view that arrived too late does not refuse the task's later turns");
+  assert.equal(live.live_fallback, undefined); assert.equal(f.resumes(), resumes + 1);
 });
 
 test("a live view whose item ids differ from the history fails closed to the history view", async t => {
@@ -215,7 +221,8 @@ test("a live view whose item ids differ from the history fails closed to the his
   opening.state.live.itemId = id => `live-${id}`;
   const refused = await opening.read(ID, { since: first.cursor });
   assert.equal(refused.events.length, 2, "the opening message has another id in the live view, so the snapshot is not used");
-  assert.equal(refused.attention_coverage, UNOBSERVED);
+  assert.equal(refused.attention_coverage, UNOBSERVED); assert.equal(refused.live_fallback, "view_mismatch");
+  assert.deepEqual(refused.live_mismatch, { turn_id: opening.state.turns.at(-1).id, absent: 1 });
 
   const f = await member(t);
   f.append([user("first order"), agent("first report")]);
@@ -233,6 +240,140 @@ test("a live view whose item ids differ from the history fails closed to the his
   const resumes = f.resumes(), after = await f.read(ID, { since: done.cursor });
   assert.equal(f.resumes(), resumes, "after a mismatch the task is read from the history only");
   assert.equal(after.attention_coverage, UNOBSERVED);
+});
+
+const FALLBACK = (id, reason) => [{ thread_id: id, attention_coverage: UNOBSERVED, live_fallback: reason }];
+const itemIds = (rows, turns) => rows.flatMap(eventIds).filter(id => !turns.includes(id));
+
+test("the member row says why a member went back to the history view after a mismatch", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  await f.sync();
+  const { opening } = f.start(), note = agent("Working.");
+  f.progress(note);
+  f.state.live.itemId = id => id === opening.id ? id : `live-${id}`;
+  assert.equal((await f.row()).live_fallback, undefined);
+  f.complete([agent("Done.")]);
+  const ended = await f.sync(), done = ended.works[0];
+  assert.equal(done.live_fallback, "mismatch"); assert.equal(done.complete, true); assert.equal(ended.attention_unobserved, undefined);
+  f.state.live.itemId = id => id;
+  f.start("third order"); f.progress(agent("More work."));
+  const resumes = f.resumes(), later = await f.sync({ byteBudget: 4096 }, { read: async (id, options) => ({ ...(await f.read(id, options)), title: "題".repeat(1200) }) });
+  assert.equal(later.works[0].details_omitted, true); assert.equal(later.works[0].live_fallback, "mismatch", "the compact row keeps the reason");
+  assert.deepEqual(later.attention_unobserved, FALLBACK(ID, "mismatch"));
+  const waited = await f.wait();
+  assert.equal(waited.timed_out, true); assert.deepEqual(waited.attention_unobserved, FALLBACK(ID, "mismatch"));
+  assert.equal(f.resumes(), resumes, "the task is read from the history only");
+  const status = await f.read(ID, {});
+  assert.equal(status.live_fallback, undefined, "a read without a cursor does not know the refusal");
+});
+
+test("a live view that lacks an item the history lists refuses live reads of the task, once and visibly", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  assert.equal((await f.wait()).reason, "initial_sync");
+  const { turn } = f.start(), note = agent("Working.");
+  f.progress(note);
+  assert.deepEqual(eventIds(await f.row()).slice(2), [note.id], "the live view delivers the item");
+  f.state.live.itemId = id => `live-${id}`;
+  let resumes = f.resumes();
+  const returned = await f.wait(), row = returned.sync.works[0];
+  assert.equal(returned.reason, "work_changed", "the orchestrator is told once that the member is no longer read live");
+  assert.equal(row.live_fallback, "view_mismatch"); assert.equal(row.attention_coverage, UNOBSERVED); assert.equal(row.complete, true);
+  assert.deepEqual(returned.attention_unobserved, FALLBACK(ID, "view_mismatch"));
+  assert.equal(eventIds(row).some(id => id.startsWith("live-")), false, "nothing of the refused view is delivered");
+  assert.equal(f.resumes() - resumes, 1);
+
+  resumes = f.resumes();
+  f.state.live.itemId = id => id;
+  for (let n = 0; n < 3; n++) {
+    const quiet = await f.wait();
+    assert.equal(quiet.timed_out, true); assert.deepEqual(quiet.attention_unobserved, FALLBACK(ID, "view_mismatch"));
+  }
+  assert.equal((await f.row()).live_fallback, "view_mismatch");
+  assert.equal(f.resumes(), resumes, "later polls and syncs do not resume the task");
+
+  const final = agent("Done.");
+  f.complete([final]);
+  const ended = await f.wait(), endedRow = ended.sync.works[0];
+  assert.deepEqual(eventIds(endedRow), [turn, final.id], "what the live view delivered before the refusal is not delivered again");
+  assert.equal(endedRow.live_fallback, "view_mismatch");
+  f.start("third order");
+  resumes = f.resumes();
+  assert.equal((await f.row()).attention_coverage, UNOBSERVED); assert.equal(f.resumes(), resumes);
+});
+
+test("a listed item whose content differs in the live view is read from the history, and the live read goes on", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  await f.sync();
+  const { turn, opening } = f.start(), note = agent("Working.");
+  f.progress(note);
+  f.state.live.item = item => item.id === opening.id ? { ...item, clientId: "client-1" } : item;
+  const rows = [await f.row()];
+  assert.equal(rows[0].attention_coverage, undefined); assert.equal(rows[0].live_fallback, undefined);
+  assert.deepEqual(eventIds(rows[0]), [turn, opening.id, note.id]);
+  const final = agent("Done.");
+  f.complete([final]);
+  rows.push(await f.row());
+  assert.deepEqual(itemIds(rows, [turn]), [opening.id, note.id, final.id], "nothing is delivered twice and nothing is skipped");
+  assert.equal(rows[1].live_fallback, undefined);
+});
+
+test("past 256 live items the member is read from the history for the rest of the turn, and the row says so", async t => {
+  for (const before of [0, 200]) {
+    const f = await member(t);
+    f.append([user("first order"), agent("first report")]);
+    await f.sync();
+    const { turn, opening } = f.start(), early = Array.from({ length: before }, (_, n) => agent(`early ${n}`)), rows = [];
+    const row = async () => (await f.sync({ byteBudget: 1024 * 1024 })).works[0];
+    if (before) { f.progress(...early); rows.push(await row()); assert.equal(rows[0].live_fallback, undefined); assert.equal(eventIds(rows[0]).length, before + 2); }
+    const late = Array.from({ length: 257 - before }, (_, n) => agent(`late ${n}`));
+    f.progress(...late);
+    const full = await f.sync({ byteBudget: 1024 * 1024 });
+    rows.push(full.works[0]);
+    assert.equal(full.works[0].live_fallback, "ledger_full", `${before}`); assert.equal(full.works[0].attention_coverage, UNOBSERVED); assert.equal(full.works[0].complete, true);
+    assert.deepEqual(full.attention_unobserved, FALLBACK(ID, "ledger_full"));
+    assert.equal(eventIds(full.works[0]).some(id => late.some(item => item.id === id)), false, "an item past the limit waits for the history");
+    const final = agent("Done.");
+    f.complete([final]);
+    rows.push(await row());
+    assert.deepEqual(itemIds(rows, [turn]).sort(), [opening, ...early, ...late, final].map(item => item.id).sort(), `${before}: every item arrives exactly once`);
+    assert.equal(rows.at(-1).live_fallback, undefined);
+    f.start("third order"); f.progress(agent("More work."));
+    assert.equal((await f.row()).attention_coverage, undefined, "the next turn is read live again");
+  }
+});
+
+test("a turn that ends interrupted or failed without an item the live view showed delivers the rest once and refuses live reads", async t => {
+  for (const status of ["interrupted", "failed"]) {
+    const f = await member(t);
+    f.append([user("first order"), agent("first report")]);
+    await f.sync();
+    const first = f.start(), note = agent("Working."), unfinished = command();
+    f.progress(note, unfinished);
+    const rows = [await f.row()];
+    assert.deepEqual(eventIds(rows[0]), [first.turn, first.opening.id, note.id, unfinished.id]);
+    const running = f.state.turns.at(-1), last = agent("Stopped.");
+    running.items = running.items.filter(item => item.id !== unfinished.id);
+    f.complete([last], status);
+    const ended = await f.sync();
+    rows.push(ended.works[0]);
+    assert.equal(ended.works[0].live_fallback, "mismatch", status); assert.equal(ended.works[0].complete, true); assert.equal(ended.works[0].history_gap, false);
+    assert.deepEqual(eventIds(ended.works[0]).filter(id => id !== unfinished.id), [first.turn, last.id], `${status}: the turn end and the item the live view had not shown`);
+
+    const second = f.start("second order"), more = agent("More work.");
+    f.progress(more);
+    const resumes = f.resumes(), blind = await f.sync();
+    rows.push(blind.works[0]);
+    assert.equal(f.resumes(), resumes, "the task is read from the history only");
+    assert.deepEqual(blind.attention_unobserved, FALLBACK(ID, "mismatch"));
+    const done = agent("Done.");
+    f.complete([done]);
+    rows.push(await f.row());
+    const delivered = itemIds(rows, [first.turn, second.turn]).filter(id => id !== unfinished.id);
+    assert.deepEqual(delivered, [first.opening.id, note.id, last.id, second.opening.id, more.id, done.id], `${status}: nothing is delivered twice and nothing is skipped`);
+  }
 });
 
 test("work tell reads the running turn live once, and refuses on a question, a pending request or new progress", async t => {

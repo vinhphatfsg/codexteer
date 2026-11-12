@@ -15,7 +15,7 @@ import { RpcFailure } from "../src/rpc.mjs";
 export function desktopCloudService(uuid, { environment, receiveLimit = Infinity, liveTurn = false } = {}) {
   const state = { turns: [], flags: [], environment, status: "idle", lost: false, missing: false, calls: [], receiveLimit,
     served: { requests: 0, turns: 0, bytes: 0, ids: 0 }, clock: 1_800_000_000, hideRunning: liveTurn,
-    live: { resumes: [], wakes: 0, failure: null, requests: [], flags: [], beforeResume: null, itemId: id => id, connections: [] } };
+    live: { resumes: [], wakes: 0, failure: null, requests: [], flags: [], beforeResume: null, itemId: id => id, item: item => item, connections: [] } };
   const turn = (fields = {}) => ({ id: `turn-${state.turns.length}`, status: "completed", startedAt: state.clock++, items: [], ...fields });
   const listed = row => state.hideRunning && row.status === "inProgress" ? { ...row, items: row.items.slice(0, 1) } : row;
   const rpc = { close() {}, async request(method, params) {
@@ -70,7 +70,7 @@ export function desktopCloudService(uuid, { environment, receiveLimit = Infinity
       if (state.live.failure === "error") throw new RpcFailure("thread/resume was rejected by App Server.", { code: "RPC_REJECTED", rpcCode: -32603 });
       if (state.live.failure === "timeout") return new Promise(() => {});
       setImmediate(() => state.live.requests.forEach((request, n) => connection.emit("serverRequest", { id: `replayed-${n}`, method: request, params: { threadId: params.threadId } })));
-      const turns = structuredClone(state.turns).map(row => ({ ...row, items: row.items.map(item => ({ ...item, id: state.live.itemId(item.id) })) }));
+      const turns = structuredClone(state.turns).map(row => ({ ...row, items: row.items.map(item => state.live.item({ ...item, id: state.live.itemId(item.id) })) }));
       return { thread: { id: params.threadId, status: { type: state.status, activeFlags: state.live.flags }, turns },
         initialTurnsPage: null, turnsBackwardsCursor: null, itemsBackwardsCursor: null, resumeKind: "attached" };
     };

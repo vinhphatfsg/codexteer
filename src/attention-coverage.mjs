@@ -56,5 +56,9 @@ export function observedExecution(observation, connection) {
 
 // The members of a sync result whose rows carry the mark, for the top level of
 // a sync page and of a wait return.
-export const unobservedAttention = works => works.filter(work => work.attention_coverage)
-  .map(work => ({ thread_id: work.thread_id, attention_coverage: work.attention_coverage }));
+export const unobservedAttention = works => works.flatMap(work => unobservedMember(work.thread_id, work.attention_coverage, work));
+
+// One member of that list. `source` is the row or the read that may say why
+// the running turn was not read live.
+export const unobservedMember = (thread_id, attention_coverage, source) => attention_coverage
+  ? [{ thread_id, attention_coverage, ...(source?.live_fallback ? { live_fallback: source.live_fallback } : {}) }] : [];

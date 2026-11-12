@@ -218,6 +218,7 @@ export function printObservation(data, statusOnly = false) {
   if (!statusOnly) for (const event of data.events) console.log(`[${event.type}${event.status ? ":" + event.status : ""}] ${event.text ?? event.command ?? event.changes?.map(x => x.path).join(", ") ?? event.id}${event.output ? "\n" + event.output : ""}`);
   if (data.execution_basis) console.log(`execution: ${data.execution}（ターンの状態による判定です。上のstatusはスレッドの状態のままです）`);
   if (data.attention_coverage) console.log(`attention_coverage: ${data.attention_coverage}（実行中ターンの質問・承認待ち・進捗は観測できません。Codexの画面で確認してください）`);
+  if (data.live_fallback) console.log(`live_fallback: ${data.live_fallback}（実行中ターンを読めず、履歴だけで読みました）`);
   if (data.reason) console.log(`reason: ${data.reason}`);
   if (data.has_more) console.log("未取得の項目があります。cursorで続きを取得してください。");
   console.log(`cursor: ${data.cursor}`);

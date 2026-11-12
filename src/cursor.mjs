@@ -46,9 +46,10 @@ const HASH = /^[a-f0-9]{64}$/;
  */
 /**
  * `settled`: the window is one final turn, delivered in full, with nothing running or pending.
- * `live_refused`: a live view once disagreed with the history, so the task is read from the history only.
+ * `live_refused`: the task is read from the history only, because a live view once disagreed with it. `ledger`: an
+ * ended turn's history did not list an item the live view had delivered. `view`: a live view lacked an item the history listed.
  * @typedef {Omit<SnapshotCursor, "v"> & { v: 3, window: string | null, window_started_at: number | null, settled: boolean,
- *   live?: LiveLedger, live_refused?: boolean }} TailCursor
+ *   live?: LiveLedger, live_refused?: "ledger" | "view" }} TailCursor
  */
 /**
  * @typedef {{ v: 2, thread_id: string, turns: { id: string, status: string }[],
@@ -216,13 +217,13 @@ function readPagedBody(r, threadId) {
 // v1 body: 0x01 flags count open prefix state user_revision active? latest?
 // v3 body: 0x03 and the same fields, then window? window_started_at? live?
 // Flags: 1 active turn, 2 latest turn, and for v3 4 window turn, 8 its start
-// time, 16 settled, 32 live ledger, 64 live refused. readSnapshot always sets every v1 field.
+// time, 16 settled, 32 live ledger, 64 live refused, 128 refused by a live view. readSnapshot always sets every v1 field.
 // live: turn, item count, each item's id and hash, attention count, each text.
 function writeSnapshotBody(w, cursor) {
   const tail = cursor.v === 3, window = tail ? cursor.window : null, startedAt = tail ? cursor.window_started_at : null, live = tail ? cursor.live ?? null : null;
   w.byte(cursor.v);
   w.byte((cursor.active_turn_id !== null ? 1 : 0) | (cursor.latest_turn_id !== null ? 2 : 0) | (window !== null ? 4 : 0) | (startedAt !== null ? 8 : 0) | (tail && cursor.settled ? 16 : 0)
-    | (live ? 32 : 0) | (tail && cursor.live_refused ? 64 : 0));
+    | (live ? 32 : 0) | (tail && cursor.live_refused ? 64 : 0) | (tail && cursor.live_refused === "view" ? 128 : 0));
   w.uint(cursor.count); w.uint(cursor.open.length);
   let previous = -1;
   for (const { index, hash } of cursor.open) { w.uint(index - previous - 1); w.hash(hash); previous = index; }
@@ -241,7 +242,7 @@ function writeSnapshotBody(w, cursor) {
 
 function readSnapshotBody(r, version) {
   const flags = r.byte();
-  if (flags > (version === 1 ? 3 : 127)) throw invalidCursor();
+  if (version === 1 ? flags > 3 : (flags & 192) === 128) throw invalidCursor();
   const count = r.uint(), open = [];
   for (let n = r.count(), index = -1; n > 0; n--) {
     index += r.uint() + 1;
@@ -260,7 +261,7 @@ function readSnapshotBody(r, version) {
     if (new Set(items.map(item => item.id)).size !== items.length) throw invalidCursor();
     claim.live = { turn, items, attention };
   }
-  if (flags & 64) claim.live_refused = true;
+  if (flags & 64) claim.live_refused = flags & 128 ? "view" : "ledger";
   return claim;
 }
 

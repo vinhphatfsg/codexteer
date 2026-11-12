@@ -10,7 +10,7 @@ import { getSupervisor } from "./supervision.mjs";
 import { readRecord, listRecords, writeRecord, removeRecord, withStoreLock } from "./store.mjs";
 import { shellArgument } from "./prompt-command.mjs";
 import path from "node:path";
-import { attentionCoverage } from "./attention-coverage.mjs";
+import { attentionCoverage, unobservedMember } from "./attention-coverage.mjs";
 
 const exec = promisify(execFile);
 const failure = (message, code = "PROJECT_WAIT_INVALID") => Object.assign(new Error(message), { code });
@@ -244,10 +244,7 @@ export async function waitProject(projectId, { timeoutMs, connection } = {}, dep
             // The launcher went during this read: leave the change to the next wait.
             if (launcherExited()) return null;
             failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete ? [] : [[id, state.error]]));
-            unobserved = [...snapshot.states].flatMap(([thread_id, state]) => {
-              const attention_coverage = attentionCoverage(state.latest, state.member.connection);
-              return attention_coverage ? [{ thread_id, attention_coverage }] : [];
-            });
+            unobserved = [...snapshot.states].flatMap(([thread_id, state]) => unobservedMember(thread_id, attentionCoverage(state.latest, state.member.connection), state.latest));
             const { lasting, report } = unreadStreaks(snapshot.previous, observedAttention, failures, graceMs);
             // A quiet poll adds no member, so this is also what the head holds.
             reported = report;

@@ -46,7 +46,9 @@ export function changedSinceBaseline(state, entry, knownFlags = entry.signal.att
       || (event.questions?.length && !["answered", "resolved"].includes(event.status)))
     || (executionTurn(after.turn_id) && endedTurn.has(after.turn_status) && (after.turn_id !== before.turn_id || after.turn_status !== before.turn_status))
     || (["failed", "systemError"].includes(after.status) && after.status !== before.status)
-    || !Array.isArray(after.attention) || after.attention.some(flag => !knownFlags.includes(flag));
+    || !Array.isArray(after.attention) || after.attention.some(flag => !knownFlags.includes(flag))
+    // From this read on the member's running turns are not read live.
+    || !!state.observations?.some(page => page.live_mismatch);
 }
 
 // A partial ordinary sync is not a review. Without any baseline, no review has
@@ -115,7 +117,7 @@ function compactWork(work) {
   return { thread_id: work.thread_id, group: work.group, execution: work.execution, attention: work.attention,
     observation: work.observation, complete: work.complete, history_gap: work.history_gap, retry_after_ms: work.retry_after_ms,
     error: work.error, ...(work.error_detail ? { error_detail: publicRpcDetail(work.error_detail, { message: false }) } : {}), attention_repeated: work.attention_repeated, resolution_unconfirmed: work.resolution_unconfirmed,
-    ...(work.attention_coverage ? { attention_coverage: work.attention_coverage } : {}),
+    ...(work.attention_coverage ? { attention_coverage: work.attention_coverage } : {}), ...(work.live_fallback ? { live_fallback: work.live_fallback } : {}),
     detail_token: work.detail_token, details_omitted: true,
     // The operator's reason is unbounded; a compact row must always fit.
     ...(work.settled ? { settled: { basis: work.settled.basis, settled_at: work.settled.settled_at } } : {}) };
@@ -387,7 +389,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     }
     const repeatedEvents = currentAttention?.events.filter(e => !eventSummaries.some(s => s.token === e.token)) ?? [];
     const coverage = attentionCoverage(state.latest, state.member.connection);
-    works.push({ thread_id: state.member.thread_id, title: state.latest?.title ?? null, ...axes, ...(coverage ? { attention_coverage: coverage } : {}), history_gap: state.history_gap,
+    works.push({ thread_id: state.member.thread_id, title: state.latest?.title ?? null, ...axes, ...(coverage ? { attention_coverage: coverage } : {}), ...(state.latest?.live_fallback ? { live_fallback: state.latest.live_fallback } : {}), history_gap: state.history_gap,
       retry_after_ms: state.retry_after_ms, complete: state.complete, cursor: state.complete ? state.cursor : null, events: [...repeatedEvents, ...eventSummaries], error: state.error, ...(state.errorDetail ? { error_detail: state.errorDetail } : {}),
       turn_identity: state.latest?.latest_turn_id ?? state.latest?.current_turn_id ?? state.latest?.turn_id ?? state.latest?.active_turn_id ?? null,
       history_notes: historical[state.member.thread_id] ?? [],
