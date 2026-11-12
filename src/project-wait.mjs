@@ -174,7 +174,7 @@ function probeReason({ previous, membershipDigest, states }, observedAttention, 
   return lasting ? "observation_failed" : null;
 }
 
-export async function waitProject(projectId, { timeoutMs } = {}, dependencies = {}) {
+export async function waitProject(projectId, { timeoutMs, connection } = {}, dependencies = {}) {
   if (typeof projectId !== "string" || !projectId.trim() || (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0))) {
     throw failure("Use project wait --project ID [--timeout-ms N], with a nonnegative integer timeout.");
   }
@@ -240,7 +240,7 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
           if (abandoned) return { project_id: projectId, changed: false, timed_out: false, reason: abandoned, ...coverage(), sync: null };
           let reason;
           publishing = false;
-          const reading = syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => {
+          const reading = syncProject(projectId, { connection }, { ...dependencies, waitProbe: snapshot => {
             // The launcher went during this read: leave the change to the next wait.
             if (launcherExited()) return null;
             failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete ? [] : [[id, state.error]]));

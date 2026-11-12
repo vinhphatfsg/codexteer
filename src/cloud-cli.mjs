@@ -103,7 +103,7 @@ export async function mainCloud(argv) {
       const status = action === "guard" && flag(args, "--status"); exact(args, 0);
       if (status) { output("project.guard.status", await projectGuardStatus(project)); return; }
       if (action === "guard") { console.log(JSON.stringify(await guardProject(project))); return; }
-      const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
+      const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout), connection }, {
         read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),
       }));
       output("project.wait", data); if (["observation_failed", "owner_exited", "launcher_exited"].includes(data.reason)) process.exitCode = 1; return;
@@ -124,7 +124,7 @@ export async function mainCloud(argv) {
       const project = option(args, "--project"), byteBudget = Number(option(args, "--byte-budget", "16000")), continuation = option(args, "--continue"), offset = option(args, "--offset"), eventOffset = option(args, "--event-offset");
       const excludeUnreadable = option(args, "--exclude-unreadable"), reason = option(args, "--reason"); exact(args, 0);
       if (continuation && (excludeUnreadable !== undefined || reason !== undefined)) throw failure("--exclude-unreadable applies to project sync --project ID, not to --continue.");
-      output("project.sync", await withStopHook(continuation ? await continueProjectSync(continuation, { byteBudget, ...continuationPosition(offset, eventOffset) }) : await syncProject(project, { byteBudget, excludeUnreadable, reason }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) }))); return;
+      output("project.sync", await withStopHook(continuation ? await continueProjectSync(continuation, { byteBudget, connection, ...continuationPosition(offset, eventOffset) }) : await syncProject(project, { byteBudget, excludeUnreadable, reason, connection }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) }))); return;
     }
     if (action === "event") { exact(args, 1); output("project.event", await projectEvent(args[0])); return; }
     throw failure("Expected project sync|wait|guard|control|event|prune.");

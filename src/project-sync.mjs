@@ -123,7 +123,9 @@ function compactWork(work) {
 
 // Split inside a work as well as between works. Tokens always refer to the full
 // durable record; compact envelopes never silently truncate that record.
-function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0) {
+// `connection` is the --connection the command line was called with. A page
+// repeats it in continuation_command, so the next call runs as written.
+function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0, connection) {
   if (!Number.isInteger(offset) || offset < 0 || offset > saved.works.length || !Number.isInteger(eventOffset) || eventOffset < 0
     || (offset === saved.works.length ? eventOffset !== 0 : eventOffset > saved.works[offset].events.length)) throw failure("Invalid continuation offset.");
   const result = { project_id: saved.project_id, sync_token: token, wait_sync_token: saved.wait_sync_token ?? null, membership_digest: saved.membership_digest,
@@ -136,7 +138,7 @@ function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0) {
     result.omitted_events = saved.works.slice(wi).reduce((n, w, i) => n + w.events.length - (i === 0 ? ei : 0), 0);
     result.continuation_token = wi < saved.works.length ? token : null;
     result.next_offset = wi; result.next_event_offset = ei;
-    result.continuation_command = result.continuation_token ? `codexteer project sync --continue ${token} --offset ${wi} --event-offset ${ei} --json` : null;
+    result.continuation_command = result.continuation_token ? `codexteer ${connection ? `--connection ${connection} ` : ""}project sync --continue ${token} --offset ${wi} --event-offset ${ei} --json` : null;
     return outputSize(result);
   };
   if (bytes(finish()) > byteBudget) throw failure("The fixed sync envelope exceeds the byte budget.", "PROJECT_SYNC_BUDGET_TOO_SMALL");
@@ -190,7 +192,7 @@ export async function continueProjectSync(token, options = {}, storage = {}) {
   if (typeof token !== "string" || !/^[0-9a-f-]{36}$/i.test(token)) throw failure("Invalid sync token.");
   const saved = await readHistoryRecord("project-sync-results", token, null, storage);
   if (!saved) throw failure("Project sync continuation was not found or was removed by project prune.", "PROJECT_SYNC_CONTINUATION_NOT_FOUND");
-  return withUnobserved(pageResult(saved, token, byteBudget, options.offset ?? 0, options.eventOffset ?? 0), saved.works);
+  return withUnobserved(pageResult(saved, token, byteBudget, options.offset ?? 0, options.eventOffset ?? 0, options.connection), saved.works);
 }
 
 // Attention is a reducer over the entire delta, not a property of its last page.
@@ -284,7 +286,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   const byteBudget = validateBudget(options.byteBudget ?? 16000), pageLimit = options.pageLimit ?? 1000, maxPagesPerWork = options.maxPagesPerWork ?? 100;
   if (!Number.isInteger(maxPagesPerWork) || maxPagesPerWork < 1 || !Number.isInteger(pageLimit) || pageLimit < 1 || pageLimit > 1000) throw failure("Invalid sync byte/page budget.");
   // Reject an oversized fixed envelope before reading or committing state.
-  pageResult({ project_id: projectId, membership_digest: "0".repeat(64), complete: false, works: [], created_at: new Date().toISOString() }, "0".repeat(36), byteBudget);
+  pageResult({ project_id: projectId, membership_digest: "0".repeat(64), complete: false, works: [], created_at: new Date().toISOString() }, "0".repeat(36), byteBudget, 0, 0, options.connection);
   const storage = dependencies.storage ?? {}, read = dependencies.read;
   if (typeof read !== "function") throw failure("Project sync reader is unavailable.");
   const members = await listManagedThreads(projectId, storage), membershipDigest = managedMembershipDigest(members);
@@ -525,7 +527,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       for (const record of records) await historyWrite(...record, storage);
     }, storage);
   }
-  const page = withUnobserved(pageResult({ project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, syncToken, byteBudget), works);
+  const page = withUnobserved(pageResult({ project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, syncToken, byteBudget, 0, 0, options.connection), works);
   // Outside the paged envelope, whose byte count is already final. Only this
   // marker tells a result that was never published from one where every read failed.
   if (conflict) page.publication_conflict = conflict;

@@ -51,7 +51,7 @@ codexteer project sync --continue <TOKEN> --offset <NEXT_OFFSET> --event-offset 
 codexteer project event <EVENT-TOKEN> --json
 ```
 
-出力は既定16000 UTF-8 bytes、指定範囲4096〜1048576です。同じ担当内のイベントも分割します。続きがある結果は`continuation_command`に次のコマンド全体（token、`next_offset`、`next_event_offset`入り）を持ち、最後のページでは`null`です。続きはこのコマンドを実行し、`null`になるまで繰り返します。保存済みCLIや`--connection`を使っている場合は、同じCLIと接続指定で`project sync`以降の引数を使います。`--continue`には`--offset`と`--event-offset`の両方が必須で、どちらかがなければ`PROJECT_SYNC_OFFSET_REQUIRED`で拒否します。位置を省略すると先頭ページを繰り返し返すためです。snapshotを先頭から読み直すときは`--offset 0 --event-offset 0`を付けます。`details_omitted:true`ならeventのtokenまたは担当行のdetail_tokenから詳細を取得します。
+出力は既定16000 UTF-8 bytes、指定範囲4096〜1048576です。同じ担当内のイベントも分割します。続きがある結果は`continuation_command`に次のコマンド全体（token、`next_offset`、`next_event_offset`入り）を持ち、最後のページでは`null`です。続きはこのコマンドを実行し、`null`になるまで繰り返します。呼び出しに`--connection`を付けていれば、このコマンドにも同じ`--connection`が入ります。`project wait`が返す`sync`のページも同じです。保存済みCLI（起動ファイル）を使っている場合は、同じCLIで`project sync`以降の引数を使います。`--continue`には`--offset`と`--event-offset`の両方が必須で、どちらかがなければ`PROJECT_SYNC_OFFSET_REQUIRED`で拒否します。位置を省略すると先頭ページを繰り返し返すためです。snapshotを先頭から読み直すときは`--offset 0 --event-offset 0`を付けます。`details_omitted:true`ならeventのtokenまたは担当行のdetail_tokenから詳細を取得します。
 
 ### 停止済みの担当を読むのを終える
 

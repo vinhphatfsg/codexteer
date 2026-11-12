@@ -217,7 +217,7 @@ async function mainOnTarget(argv) {
   try {
     const sessionOption = takeOption(args, "--supervisor", undefined);
     const supervisor = sessionOption === undefined ? undefined : supervisorId(sessionOption);
-    const connection = connectionMode(takeOption(args, "--connection", "shared"));
+    const givenConnection = takeOption(args, "--connection", undefined), connection = connectionMode(givenConnection ?? "shared");
     const connectionDependencies = observationConnection(connection);
     const requiredNode = takeOption(args, "--require-node-version", undefined);
     if (requiredNode !== undefined) {
@@ -253,7 +253,7 @@ async function mainOnTarget(argv) {
           return;
         }
         if (action === "guard") { console.log(JSON.stringify(await guardProject(project))); return; }
-        const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
+        const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout), connection: givenConnection }, {
           read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),
         }));
         success("project.wait", data, json); if (!json) console.log(JSON.stringify(data, null, 2));
@@ -281,7 +281,7 @@ async function mainOnTarget(argv) {
         const continuation = takeOption(args, "--continue", undefined), offset = takeOption(args, "--offset", undefined), eventOffset = takeOption(args, "--event-offset", undefined);
         const excludeUnreadable = takeOption(args, "--exclude-unreadable", undefined), reason = takeOption(args, "--reason", undefined);
         if (args.length || (!project && !continuation) || (continuation && (excludeUnreadable !== undefined || reason !== undefined))) throw usage("Expected: project sync --project ID [--exclude-unreadable THREAD --reason TEXT], or project sync --continue TOKEN --offset N --event-offset N.");
-        const data = await withStopHook(continuation ? await continueProjectSync(continuation, { byteBudget, ...continuationPosition(offset, eventOffset) }) : await syncProject(project, { byteBudget, excludeUnreadable, reason }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) }));
+        const data = await withStopHook(continuation ? await continueProjectSync(continuation, { byteBudget, connection: givenConnection, ...continuationPosition(offset, eventOffset) }) : await syncProject(project, { byteBudget, excludeUnreadable, reason, connection: givenConnection }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) }));
         success("project.sync", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
       }
       if (action === "event") {
