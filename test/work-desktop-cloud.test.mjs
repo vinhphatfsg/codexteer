@@ -10,6 +10,7 @@ import { createDesktopCloudTask, reconcileDesktopCloudCreation, desktopCloudRece
 import { DesktopCloudClient } from "../src/desktop-cloud-api.mjs";
 import { fetchThread, readSnapshot, observeThread } from "../src/observe.mjs";
 import { listRecords } from "../src/store.mjs";
+import { historyBucket } from "../src/project-history.mjs";
 import { getManagedThread, managedMembershipDigest } from "../src/project-index.mjs";
 import { getSupervisor, registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
 import { syncProject } from "../src/project-sync.mjs";
@@ -60,7 +61,7 @@ const deliveries = f => f.state.calls.filter(c => ["turn/start", "turn/steer"].i
 test("Desktop Cloud work start pins configuration, policy bytes and provenance without Desktop project assignment", async t => {
   const f = await fixture(t);
   f.deps.hook = async name => { if (name === "membership_registered") { assert.equal((await getManagedThread(ID, f.storage)).environment_config_id, ENV); assert.equal(await getSupervisor(ID, f.storage), null); } };
-  const result = await startWork(f.input, f.deps), member = await getManagedThread(ID, f.storage), record = (await listRecords("work-starts", f.storage))[0];
+  const result = await startWork(f.input, f.deps), member = await getManagedThread(ID, f.storage), record = (await listRecords(historyBucket("work-starts", "coordination-only"), f.storage))[0];
   assert.equal(JSON.parse(await readFile(result.receipt_path, "utf8")).policy_bytes_base64, Buffer.from(f.policy).toString("base64"));
   assert.equal(result.stage, "observed"); assert.equal(result.environment_config_id, ENV); assert.equal(result.environment_verified, true); assert.equal(member.project_id, "coordination-only");
   assert.equal(member.connection, "desktop-cloud"); assert.equal(member.backend_project_id, null); assert.equal(member.sync_cursor, undefined); assert.ok(record.initial_events.length);
@@ -92,7 +93,7 @@ test("Desktop Cloud recovery proves a creation whose stored message has no clien
 test("unknown initial delivery reconciles stored prompt read-only, and missing history never causes replay", async t => {
   const f = await fixture(t); f.state.lost = true;
   await assert.rejects(startWork(f.input, f.deps), error => error.delivery_status === "unknown" && error.thread_id === ID);
-  const record = (await listRecords("work-starts", f.storage))[0];
+  const record = (await listRecords(historyBucket("work-starts", "coordination-only"), f.storage))[0];
   f.state.missing = true; await assert.rejects(startWork(f.input, f.deps), { code: "THREAD_NOT_FOUND" });
   f.state.missing = false; assert.equal((await startWork(f.input, f.deps)).stage, "observed");
   assert.equal(creates(f), 1); assert.equal(deliveries(f), 1);

@@ -9,10 +9,11 @@ import { waitProject } from "../src/project-wait.mjs";
 import { startWork } from "../src/work-start.mjs";
 import { readSnapshot } from "../src/observe.mjs";
 import { readRecord, writeRecord, recordStats } from "../src/store.mjs";
+import { historyBucket } from "../src/project-history.mjs";
 
 const MiB = 1024 * 1024, A = "11111111-1111-4111-8111-000000000001", B = "22222222-2222-4222-8222-000000000002", project = "P";
 const headKey = createHash("sha256").update(project).digest("hex").slice(0, 40);
-const buckets = ["project-sync-events", "project-sync-results", "work-starts"];
+const buckets = ["project-sync-events", "project-sync-results", "work-starts"].map(bucket => historyBucket(bucket, project));
 // A member whose cursor another sync advances mid-publication keeps a row that
 // differs from the advanced one by a few fields; the check allows for either.
 const SLACK = 256;
@@ -36,9 +37,9 @@ async function fixture(t, events = []) {
   f.used = async () => (await Promise.all(buckets.map(bucket => recordStats(bucket, storage)))).flat().reduce((sum, row) => sum + row.bytes, 0);
   f.state = async () => ({ used: await f.used(), files: (await Promise.all(buckets.map(bucket => recordStats(bucket, storage)))).map(rows => rows.length),
     member: await getManagedThread(A, storage), head: await readRecord("project-sync-heads", headKey, storage) });
-  // Another project's history: this project's prune never removes it.
+  // Records in this project's history that its prune never removes.
   f.fill = async total => {
-    for (let left = total; left > 0; left -= MiB) await writeRecord("project-sync-events", randomUUID(), { schema: 1, project_id: "OTHER", sync_token: randomUUID(), thread_id: "other",
+    for (let left = total; left > 0; left -= MiB) await writeRecord(buckets[0], randomUUID(), { schema: 1, project_id: "OTHER", sync_token: randomUUID(), thread_id: "other",
       event: { id: "old", type: "agentMessage", text: "z".repeat(Math.min(left, MiB)) } }, storage);
   };
   f.free = async bytes => { storage.historyLimitBytes = await f.used() + bytes; };
@@ -164,7 +165,7 @@ test("the next sync and the next wait prune a quota full of this project's super
   assert.equal((await f.sync()).history_pruned, undefined, "a publication that fits prunes nothing");
 });
 
-test("a quota filled by another project's history and by protected evidence still refuses, and refusing twice changes nothing", async t => {
+test("a quota filled by history that prune keeps and by protected evidence still refuses, and refusing twice changes nothing", async t => {
   const f = await fixture(t, batch("a", 4)); await f.fill(2 * MiB);
   const latest = await f.sync();
   f.events.push(...batch("b", 2)); f.turn = "turn-2"; await f.free(1024);

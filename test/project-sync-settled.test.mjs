@@ -9,7 +9,7 @@ import { registerManagedThread, getManagedThread, listManagedThreads, managedMem
 import { registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
 import { syncProject, continueProjectSync, projectEvent } from "../src/project-sync.mjs";
 import { waitProject } from "../src/project-wait.mjs";
-import { pruneProjectHistory } from "../src/project-history.mjs";
+import { pruneProjectHistory, historyBucket } from "../src/project-history.mjs";
 import { readRecord, writeRecord, listRecords, removeRecord } from "../src/store.mjs";
 
 const uuid = n => `11111111-1111-4111-8111-${String(n).padStart(12, "0")}`, session = n => `22222222-2222-4222-8222-${String(n).padStart(12, "0")}`;
@@ -44,7 +44,7 @@ test("a stopped work seen quiet is settled by the sync that read it and is not r
   assert.equal(first.complete, true); assert.equal(row(first, A).observation, "current");
   assert.equal(row(first, A).events[0].event_id, "report", "the last delta is presented before the work is left alone");
   assert.equal(row(first, A).settled.basis, "observed"); assert.equal(row(first, B).settled, undefined);
-  const savedEvents = async () => (await listRecords("project-sync-events", f.storage)).filter(record => record.thread_id === A).length;
+  const savedEvents = async () => (await listRecords(historyBucket("project-sync-events", "P"), f.storage)).filter(record => record.thread_id === A).length;
   const saved = await savedEvents(), membership = await getManagedThread(A, f.storage);
   f.works.get(A).events.push(message("reactivated from Desktop")); f.works.get(A).status = "active";
   for (const attempt of [2, 3]) {

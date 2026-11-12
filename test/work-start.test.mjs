@@ -8,6 +8,7 @@ import { getManagedThread } from "../src/project-index.mjs";
 import { getSupervisor } from "../src/supervision.mjs";
 import { acquireResource, resourceStatus } from "../src/resource.mjs";
 import { listRecords } from "../src/store.mjs";
+import { historyBucket } from "../src/project-history.mjs";
 
 const THREAD = "11111111-1111-4111-8111-555555555555";
 async function fixture(t, policy = "方針 ${notExpanded} $(also_not_expanded)\r\n末尾\n") {
@@ -27,7 +28,7 @@ test("policy bytes occur exactly once without interpolation and absence is expli
   assert.equal(policy.sha256.length, 64);
   const missing = await fixture(t, null), result = await startWork({ project: "project-one", title: "モデル名なし", order: "実装する", root: missing.root }, missing.deps);
   assert.equal(result.policy.present, false);
-  const records = await import("../src/store.mjs").then(m => m.listRecords("work-starts", { home: missing.home }));
+  const records = await import("../src/store.mjs").then(m => m.listRecords(historyBucket("work-starts", "project-one"), { home: missing.home }));
   assert.match(records[0].prompt, /No repository policy file was found/);
   assert.doesNotMatch(records[0].prompt, /Claude|GPT|Gemini/);
 });
@@ -87,16 +88,16 @@ test("successful reconciliation clears failure metadata before persisting the kn
         creation_status: knownThread ? "created" : "unknown", sent: false, ...(knownThread ? { thread_id: THREAD } : {}) });
     };
     await assert.rejects(startWork(input, f.deps), { code: "CONNECTION_FAILED", stage: "create_unknown" });
-    const [failed] = await listRecords("work-starts", f.deps.storage);
+    const [failed] = await listRecords(historyBucket("work-starts", "project-one"), f.deps.storage);
     for (const key of ["create_error", "create_failure", "known_thread_id"]) assert.equal(Object.hasOwn(failed, key), true);
     const reconcile = f.deps.reconcile;
     f.deps.reconcile = async () => null;
     await assert.rejects(startWork(input, f.deps), { code: "WORK_CREATE_UNKNOWN" });
-    assert.deepEqual((await listRecords("work-starts", f.deps.storage))[0], failed);
+    assert.deepEqual((await listRecords(historyBucket("work-starts", "project-one"), f.deps.storage))[0], failed);
     f.deps.reconcile = reconcile;
     f.deps.hook = async name => { if (name === "membership_registered") throw Object.assign(new Error("interrupted"), { code: "INJECTED_CRASH" }); };
     await assert.rejects(startWork(input, f.deps), { code: "INJECTED_CRASH" });
-    const [recovered] = await listRecords("work-starts", f.deps.storage);
+    const [recovered] = await listRecords(historyBucket("work-starts", "project-one"), f.deps.storage);
     assert.equal(recovered.stage, "child_known"); assert.equal(recovered.thread_id, THREAD);
     for (const key of ["create_error", "create_failure", "known_thread_id"]) assert.equal(Object.hasOwn(recovered, key), false);
     delete f.deps.hook;
@@ -116,13 +117,13 @@ test("only explicit and consistent pre-dispatch proof permits another creation c
     f.deps.create = async () => { throw Object.assign(new Error("blocked"), { code, ...fields }); };
     f.deps.reconcile = async () => null;
     await assert.rejects(startWork(input, f.deps), { code });
-    const [before] = await listRecords("work-starts", f.deps.storage);
+    const [before] = await listRecords(historyBucket("work-starts", "project-one"), f.deps.storage);
     f.deps.create = original;
     if (fields === proof) {
       assert.equal(before.stage, "create_not_dispatched");
       const result = await startWork(input, f.deps);
       assert.equal(result.attempt_id, before.attempt_id); assert.equal(result.stage, "observed");
-      const [after] = await listRecords("work-starts", f.deps.storage);
+      const [after] = await listRecords(historyBucket("work-starts", "project-one"), f.deps.storage);
       for (const key of ["create_error", "create_failure", "known_thread_id"]) assert.equal(Object.hasOwn(after, key), false);
     } else {
       assert.equal(before.stage, "create_unknown");

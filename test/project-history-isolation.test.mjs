@@ -60,13 +60,17 @@ async function rows(f) {
 // `run` writes, or without it every record.
 async function asPrevious(f, run) {
   const before = new Set(run ? (await rows(f)).map(row => `${row.bucket}/${row.id}`) : []), result = await run?.();
+  let moved = 0;
   for (const row of await rows(f)) if (row.bucket !== row.family && !before.has(`${row.bucket}/${row.id}`)) {
     const record = await readRecord(row.bucket, row.id, f.storage);
     await writeRecord(row.family, row.id, row.family === "work-starts" ? { ...record, receipt_path: storePath(row.family, row.id, f.home) } : record, f.storage);
-    await removeRecord(row.bucket, row.id, f.storage);
+    await removeRecord(row.bucket, row.id, f.storage); moved++;
   }
+  assert.ok(moved > 0, "this version wrote outside the flat buckets");
+  if (!run) assert.ok((await rows(f)).every(row => row.bucket === row.family));
   return result;
 }
+const own = async f => (await rows(f)).filter(row => row.bucket !== row.family).reduce((sum, row) => sum + row.bytes, 0);
 async function corrupt(f, bucket) {
   const id = randomUUID(); await writeRecord(bucket, id, {}, f.storage); await writeFile(storePath(bucket, id, f.home), "{");
 }
@@ -186,6 +190,24 @@ test("after the upgrade the previous version still reads its own layout without 
   const pruned = await pruneProjectHistory(P, f.storage);
   assert.equal(pruned.deleted.results, 3);
   await readable(f, upgraded);
+});
+
+test("an unresolved question asked under the previous layout survives every prune after the upgrade", async t => {
+  const f = await fixture(t);
+  f.threads.get(f.member[P]).turns[0].items.push({ ...message(4 * KiB), questions: ["Which?"] });
+  const asked = await asPrevious(f, () => f.sync(P)), question = asked.works[0].events[0].token;
+  f.add(P, 1, 64 * KiB); await f.sync(P);
+  f.add(P, 1, 64 * KiB); const latest = await f.sync(P);
+  assert.equal(latest.works[0].attention, "human");
+  const pruned = await pruneProjectHistory(P, f.storage);
+  assert.equal(pruned.deleted.results, 2); await gone(f, asked);
+  assert.equal((await projectEvent(question, f.storage)).event.questions[0], "Which?");
+  f.add(P, 1, 64 * KiB); const next = await f.sync(P);
+  f.storage.historyLimitBytes = await own(f) + KiB;
+  f.add(P, 1, 64 * KiB); const last = await f.sync(P);
+  assert.equal(last.history_pruned.deleted.results, 1); await gone(f, latest);
+  assert.equal((await projectEvent(question, f.storage)).event.questions[0], "Which?");
+  await readable(f, next); await readable(f, last);
 });
 
 test("two projects publish, start and prune while the other holds its history lock", async t => {

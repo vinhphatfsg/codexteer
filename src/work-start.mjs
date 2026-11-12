@@ -1,9 +1,9 @@
-import { writeHistoryRecord, assertHistoryBatch } from "./project-history.mjs";
+import { writeHistoryRecord, assertHistoryBatch, readHistoryRecord, historyBucket } from "./project-history.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, open } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
-import { readRecord, withStoreLock, storePath } from "./store.mjs";
+import { withStoreLock, storePath } from "./store.mjs";
 import { registerSupervisor } from "./supervision.mjs";
 import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
 import { repositorySource } from "./repository-source.mjs";
@@ -86,10 +86,12 @@ export async function startWork(input, dependencies = {}) {
   const prompt = composeWorkOrder(order, policy), key = attemptKey({ project, title, order, policySha256: policy.sha256 });
   const hook = dependencies.hook ?? (async () => {});
   return withStoreLock(`work-start-${key}`, async () => {
-    let record = await readRecord("work-starts", key, storage), pruned;
-    const save = async () => { pruned = await writeHistoryRecord("work-starts", key, record, storage, pruned); };
+    let record = await readHistoryRecord("work-starts", key, project, storage), pruned;
+    // An attempt an earlier version saved in the flat bucket continues in the project's.
+    const receipt = storePath(historyBucket("work-starts", project), key, storage.home);
+    const save = async () => { record.receipt_path = receipt; pruned = await writeHistoryRecord("work-starts", key, record, storage, pruned); };
     if (!record) {
-      record = { schema: 1, receipt_path: storePath("work-starts", key, storage.home), attempt_id: randomUUID(), idempotency_key: key, stage: "prepared", project_id: project, title: normalized(title),
+      record = { schema: 1, receipt_path: receipt, attempt_id: randomUUID(), idempotency_key: key, stage: "prepared", project_id: project, title: normalized(title),
         connection, branch: branch ?? null, root: path.resolve(root), order_sha256: sha(order), prompt_sha256: sha(prompt), policy_present: policy.present,
         policy_source: policy.present ? "CODEXTEER.md" : null, policy_sha256: policy.sha256, policy_text: policy.text, policy_bytes_base64: policy.bytes.toString("base64"),
         environment_config_id: selected?.id ?? null, environment_name: selected?.name ?? null, source: (dependencies.repositorySource ?? repositorySource)(path.resolve(root)), prompt, created_at: new Date().toISOString() };

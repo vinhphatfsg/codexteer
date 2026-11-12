@@ -23,7 +23,7 @@ async function fixture(t) {
   const initial = readSnapshot(current).cursor;
   await registerManagedThread(THREAD, { projectId: "project-tell", connection: "shared", syncCursor: initial, policySha256: policyHash(policy) }, { home });
   await registerSupervisor(THREAD, SESSION, { home, owner: "fixture", connection: "shared" });
-  await writeRecord("work-starts", "fixture", { schema: 1, thread_id: THREAD, root, created_at: new Date().toISOString() }, { home });
+  await writeRecord("work-starts", "fixture", { schema: 1, project_id: "project-tell", thread_id: THREAD, root, created_at: new Date().toISOString() }, { home });
   const read = async (_id, options) => readSnapshot(current, { since: options.since, limit: options.limit });
   await syncProject("project-tell", {}, { storage: { home }, read });
   return { home, root, read, get current() { return current; }, set current(value) { current = value; } };

@@ -12,6 +12,7 @@ import { RUNTIME_CAPABILITIES } from "../src/compatibility.mjs";
 import { RpcFailure } from "../src/rpc.mjs";
 import { startWork } from "../src/work-start.mjs";
 import { listRecords } from "../src/store.mjs";
+import { historyBucket } from "../src/project-history.mjs";
 
 const CHILD = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001", CONTEXT = "aaaaaaaa-aaaa-4aaa-8aaa-000000000002";
 export const catalog = { tools: [
@@ -317,13 +318,13 @@ test("work start retries the same order and attempt after fixing an unreadable D
     read: async () => ({ cursor: "initial", status: "active", has_more: false, omitted_older_events: 0 }) };
   await assert.rejects(startWork(input, deps), { code: "DESKTOP_PERMISSION_UNVERIFIED", stage: "create_not_dispatched", creation_dispatched: false, sent: false });
   assert(!f.calls.includes("thread/start"));
-  const [before] = await listRecords("work-starts", deps.storage);
+  const [before] = await listRecords(historyBucket("work-starts", "サンプル"), deps.storage);
   await writeFile(path.join(f.home, ".codex-global-state.json"), JSON.stringify({ "electron-persisted-atom-state": { "permission-selection-by-host-id:local": { kind: "agent-mode", agentMode: "auto" } } }), { mode: 0o600 });
   const result = await startWork(input, deps);
   assert.equal(result.stage, "observed"); assert.equal(result.attempt_id, before.attempt_id); assert.equal(result.thread_id, CHILD);
   assert.equal(f.calls.filter(call => call === "thread/start").length, 1);
   assert.equal(f.calls.filter(call => call === "turn/start").length, 1);
-  assert.equal((await listRecords("work-starts", deps.storage)).length, 1);
+  assert.equal((await listRecords(historyBucket("work-starts", "サンプル"), deps.storage)).length, 1);
 });
 
 test("work start never repeats thread/start after dispatch, including explicit RPC rejection", async t => {

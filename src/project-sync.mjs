@@ -1,12 +1,12 @@
 import { parseCursor } from "./cursor.mjs";
-import { withHistoryReservation, assertHistoryBatch } from "./project-history.mjs";
+import { withHistoryReservation, assertHistoryBatch, readHistoryRecord, listHistoryRecords } from "./project-history.mjs";
 import { validateSyncPage } from "./sync-page.mjs";
 export { validateSyncPage } from "./sync-page.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { listManagedThreads, updateManagedThreadCursor, managedMembershipDigest } from "./project-index.mjs";
 import { getSupervisor } from "./supervision.mjs";
 import { normalizeTaskId } from "./task-id.mjs";
-import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
+import { readRecord, writeRecord, withStoreLock } from "./store.mjs";
 
 const hash = value => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
@@ -85,7 +85,7 @@ function summarizeEvent(event, threadId, store) {
 
 export async function projectEvent(token, storage = {}) {
   if (typeof token !== "string" || !/^[0-9a-f-]{36}$/i.test(token)) throw failure("A project event token is required.");
-  const record = await readRecord("project-sync-events", token, storage);
+  const record = await readHistoryRecord("project-sync-events", token, null, storage);
   if (!record) throw failure("Project sync event was not found or was removed by project prune.", "PROJECT_EVENT_NOT_FOUND");
   return record;
 }
@@ -161,7 +161,7 @@ function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0) {
 export async function continueProjectSync(token, options = {}, storage = {}) {
   const byteBudget = validateBudget(options.byteBudget ?? 16000);
   if (typeof token !== "string" || !/^[0-9a-f-]{36}$/i.test(token)) throw failure("Invalid sync token.");
-  const saved = await readRecord("project-sync-results", token, storage);
+  const saved = await readHistoryRecord("project-sync-results", token, null, storage);
   if (!saved) throw failure("Project sync continuation was not found or was removed by project prune.", "PROJECT_SYNC_CONTINUATION_NOT_FOUND");
   return pageResult(saved, token, byteBudget, options.offset ?? 0, options.eventOffset ?? 0);
 }
@@ -284,7 +284,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   }
   // A successful start observed these events but has not presented them yet.
   // Keep them until membership publication commits the first sync cursor.
-  const starts = [...states.values()].some(state => !state.member.sync_cursor) ? await listRecords("work-starts", storage) : [];
+  const starts = [...states.values()].some(state => !state.member.sync_cursor) ? await listHistoryRecords("work-starts", projectId, storage) : [];
   for (const state of states.values()) if (!state.member.sync_cursor) {
     const start = starts.find(record => record.thread_id === state.member.thread_id && Array.isArray(record.initial_events) && record.sync_cursor);
     if (start) {

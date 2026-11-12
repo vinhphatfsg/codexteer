@@ -1,4 +1,5 @@
 import { listRecords, writeRecord } from "../src/store.mjs";
+import { historyBucket } from "../src/project-history.mjs";
 import { createFinding } from "../src/findings.mjs";
 import { sendTrackedMessage } from "../src/journal.mjs";
 import { createHash } from "node:crypto";
@@ -50,7 +51,7 @@ for (const mode of modes) {
       assert.equal(sync.complete, false); assert.equal(sync.works[0].history_gap, true); assert.equal(sync.works[0].cursor, null);
       assert.equal((await getManagedThread(f.id, f)).sync_cursor, undefined);
     }
-    assert.equal(creates, 1); assert.equal((await listRecords("work-starts", f))[0].sync_cursor, undefined);
+    assert.equal(creates, 1); assert.equal((await listRecords(historyBucket("work-starts", "adapter"), f))[0].sync_cursor, undefined);
   });
 
   test(`${mode}: missing initial-boundary proof fails closed even with has_more false`, async t => {

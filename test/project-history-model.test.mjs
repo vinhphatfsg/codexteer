@@ -70,7 +70,8 @@ test("publication and cleanup source use the modeled history boundary", async ()
   assert.doesNotMatch(history.slice(history.indexOf("const write = ")), /await prune\([\s\S]*?return action/);
   assert.doesNotMatch(sync, /writeRecord\("project-sync-(?:events|results)"/);
   assert.doesNotMatch(start, /\bwriteRecord\("work-starts"/);
-  assert.match(history, /pruneProjectHistory[\s\S]*?withStoreLock\("project-history"/);
+  assert.match(history, /const lock = [^\n]*\n[^\n]*\n\s*return withStoreLock\(`project-history-\$\{key\(projectId\)\}`/);
+  for (const name of ["withHistoryReservation", "writeHistoryRecord", "pruneProjectHistory"]) assert.match(history, new RegExp(`function ${name}\\([\\s\\S]*?return lock\\(`));
   assert.doesNotMatch(history, /withStoreLock\(`(?:project-sync|project-index|work-start)-/);
 });
 

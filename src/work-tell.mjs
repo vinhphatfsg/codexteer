@@ -4,7 +4,8 @@ import { getManagedThread, listManagedThreads, managedMembershipDigest } from ".
 import { getSupervisor } from "./supervision.mjs";
 import { createFinding } from "./findings.mjs";
 import { sendWorkTellMessage, reconcileMessages } from "./journal.mjs";
-import { readRecord, listRecords, withStoreLock } from "./store.mjs";
+import { readRecord, withStoreLock } from "./store.mjs";
+import { readHistoryRecord, listHistoryRecords } from "./project-history.mjs";
 import { validateSyncPage } from "./sync-page.mjs";
 import { readRepositoryPolicy } from "./work-start.mjs";
 
@@ -15,7 +16,7 @@ const syncTokenPattern = /^[0-9a-f-]{36}$/i;
 const turnIdentity = observation => observation?.latest_turn_id ?? observation?.current_turn_id ?? observation?.turn_id ?? observation?.active_turn_id ?? null;
 
 async function policyStatus(threadId, member, storage, readPolicy) {
-  const starts = (await listRecords("work-starts", storage)).filter(record => record?.thread_id === threadId).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const starts = (await listHistoryRecords("work-starts", member.project_id, storage)).filter(record => record?.thread_id === threadId).sort((a, b) => b.created_at.localeCompare(a.created_at));
   const start = starts[0];
   if (!start?.root || !member.policy_sha256) return { checked: false, changed: null, expected_sha256: member.policy_sha256 ?? null, current_sha256: null };
   const policy = await readPolicy(start.root);
@@ -29,7 +30,7 @@ async function syncBasis(threadId, member, token, storage) {
   if (!head) throw fail("A project sync is required before work tell.", "WORK_TELL_SYNC_INCOMPLETE", { sync_token: null });
   if (head.conflict_tokens?.length && !token) throw fail("Concurrent project syncs produced competing bases. Review the latest result and pass its token explicitly.", "WORK_TELL_SYNC_TOKEN_REQUIRED", { sync_tokens: head.conflict_tokens, current_sync_token: head.sync_token });
   const syncToken = token ?? head.sync_token, named = syncToken !== head.sync_token;
-  const result = syncTokenPattern.test(syncToken) ? await readRecord("project-sync-results", syncToken, storage) : null;
+  const result = syncTokenPattern.test(syncToken) ? await readHistoryRecord("project-sync-results", syncToken, member.project_id, storage) : null;
   if (named && result?.project_id !== member.project_id) throw fail("The requested sync is not a readable result of this project. Use the current token after reviewing it.", "WORK_TELL_SYNC_CONFLICT", { current_sync_token: head.sync_token });
   const work = result?.works?.find(row => row.thread_id === threadId);
   if (!work || work.complete !== true || work.history_gap || !work.cursor) throw fail("The target is absent, incomplete, or has a history gap in the sync basis.", "WORK_TELL_SYNC_INCOMPLETE", { sync_token: syncToken });

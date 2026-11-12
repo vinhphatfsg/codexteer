@@ -10,6 +10,7 @@ import { registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
 import { syncProject } from "../src/project-sync.mjs";
 import { waitProject } from "../src/project-wait.mjs";
 import { readRecord, writeRecord, removeRecord, recordStats } from "../src/store.mjs";
+import { historyBucket } from "../src/project-history.mjs";
 
 const uuid = n => `11111111-1111-4111-8111-${String(n).padStart(12, "0")}`, session = n => `22222222-2222-4222-8222-${String(n).padStart(12, "0")}`;
 const A = uuid(1), B = uuid(2), C = uuid(3);
@@ -38,7 +39,7 @@ async function fixture(t, { count = 2, project = "P", grace = 0, hold = 0 } = {}
   const f = { script: null }, owner = async pid => { if (pid !== 123) return "same-start"; polls++; await f.script?.(polls); return "owner-start"; };
   const dependencies = { storage, read, pollMs: 5, ...(grace === null ? {} : { unreadGraceMs: grace }), processIdentity: owner, orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) };
   const finishTurn = id => { const work = works.get(id), turn = `next-${work.events.length + 1}`; Object.assign(work, { turn, status: "idle", turnStatus: "completed" }); work.events.push({ id: turn, type: "turn", status: "completed" }); };
-  const history = async () => (await Promise.all(["project-sync-events", "project-sync-results"].map(bucket => recordStats(bucket, storage)))).flat().reduce((sum, record) => sum + record.bytes, 0);
+  const history = async () => (await Promise.all(["project-sync-events", "project-sync-results"].map(bucket => recordStats(historyBucket(bucket, project), storage)))).flat().reduce((sum, record) => sum + record.bytes, 0);
   const head = () => readRecord("project-sync-heads", key(project), storage);
   // Every entry of a return says whether the head now holds its member as reported.
   const checked = async result => {
