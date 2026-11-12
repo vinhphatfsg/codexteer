@@ -132,7 +132,7 @@ export const topics = {
       { name: "--title TEXT", text: "作成後にタスク名を設定する。1000文字以内。" },
       { name: "--project ID_OR_EXACT_NAME", text: "thread assignで必須。doctorでは--threadと併用時だけ。thread createに付けると作成前にDESKTOP_CLOUD_PROJECT_UNAVAILABLE。" },
       { name: "--limit N（threads list）", default: "20", text: "1〜100。続きは応答のnext_cursorを--cursorへ渡す。" },
-      { name: "--new-turn", text: "idleのタスクで新しいターンを始める。ユーザーが再開を許可した場合だけ使う。省略時は実行中のターン1つへexpectedTurnId付きで送る。" },
+      { name: "--new-turn", text: "実行中のターンがないタスクで新しいターンを始める。statusがidleのとき、またはstatusがactiveのままでも最新ターンが終わっているときに送れる。ユーザーが再開を許可した場合だけ使う。省略時は実行中の最新ターンへexpectedTurnId付きで送る。" },
       { name: "--dry-run", text: "作成・送信をせず、計画または受付記録だけを返す。" },
       { name: "--resolve-unknown --note TEXT", text: "ユーザー専用。受付不明のまま確かめられないthread assignの試行（thread receipt）または送信（history mark）を、理由付きで解除する。--noteは必須。" },
     ],
@@ -140,7 +140,7 @@ export const topics = {
     errors: [
       CONNECTION_MISMATCH,
       CLOUD_LOGIN,
-      { code: "STALE_OBSERVATION", when: "タスクの状態が送信の種類と合わない（通常sendで実行中のターンが1つでない、--new-turnでidleでない）。未送信。", action: "readし直す。idleの再開はユーザーが許可した場合だけ--new-turn。" },
+      { code: "STALE_OBSERVATION", when: "タスクの状態が送信の種類と合わない（通常sendで最新ターンが実行中でない、--new-turnで実行中のターンがあるか、ターンの状態を確認できずstatusもidleでない）。未送信。", action: "readし直す。idleの再開はユーザーが許可した場合だけ--new-turn。" },
       { code: "DESKTOP_CLOUD_DELIVERY_PENDING", when: "同じチャットへの前回送信が受付不明（unknown）で未解除。error.existing_message_idがその送信。", action: "再送しない。history check <TARGET> <existing_message_id>で照合する。確かめられなければ送信を止めてユーザーに報告する。ユーザーはhistory mark <TARGET> <existing_message_id> --resolve-unknown --note TEXTで解除できる。" },
       { code: "DESKTOP_CLOUD_PROJECT_UNAVAILABLE", when: "thread createに--projectを付けた（作成前に拒否）、Desktopの所属APIが対象タスクの実環境を受け付けない、またはthread receiptの試行IDが作成・割当のどちらの記録にもない。", action: "作成は--projectなしで行う。所属はdoctor --thread --projectで確認する。環境IDは差し替えない。receiptなら試行IDを確かめる。" },
       { code: "DESKTOP_CLOUD_PROJECT_PENDING", when: "同じタスクへの前回のthread assignが受付不明で、Desktopの状態でも確かめられず未解除。error.existing_attempt_idとexisting_receipt_pathがその試行。", action: "再実行しない。--connection desktop-cloud thread receipt <existing_attempt_id>で再確認する。unknownのままならユーザーに報告する。ユーザーは同じコマンドに--resolve-unknown --note TEXTを付けて解除できる。" },

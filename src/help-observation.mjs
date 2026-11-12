@@ -18,7 +18,7 @@ const STREAM_OPTIONS = [
 ];
 const WATCH_OPTIONS = [
   SINCE_OPTION,
-  { name: "--until change|idle|attention", default: "change", text: "change=--since（省略時は開始時点）以降の変化。idle=statusがidleかnotLoaded。attention=attentionが空でないかsystemError。--streamでは使えない。" },
+  { name: "--until change|idle|attention", default: "change", text: "change=--since（省略時は開始時点）以降の変化。idle=statusがidleかnotLoaded（Desktop Cloudではexecutionがidle）。attention=attentionが空でないかsystemError。--streamでは使えない。" },
   { name: "--timeout-ms N", default: "30000", text: "単発watchの最大待ち時間。0〜60000。--streamでは使えない。" },
   ...STREAM_OPTIONS,
   ...READ_PAGE_OPTIONS,
@@ -149,7 +149,7 @@ export const topics = {
     when: "レビューや送信の前、または前回のcursorから何が変わったかを1回確認するとき。変化を待つならwatch、状態だけならstatus。",
     usage: ["read <THREAD> [--since CURSOR] [--limit N] [--max-chars N] [--include-output] [--full-history]"],
     options: [THREAD_OPTION, SINCE_OPTION, ...READ_PAGE_OPTIONS],
-    returns: "data.events（各項目にchange: added|updated）、status・active_turn_id・attention、running_commands、次回用cursor、changed、has_more、omitted_older_events、history_scope、observed_at。Desktop Cloudでターンが実行中の間だけattention_coverage:running_turn_unobserved。高速方式ではrunning_commands_completeも返す。--jsonなしは状態行・イベント行・cursor行。",
+    returns: "data.events（各項目にchange: added|updated）、status・active_turn_id・attention、running_commands、次回用cursor、changed、has_more、omitted_older_events、history_scope、observed_at。Desktop Cloudでターンが実行中の間だけattention_coverage:running_turn_unobserved。高速方式ではrunning_commands_completeも返す。--jsonなしは状態行・イベント行・cursor行。Desktop Cloudではexecutionも返す（help statusを参照）。",
     errors: [...CURSOR_ERRORS, ...SUPERVISOR_ERRORS, ...RUNTIME_ERRORS, ...TARGET_ERRORS],
     examples: [
       "codexteer read <THREAD> --json",
@@ -190,7 +190,7 @@ export const topics = {
       THREAD_OPTION,
       { name: "--full-history", text: "readの--full-historyと同じ全取得方式で状態とcursorを得る。返るcursorはv1。" },
     ],
-    returns: "data.status（active・idle・notLoaded・systemErrorなど。取得できなければunknown）、active_turn_id、attention、running_commands、cursor、history_scope。Desktop Cloudでターンが実行中の間だけattention_coverage:running_turn_unobserved。eventsは返さない。--jsonなしは状態行・実行中ターン・cursor行。",
+    returns: "data.status（active・idle・notLoaded・systemErrorなど。取得できなければunknown）、active_turn_id、attention、running_commands、cursor、history_scope。Desktop Cloudではexecution（active・idle・terminal・unknown）と、ターンの状態がstatusと食い違ったときのexecution_basis:turn_status。Desktop Cloudでターンが実行中の間だけattention_coverage:running_turn_unobserved。eventsは返さない。--jsonなしは状態行・実行中ターン・cursor行。",
     errors: [OBSERVATION_CHANGED_ERROR, CURSOR_TOO_LARGE_ERROR, ...SUPERVISOR_ERRORS, ...RUNTIME_ERRORS, ...TARGET_ERRORS, OPTIONS_INVALID],
     examples: ["codexteer status <THREAD> --json"],
     notes: [
@@ -200,6 +200,7 @@ export const topics = {
       "attentionはApp Serverが報告した値で、本文から推測しない。nullはactiveでフラグ未報告、[]は該当なし。",
       "Web Cloudのタスクではattentionは常に[]で、承認待ちを表さない。",
       "Desktop Cloudのタスクは、ターンの実行中は質問・承認待ちを観測できず、attentionは[]のままになる。その間はattention_coverage:running_turn_unobservedを返す（ターンが実行中でないと確認できないときも同じ）。「待っているものはない」とは読まず、Codexの画面で確認する。ターンが終わると返さず、その間に出た質問はreadで読める。",
+      "Desktop Cloudのスレッドは、最後のターンが終わった後もstatusがactiveのまま残ることがある。実行中かどうかはexecutionで判断する。executionはproject syncの担当行と同じ規則で、実行中のターンがあればactive、全てのターンが終わっていればidle、ターンの状態が欠けているか矛盾するときはstatusのとおりになる。statusはサービスが返した値のまま変えない。watch --until idleとDesktop Cloudへのsendも同じ規則で判断する。",
       "承認や質問には回答しない。",
       SUPERVISOR_NOTE,
     ],

@@ -11,6 +11,20 @@ export function turnEvidence(observation) {
   return ended.has(latest) || (latest === null && (observation.latest_turn_id ?? null) === null) ? "none" : "unknown";
 }
 
+const activeStatus = new Set(["active", "inProgress", "in_progress", "pending", "queued", "running"]), terminalStatus = new Set(["completed", "failed", "cancelled"]);
+
+// What the thread status alone says about execution.
+export const statusExecution = status => activeStatus.has(status) ? "active" : ["idle", "notLoaded"].includes(status) ? "idle" : terminalStatus.has(status) ? "terminal" : "unknown";
+
+// A Desktop Cloud thread can stay active long after its last turn ended, and
+// only a turn's own status says whether it runs. So there the turns decide
+// when they disagree with the thread status. Unproven turns leave the status
+// in charge. Other connections report execution by their status.
+export function turnExecution(observation, connection) {
+  const coarse = statusExecution(observation?.status ?? "unknown"), turns = connection === "desktop-cloud" ? turnEvidence(observation) : "unknown";
+  return turns === "running" ? "active" : turns === "none" && coarse === "active" ? "idle" : coarse;
+}
+
 // Any sign of a running turn, even one the rest of the evidence contradicts.
 export const turnRuns = observation => observation?.active_turn_count > 0 || running.has(observation?.latest_turn_status);
 
@@ -26,6 +40,15 @@ export function attentionCoverage(observation, connection) {
 export function withAttentionCoverage(observation, connection) {
   const coverage = attentionCoverage(observation, connection);
   return coverage ? { ...observation, attention_coverage: coverage } : observation;
+}
+
+// What a Desktop Cloud read, status or watch adds to the thread status: the
+// execution its project row shows, and its basis when the turns overrode the
+// status. The status itself is returned as the service gave it.
+export function observedExecution(observation, connection) {
+  if (connection !== "desktop-cloud" || !observation) return {};
+  const execution = turnExecution(observation, connection);
+  return { execution, ...(execution === statusExecution(observation.status ?? "unknown") ? {} : { execution_basis: "turn_status" }) };
 }
 
 // The members of a sync result whose rows carry the mark, for the top level of

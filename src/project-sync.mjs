@@ -8,13 +8,12 @@ import { getSupervisor } from "./supervision.mjs";
 import { normalizeTaskId } from "./task-id.mjs";
 import { readRecord, writeRecord, withStoreLock } from "./store.mjs";
 import { publicRpcDetail } from "./rpc-error.mjs";
-import { attentionCoverage, unobservedAttention, turnEvidence, turnRuns } from "./attention-coverage.mjs";
+import { attentionCoverage, unobservedAttention, turnEvidence, turnRuns, statusExecution, turnExecution } from "./attention-coverage.mjs";
 
 const hash = value => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
 const failure = (message, code = "PROJECT_SYNC_INVALID") => Object.assign(new Error(message), { code });
 const gapCodes = new Set(["STALE_CURSOR", "INVALID_CURSOR", "CURSOR_UPGRADE_REQUIRED", "OBSERVATION_CHANGED", "WORK_INITIAL_HISTORY_GAP"]);
-const terminal = new Set(["completed", "failed", "cancelled"]), active = new Set(["active", "inProgress", "in_progress", "pending", "queued", "running"]);
 
 // A command/tool outcome is scoped to that item, not to the delegated work.
 const failedTurn = event => event.type === "turn" && event.status === "failed";
@@ -64,14 +63,10 @@ function classify(observation, complete, connection) {
   const events = observation?.events ?? [], questions = events.some(event => Array.isArray(event.questions) && event.questions.length);
   const failed = failedWork(observation);
   const human = questions || (Array.isArray(flags) && flags.length > 0);
-  const coarse = active.has(status) ? "active" : ["idle", "notLoaded"].includes(status) ? "idle" : terminal.has(status) ? "terminal" : "unknown";
-  // A Desktop Cloud thread can stay active long after its last turn ended, and
-  // only a turn's own status says whether it runs. So there the turns decide
-  // when they disagree with the thread status. Unproven turns leave the status
-  // in charge, and settlement then refuses to call the member quiet.
-  const turns = connection === "desktop-cloud" ? turnEvidence(observation) : "unknown";
-  const execution = turns === "running" ? "active" : turns === "none" && coarse === "active" ? "idle" : coarse;
-  const byTurns = execution !== coarse;
+  // On Desktop Cloud the turns decide when they disagree with the thread
+  // status. Unproven turns leave the status in charge, and settlement then
+  // refuses to call the member quiet.
+  const execution = turnExecution(observation, connection), byTurns = execution !== statusExecution(status);
   const idleCompleted = (status === "idle" || (byTurns && execution === "idle")) && observation.latest_turn_status === "completed"
     && typeof observation.latest_turn_id === "string" && !!observation.latest_turn_id && observation.active_turn_count === 0;
   const attentionKnown = Array.isArray(flags);

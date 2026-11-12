@@ -3,7 +3,8 @@ import { connectDesktopCloud, desktopCloudEnvironments } from "./desktop-cloud-a
 import { cloudModelsOnClient, resolveCloudModelSelection, validateCloudModelOptions } from "./desktop-cloud-models.mjs";
 import { desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
 import { getManagedThread } from "./project-index.mjs";
-import { fetchThread } from "./observe.mjs";
+import { fetchThread, turnObservation } from "./observe.mjs";
+import { turnEvidence, turnRuns } from "./attention-coverage.mjs";
 import { newestTurn } from "./desktop-cloud-read.mjs";
 import { readRecord, writeRecord, storePath, withStoreLock, listRecords } from "./store.mjs";
 const failure = (message, code = "DESKTOP_CLOUD_OPTIONS_INVALID", uncertain = false) => Object.assign(new Error(message), { code, uncertain });
@@ -89,8 +90,12 @@ export async function sendDesktopCloudInput(target, text, { dryRun = false, newT
     const save = () => writeRecord("desktop-cloud-sends", clientMessageId, receipt, storage);
     try {
       client = await connect();
-      const thread = await sendState(client, id), active = thread.turns.filter(turn => turn.status === "inProgress");
-      if (newTurn ? thread.status?.type !== "idle" || active.length !== 0 : active.length !== 1) throw failure("The task state does not match the requested send. Read it again; idle continuation requires --new-turn.", "STALE_OBSERVATION");
+      // The turns decide, as they do for the member's project row: a thread
+      // status left active after its last turn ended does not refuse a new
+      // turn. Only the newest turn can run, and it is the one to steer.
+      const thread = await sendState(client, id), turns = turnObservation(thread.turns), evidence = turnEvidence(turns), active = thread.turns;
+      const startable = !turnRuns(turns) && (thread.status?.type === "idle" || (thread.status?.type === "active" && evidence === "none"));
+      if (newTurn ? !startable : evidence !== "running") throw failure("The task state does not match the requested send. Read it again; idle continuation requires --new-turn.", "STALE_OBSERVATION");
       const environments = thread.environments;
       if (!Array.isArray(environments) || environments.length !== 1 || typeof environments[0].environmentId !== "string" || !environments[0].environmentId.startsWith("ccarenv_") || typeof environments[0].environmentConfigId !== "string") throw failure("Cannot verify the task's Cloud environment.");
       const managed = await getManagedThread(id, storage);

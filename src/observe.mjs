@@ -10,7 +10,7 @@ import { assertRuntimeOperation, compatibleClient } from "./compatibility.mjs";
 import { assertSupervisor, recordSupervisorFailure, recordSupervisorObservation } from "./supervision.mjs";
 import { hostFields } from "./target.mjs";
 import { encodeCursor, parseCursor, invalidCursor } from "./cursor.mjs";
-import { withAttentionCoverage } from "./attention-coverage.mjs";
+import { withAttentionCoverage, observedExecution, turnExecution } from "./attention-coverage.mjs";
 
 export const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const mutableStatus = new Set(["inProgress", "running", "pending"]);
@@ -177,7 +177,8 @@ export async function observeThread(threadInput, options = {}, { discover = disc
   if (options.watch && (!["change", "idle", "attention"].includes(until) || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 60000 || !Number.isInteger(pollMs) || pollMs < 250 || pollMs > 10000)) throw Object.assign(new Error("Invalid watch condition, timeout-ms or poll-ms."), { code: "OPTIONS_INVALID" });
   // Added to what is returned only: the cursor's state digest and the
   // supervisor's record describe the observed state, not what it could not see.
-  const marked = result => withAttentionCoverage(result, isDesktopCloudTask(threadId) ? "desktop-cloud" : null);
+  const cloudTurns = isDesktopCloudTask(threadId) ? "desktop-cloud" : null;
+  const marked = result => ({ ...withAttentionCoverage(result, cloudTurns), ...observedExecution(result, cloudTurns) });
   let client;
   try {
     const { paths, state } = await discover();
@@ -195,7 +196,7 @@ export async function observeThread(threadInput, options = {}, { discover = disc
       const hadBaseline = !!baseline;
       const result = await readOnClient(client, threadId, { ...options, since: baseline });
       if (options.supervisor) await recordSupervisorObservation(threadId, options.supervisor, result);
-      const met = until === "idle" ? ["idle", "notLoaded"].includes(result.status) : until === "attention" ? result.status === "systemError" || (result.attention?.length ?? 0) > 0 : baseline && result.changed;
+      const met = until === "idle" ? turnExecution(result, cloudTurns) === "idle" : until === "attention" ? result.status === "systemError" || (result.attention?.length ?? 0) > 0 : baseline && result.changed;
       if (met) return { ...marked(result), timed_out: false, reason: until };
       if (!baseline) baseline = result.cursor;
       if (now() >= deadline) return { ...marked(hadBaseline ? result : { ...result, events: [], changed: false }), timed_out: true, reason: "timeout" };
@@ -212,6 +213,7 @@ export function printObservation(data, statusOnly = false) {
   console.log(`${data.thread_id}  ${data.status}${data.attention?.length ? "  " + data.attention.join(", ") : ""}`);
   if (data.active_turn_id) console.log(`turn: ${data.active_turn_id}`);
   if (!statusOnly) for (const event of data.events) console.log(`[${event.type}${event.status ? ":" + event.status : ""}] ${event.text ?? event.command ?? event.changes?.map(x => x.path).join(", ") ?? event.id}${event.output ? "\n" + event.output : ""}`);
+  if (data.execution_basis) console.log(`execution: ${data.execution}（ターンの状態による判定です。上のstatusはスレッドの状態のままです）`);
   if (data.attention_coverage) console.log(`attention_coverage: ${data.attention_coverage}（実行中ターンの質問・承認待ち・進捗は観測できません。Codexの画面で確認してください）`);
   if (data.reason) console.log(`reason: ${data.reason}`);
   if (data.has_more) console.log("未取得の項目があります。cursorで続きを取得してください。");
