@@ -320,6 +320,31 @@ test("a listed item whose content differs in the live view is read from the hist
   assert.equal(rows[1].live_fallback, undefined);
 });
 
+test("an item whose content differs between the live view and the ended history is delivered again as an update", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  const first = await f.read(ID, {});
+  const { turn } = f.start(), note = agent("Working.");
+  f.progress(note);
+  f.state.live.item = item => item.id === note.id ? { ...item, text: "Working, as the live view words it." } : item;
+  const live = await f.read(ID, { since: first.cursor });
+  assert.equal(live.events.find(event => event.id === note.id).change, "added");
+  f.complete([]);
+  const ended = await f.read(ID, { since: live.cursor });
+  assert.deepEqual(ended.events.map(event => [event.id, event.change]), [[turn, "updated"], [note.id, "updated"]]);
+  assert.equal(ended.events[1].text, "Working."); assert.equal(ended.live_mismatch, undefined); assert.equal(ended.live_fallback, undefined);
+});
+
+test("work tell that is first to meet a refused live view sends as on an unread turn, and its receipt says so", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  f.start(); f.progress(agent("Working."));
+  await f.sync();
+  f.state.live.itemId = id => `live-${id}`;
+  const receipt = await f.tell(ID, "Also update the changelog.");
+  assert.equal(receipt.delivery_status, "accepted"); assert.equal(receipt.attention_coverage, UNOBSERVED);
+});
+
 test("past 256 live items the member is read from the history for the rest of the turn, and the row says so", async t => {
   for (const before of [0, 200]) {
     const f = await member(t);
