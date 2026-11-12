@@ -439,6 +439,21 @@ test("with the switch off, a running turn stays unobserved and is never resumed"
   assert.equal((await f.read(ID, {})).attention_coverage, UNOBSERVED);
 });
 
+test("a cursor that carries a live ledger is read with the switch off, and the ended turn repeats nothing", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  const first = await f.read(ID, {});
+  const { turn } = f.start(), note = agent("Working."), final = agent("Done.");
+  f.progress(note);
+  const live = await f.read(ID, { since: first.cursor });
+  assert.equal(live.events.some(event => event.id === note.id), true);
+  const off = since => observeThread(ID, { since }, { connect: async () => new DesktopCloudClient(f.rpc) });
+  const blind = await off(live.cursor);
+  assert.deepEqual(blind.events, []); assert.equal(blind.attention_coverage, UNOBSERVED); assert.equal(blind.live_fallback, undefined);
+  f.complete([final]);
+  assert.deepEqual((await off(blind.cursor)).events.map(event => event.id), [turn, final.id]);
+});
+
 // The wire under connectDesktopCloud: a scripted socket that serves one task
 // with a running turn and replays an approval request to a resuming client.
 function wire() {

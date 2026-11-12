@@ -12,18 +12,8 @@ Desktop Cloudの担当は、ターンの実行中は開始時の指示しか読�
 - `project sync`の全ページと`project wait`の全ての結果（timeoutを含みます）は、その担当を`attention_unobserved:[{thread_id, attention_coverage}]`に並べます。該当する担当がいなければ付きません。ページ本体の外に付き、`output_bytes`とbyte budgetには含みません。
 - ターン中に出た質問は、ターンが終わると従来どおりwaitが返し、担当行は「対応が必要」になります。
 - `work tell`は、実行中のDesktop Cloudターンに送るときも送信の可否を変えません。質問・承認待ちを観測できなかったことを、receiptの`attention_coverage`で示します。
-- Desktop Cloudの`doctor`は、この接続の制限として`running_turn_attention:"unobserved"`を常に返します。`approval_roundtrip`とは別の項目です。
+- Desktop Cloudの`doctor`は、この接続の制限として`running_turn_attention:"unobserved"`を返します（次節の設定が有効なときを除きます）。`approval_roundtrip`とは別の項目です。
 - オーケストレーター本文は、この印の付いた担当について「待っているものはない」とユーザーへ伝えず、Codexの画面で確認が必要だと伝えるよう指示します。
-
-環境変数`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=on`を設定すると、codexteerは実行中のDesktop Cloudターンを読めます。ターン中に出た質問を、ターンの実行中に`project wait`が返します。既定は無効です。
-
-- 有効なら、`read`・`status`・`project sync`・`project wait`・`work tell`・`doctor --thread`は、実行中のターンが1つだけで最新の担当を、別の接続で`thread/resume`して、そのターンのここまでの項目を読みます。読めた項目は履歴と同じ形のイベントで返り、結果は`live_turn_id`を持ち、`attention_coverage`は付きません。`watch`と`work start`の作成直後の確認は読みません。
-- 実行中のターンがない担当、状態の確かでない担当、`settled`の担当はresumeしません。1回の`project sync`、`project wait`の1回の照会、1回の`work tell`は、実行中の担当ごとに1回だけresumeします。
-- resumeした接続はサーバー要求に応答せず、メソッド名だけを記録して閉じます。届いた要求は`attention`の`pendingRequest:<メソッド名>`と`pending_requests`で返り、担当行は「対応が必要」になり、`work tell`は送りません。
-- 読んだ項目は、ターンが終わって履歴に現れても、同じ内容なら再び返しません。resumeが失敗した担当は従来どおり履歴だけで読み、印が付きます。ターンが終わった履歴に読んだ項目のIDがなければ、履歴の項目を全て返して`live_mismatch`を付け、そのタスクは以後resumeしません。
-- `work tell`は、sync後に実行中のターンが新しい項目を出していれば、localの担当と同じく`WORK_TELL_STALE_SYNC`で送りません。
-- `doctor`は有効なら`running_turn_attention:"live"`を返します。このとき書いたcursorは0.24.x以前では`STALE_CURSOR`になります。
-- 承認待ちで止まったターンのresumeと、ターンが終わった直後のresumeは、サービスで確認していません。そのため既定は無効です。
 
 Desktop Cloudのスレッドは、最後のターンが終わった後も`status`が`active`のまま残ることがあります。codexteerはその担当を「動作中」と表示し、停止済みでも`settled`にせず読み続けていました。
 
@@ -57,6 +47,27 @@ Desktop Cloudの`work start`と`thread create`は、常にCloudの既定モデ�
 - 一覧にないモデル、そのモデルが対応しないエフォート、非表示のモデルは、保存も作成もせず`DESKTOP_CLOUD_MODEL_INVALID`で拒否します。別の組に自動で変えることはありません。一覧が不完全・矛盾している場合は`DESKTOP_CLOUD_MODELS_UNVERIFIED`、保存値が壊れている場合は`DESKTOP_CLOUD_MODEL_SETTINGS_INVALID`を返します。
 - `select`をq・Ctrl-C・EOFで中止すると、保存値を変えず、「選択を中止しました。設定は変更していません。」と表示して終了値0で終わります。対話端末以外から実行すると`DESKTOP_CLOUD_MODEL_TTY_REQUIRED`を返します。
 - 監督に紐づく実行（`--supervisor`）は`models`を使えません。詳しくは`help models`と`docs/desktop-cloud.md`を参照してください。
+
+### 実行中のDesktop Cloudターンを読む（既定は無効）
+
+環境変数`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=on`を設定すると、codexteerは実行中のDesktop Cloudターンを読めます。ターン中に出た質問を、ターンの実行中に`project wait`が返します。既定は無効で、設定しなければ動作は前節のとおりです。承認待ちで止まったターンのresumeと、ターンが終わった直後のresumeを、サービスで確認していないためです。
+
+- 有効にするには、codexteerを実行する環境（オーケストレーターのセッションと、そこから起動する`project wait`）に`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=on`を設定します。`on`以外の値は無効です。
+- 有効なら、`read`・`status`・`project sync`・`project wait`・`work tell`・`doctor --thread`は、実行中のターンが1つだけで最新の担当を、別の接続で`thread/resume`して、そのターンのここまでの項目を読みます。読めた項目は履歴と同じ形のイベントで返り、結果は`live_turn_id`を持ち、`attention_coverage`は付きません。`watch`と`work start`の作成直後の確認は読みません。`doctor`は`running_turn_attention:"live"`を返します。
+- 費用は、実行中のDesktop Cloud担当1つにつき、1回の`project sync`、`project wait`の1回の照会、1回の`work tell`ごとに接続1本（認証・`initialize`・`thread/resume`）です。resumeの後、サーバー要求を0.5秒待ってから閉じ、全体で10秒を超えると打ち切ります。同じコマンドの2回目以降の読み取りは同じ結果を使います。
+- しないこと：実行中のターンがない担当、状態の確かでない担当、`settled`の担当はresumeしません。resumeした接続はサーバー要求に応答せず、メソッド名だけを記録して閉じます。届いた要求は`attention`の`pendingRequest:<メソッド名>`と`pending_requests`で返り、担当行は「対応が必要」になり、`work tell`は送りません。回答はCodexの画面で行います。
+- 読んだ項目は、ターンが終わって履歴に現れても、同じ内容なら再び返しません。内容が変わった項目は`change:"updated"`で返ります。
+- 実行中のターンを読めずに履歴だけで読んだ担当は、従来どおり`attention_coverage`の印が付き、理由を`live_fallback`で返します。`read`の結果、`project sync`の担当行（詳細を省いた行を含みます）、`attention_unobserved`のその担当が持ちます。値は`unavailable`・`ledger_full`・`view_mismatch`・`mismatch`です。
+
+既知の制限は次のとおりです。
+
+- resumeが失敗するか10秒以内に終わらなければ、その照会は履歴だけで読みます（`unavailable`）。次の照会でまたresumeします。
+- 実行中に読める項目は1ターンで256までです。超えた担当は、そのターンの残りを履歴で読みます（`ledger_full`）。そのターンが終わるまで照会ごとのresumeは続きます。項目はターンが終わると1回ずつ返ります。
+- resumeで得たターンに、履歴が並べている項目（実行中は開始時の指示）のIDがなければ、そのタスクは以後resumeせず履歴だけで読みます（`view_mismatch`）。照合はIDだけで行い、内容の違いは結果を変えません。
+- ターンが終わった履歴に、実行中に読んだ項目のIDがなければ、そのタスクは以後resumeせず履歴だけで読みます（`mismatch`）。中断・失敗で終わったターンは、終わらなかったコマンドなどを履歴に並べないことがあり、これに当たります。履歴の項目は読み飛ばさず、実行中に同じ内容で返した項目は再び返しません。
+- `view_mismatch`と`mismatch`はcursorに残り、`project wait`はそうなった照会で1回返ります。その担当の後のターンの質問は、ターンが終わってから返ります。
+- ターンの一覧を取得してからresumeするまでの間にターンが終わると、終わった直後のタスクをresumeすることがあります。この間隔はなくせません。そのresumeは終わったタスクの環境を起こすことがあります（サービスでは確認していません）。
+- `work tell`は、sync後に実行中のターンが新しい項目を出していれば、localの担当と同じく`WORK_TELL_STALE_SYNC`で送りません。項目を出し続けるターンには、送れる機会が少なくなります。
 
 ### project syncとproject wait
 
@@ -132,7 +143,7 @@ Desktop Cloudの`work start`と`thread create`は、常にCloudの既定モデ�
 ### 0.24.x以前へ戻すときの注意
 
 - 戻す前に、このversionのプロセス（実行中の`project wait`・`project sync`・`work start`・`project prune`）を全て止めてください。
-- 0.24.x以前に戻すと、このversionが保存したv3 cursorは読めず`STALE_CURSOR`になります。担当のcursor・waitの基準・`work start`の記録がv3の担当は、戻したversionではhistory gapになり、`work tell`は`WORK_TELL_SYNC_INCOMPLETE`になります。保存されたcursorは変わらないため、このversionに戻せば続きから読めます。
+- 0.24.x以前に戻すと、このversionが保存したv3 cursorは読めず`STALE_CURSOR`になります。担当のcursor・waitの基準・`work start`の記録がv3の担当は、戻したversionではhistory gapになり、`work tell`は`WORK_TELL_SYNC_INCOMPLETE`になります。保存されたcursorは変わらないため、このversionに戻せば続きから読めます。`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=on`で実行中のターンを読んだ担当のcursorも同じで、0.24.x以前ではhistory gapになります。このversionで設定を無効に戻すだけなら、そのcursorは続きから読めます。
 - 0.24.x以前に戻すと、このversionが保存した履歴は見えません。そのversionでは、このversionが返したtokenは見つからず、`work tell`は次の`project sync`まで`WORK_TELL_SYNC_INCOMPLETE`になります。このversionで始めた`work start`の記録も見えないため、同じ引数で再実行すると別の担当を作ります。戻した後は、`work start`を再実行する前に`project sync`でその担当がすでにprojectにいるかを確認してください。戻したversionが保存した履歴は、再びこのversionにしたときに古い履歴として使えます。
 
 ## 0.24.2 — 2026-11-11公開

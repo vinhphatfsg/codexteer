@@ -149,7 +149,7 @@ export const topics = {
     when: "レビューや送信の前、または前回のcursorから何が変わったかを1回確認するとき。変化を待つならwatch、状態だけならstatus。",
     usage: ["read <THREAD> [--since CURSOR] [--limit N] [--max-chars N] [--include-output] [--full-history]"],
     options: [THREAD_OPTION, SINCE_OPTION, ...READ_PAGE_OPTIONS],
-    returns: "data.events（各項目にchange: added|updated）、status・active_turn_id・attention、running_commands、次回用cursor、changed、has_more、omitted_older_events、history_scope、observed_at。Desktop Cloudでターンが実行中の間だけattention_coverage:running_turn_unobserved（CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=onでそのターンを読めたときは付かず、live_turn_idを返す。サーバー要求を受けたときはpending_requests）。高速方式ではrunning_commands_completeも返す。--jsonなしは状態行・イベント行・cursor行。Desktop Cloudではexecutionも返す（help statusを参照）。",
+    returns: "data.events（各項目にchange: added|updated）、status・active_turn_id・attention、running_commands、次回用cursor、changed、has_more、omitted_older_events、history_scope、observed_at。Desktop Cloudでターンが実行中の間だけattention_coverage:running_turn_unobserved（CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=onでそのターンを読めたときは付かず、live_turn_idを返す。サーバー要求を受けたときはpending_requests、読めなかったときは理由のlive_fallback）。高速方式ではrunning_commands_completeも返す。--jsonなしは状態行・イベント行・cursor行。Desktop Cloudではexecutionも返す（help statusを参照）。",
     errors: [...CURSOR_ERRORS, ...SUPERVISOR_ERRORS, ...RUNTIME_ERRORS, ...TARGET_ERRORS],
     examples: [
       "codexteer read <THREAD> --json",
@@ -200,7 +200,7 @@ export const topics = {
       "attentionはApp Serverが報告した値で、本文から推測しない。nullはactiveでフラグ未報告、[]は該当なし。",
       "Web Cloudのタスクではattentionは常に[]で、承認待ちを表さない。",
       "Desktop Cloudのタスクは、ターンの実行中は質問・承認待ちを観測できず、attentionは[]のままになる。その間はattention_coverage:running_turn_unobservedを返す（ターンが実行中でないと確認できないときも同じ）。「待っているものはない」とは読まず、Codexの画面で確認する。ターンが終わると返さず、その間に出た質問はreadで読める。",
-      "CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=onでは、実行中のターンが1つだけで最新のとき、read・statusは別の接続でthread/resumeし、そのターンのここまでの項目をイベントとして返す（watchは読まない）。届いたサーバー要求には応答せず、attentionのpendingRequest:<メソッド名>とpending_requestsで返す。resumeが失敗するか10秒で終わらなければ、従来どおり履歴だけを読みattention_coverageを返す。詳細はdocs/desktop-cloud.md。",
+      "CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=onでは、実行中のターンが1つだけで最新のとき、read・statusは別の接続でthread/resumeし、そのターンのここまでの項目をイベントとして返す（watchは読まない）。届いたサーバー要求には応答せず、attentionのpendingRequest:<メソッド名>とpending_requestsで返す。resumeが失敗するか10秒で終わらなければ、従来どおり履歴だけを読みattention_coverageを返す。読めなかった理由はlive_fallback（mismatch・view_mismatch・ledger_full・unavailable）で返す。mismatchとview_mismatchのタスクは以後resumeせず履歴だけで読む。詳細はdocs/desktop-cloud.md。",
       "Desktop Cloudのスレッドは、最後のターンが終わった後もstatusがactiveのまま残ることがある。実行中かどうかはexecutionで判断する。executionはproject syncの担当行と同じ規則で、実行中のターンがあればactive、全てのターンが終わっていればidle、ターンの状態が欠けているか矛盾するときはstatusのとおりになる。statusはサービスが返した値のまま変えない。watch --until idleとDesktop Cloudへのsendも同じ規則で判断する。",
       "承認や質問には回答しない。",
       SUPERVISOR_NOTE,
