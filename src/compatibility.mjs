@@ -107,6 +107,7 @@ export function assertRuntimeOperation(state, operation) {
 export function compatibleClient(client, state) {
   const report = runtimeCompatibility(state);
   return {
+    ...(typeof client.liveTurn === "function" ? { liveTurn: (...args) => client.liveTurn(...args) } : {}),
     close: () => client.close(),
     request(method, ...args) {
       const allowProbe = readMethods.has(method), capability = methods[method];

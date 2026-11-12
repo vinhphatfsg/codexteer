@@ -3,7 +3,7 @@ import { controlProject } from "./project-control.mjs";
 import { desktopCloudProjectDoctor, assignDesktopCloudProject, desktopCloudProjectReceipt, resolveDesktopCloudProjectAttempt } from "./desktop-cloud-project.mjs";
 import { listProjects as listDesktopProjects } from "./projects.mjs";
 import { isDesktopCloudTask, desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
-import { desktopCloudConnection, desktopCloudEnvironments } from "./desktop-cloud-api.mjs";
+import { desktopCloudConnection, desktopCloudEnvironments, liveTurnEnabled } from "./desktop-cloud-api.mjs";
 import { createDesktopCloudTask, listDesktopCloudTasks, desktopCloudReceipt, reconcileDesktopCloudCreation } from "./desktop-cloud.mjs";
 import { desktopCloudModels, readCloudModelDefaults, setCloudModelDefaults, resetCloudModelDefaults, resolveCloudModelSelection, validateCloudModelOptions } from "./desktop-cloud-models.mjs";
 import { pickCloudModel } from "./cloud-model-picker.mjs";
@@ -400,7 +400,7 @@ async function desktopCloudCommands(command, args, { supervisor, output, bound, 
     const id = target ? await bound(target, { allowUnregistered: true }) : null;
     if (id) await observeThread(id, { connection: "desktop-cloud", limit: 1 }, dependencies);
     else { if (supervisor) throw failure("A supervisor doctor needs its target."); await desktopCloudEnvironments(); }
-    output("doctor", { ready: true, connection_mode: "desktop-cloud", observation: target ? "verified" : "unverified", project_membership: id ? await desktopCloudProjectDoctor(id, project) : { membership: { status: "unverified" }, assignment_api: { status: "unverified" } }, approval_roundtrip: "unverified", running_turn_attention: "unobserved", atomic_server_freshness: "unverified" }); return true;
+    output("doctor", { ready: true, connection_mode: "desktop-cloud", observation: target ? "verified" : "unverified", project_membership: id ? await desktopCloudProjectDoctor(id, project) : { membership: { status: "unverified" }, assignment_api: { status: "unverified" } }, approval_roundtrip: "unverified", running_turn_attention: liveTurnEnabled() ? "live" : "unobserved", atomic_server_freshness: "unverified" }); return true;
   }
   if (command === "open") { exact(args, 1); output("open", { deep_link: desktopCloudLink(await bound(args[0])) }); return true; }
   throw failure("Desktop Cloud diff retrieval is not verified. Inspect file-change events with read --include-output.", "CAPABILITY_UNVERIFIED");

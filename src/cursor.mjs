@@ -39,8 +39,16 @@ const HASH = /^[a-f0-9]{64}$/;
  *   active_turn_id: string | null, latest_turn_id?: string | null, user_revision?: string }} SnapshotCursor
  */
 /**
+ * What a read delivered from the live view of the running turn `turn` that the
+ * history had not listed: each item's id and event hash, and the attention the
+ * live view showed last.
+ * @typedef {{ turn: string, items: { id: string, hash: string }[], attention: string[] }} LiveLedger
+ */
+/**
  * `settled`: the window is one final turn, delivered in full, with nothing running or pending.
- * @typedef {Omit<SnapshotCursor, "v"> & { v: 3, window: string | null, window_started_at: number | null, settled: boolean }} TailCursor
+ * `live_refused`: a live view once disagreed with the history, so the task is read from the history only.
+ * @typedef {Omit<SnapshotCursor, "v"> & { v: 3, window: string | null, window_started_at: number | null, settled: boolean,
+ *   live?: LiveLedger, live_refused?: boolean }} TailCursor
  */
 /**
  * @typedef {{ v: 2, thread_id: string, turns: { id: string, status: string }[],
@@ -206,13 +214,15 @@ function readPagedBody(r, threadId) {
 }
 
 // v1 body: 0x01 flags count open prefix state user_revision active? latest?
-// v3 body: 0x03 and the same fields, then window? window_started_at?
+// v3 body: 0x03 and the same fields, then window? window_started_at? live?
 // Flags: 1 active turn, 2 latest turn, and for v3 4 window turn, 8 its start
-// time, 16 settled. readSnapshot always sets every v1 field.
+// time, 16 settled, 32 live ledger, 64 live refused. readSnapshot always sets every v1 field.
+// live: turn, item count, each item's id and hash, attention count, each text.
 function writeSnapshotBody(w, cursor) {
-  const tail = cursor.v === 3, window = tail ? cursor.window : null, startedAt = tail ? cursor.window_started_at : null;
+  const tail = cursor.v === 3, window = tail ? cursor.window : null, startedAt = tail ? cursor.window_started_at : null, live = tail ? cursor.live ?? null : null;
   w.byte(cursor.v);
-  w.byte((cursor.active_turn_id !== null ? 1 : 0) | (cursor.latest_turn_id !== null ? 2 : 0) | (window !== null ? 4 : 0) | (startedAt !== null ? 8 : 0) | (tail && cursor.settled ? 16 : 0));
+  w.byte((cursor.active_turn_id !== null ? 1 : 0) | (cursor.latest_turn_id !== null ? 2 : 0) | (window !== null ? 4 : 0) | (startedAt !== null ? 8 : 0) | (tail && cursor.settled ? 16 : 0)
+    | (live ? 32 : 0) | (tail && cursor.live_refused ? 64 : 0));
   w.uint(cursor.count); w.uint(cursor.open.length);
   let previous = -1;
   for (const { index, hash } of cursor.open) { w.uint(index - previous - 1); w.hash(hash); previous = index; }
@@ -221,11 +231,17 @@ function writeSnapshotBody(w, cursor) {
   if (cursor.latest_turn_id !== null) writeId(w, cursor.latest_turn_id);
   if (window !== null) writeId(w, window);
   if (startedAt !== null) w.uint(startedAt);
+  if (live) {
+    writeId(w, live.turn); w.uint(live.items.length);
+    for (const item of live.items) { writeId(w, item.id); w.hash(item.hash); }
+    w.uint(live.attention.length);
+    for (const flag of live.attention) w.text(flag);
+  }
 }
 
 function readSnapshotBody(r, version) {
   const flags = r.byte();
-  if (flags > (version === 1 ? 3 : 31)) throw invalidCursor();
+  if (flags > (version === 1 ? 3 : 127)) throw invalidCursor();
   const count = r.uint(), open = [];
   for (let n = r.count(), index = -1; n > 0; n--) {
     index += r.uint() + 1;
@@ -236,7 +252,16 @@ function readSnapshotBody(r, version) {
   const active_turn_id = flags & 1 ? readId(r) : null, latest_turn_id = flags & 2 ? readId(r) : null;
   if (version === 1) return { v: 1, count, open, prefix, state, active_turn_id, latest_turn_id, user_revision };
   const window = flags & 4 ? readId(r) : null, window_started_at = flags & 8 ? r.uint() : null;
-  return { v: 3, window, window_started_at, settled: (flags & 16) === 16, count, open, prefix, state, active_turn_id, latest_turn_id, user_revision };
+  const claim = { v: 3, window, window_started_at, settled: (flags & 16) === 16, count, open, prefix, state, active_turn_id, latest_turn_id, user_revision };
+  if (flags & 32) {
+    const turn = readId(r), items = [], attention = [];
+    for (let n = r.count(); n > 0; n--) items.push({ id: readId(r), hash: r.hash() });
+    for (let n = r.count(); n > 0; n--) attention.push(r.text());
+    if (new Set(items.map(item => item.id)).size !== items.length) throw invalidCursor();
+    claim.live = { turn, items, attention };
+  }
+  if (flags & 64) claim.live_refused = true;
+  return claim;
 }
 
 // An id is a tag and a payload: 0 a UUID, 1 a short prefix and a UUID, 2 a prefix and lowercase hex, 3 text.

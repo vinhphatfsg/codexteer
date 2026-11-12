@@ -326,9 +326,11 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       state.events.push(...start.initial_events); state.observations.push({ events: start.initial_events }); state.cursor = start.sync_cursor; state.seen.add(start.sync_cursor);
     }
   }
+  // This sync's reads of a running Desktop Cloud member share one live view.
+  const liveTurn = new Map();
   const readPage = async state => {
     try {
-      const page = validateSyncPage(await read(state.member.thread_id, { connection: state.member.connection, since: state.cursor, limit: pageLimit, fullEvents: true }), state.member.thread_id, state.cursor, state.seen);
+      const page = validateSyncPage(await read(state.member.thread_id, { connection: state.member.connection, since: state.cursor, limit: pageLimit, fullEvents: true, liveTurn }), state.member.thread_id, state.cursor, state.seen);
       if (page.omitted_older_events > 0 || (!state.cursor && page.omitted_older_events !== 0)) throw failure("Initial history boundary is unproven.", "WORK_INITIAL_HISTORY_GAP");
       assertHistoryBatch(state.events, page.events);
       if (state.member.environment_config_id && page.environment_config_id !== state.member.environment_config_id) throw failure("The task environment differs from its managed route.", "PROJECT_ROUTE_MISMATCH");

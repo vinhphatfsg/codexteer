@@ -88,7 +88,7 @@ codexteer project sync --project sample --exclude-unreadable <THREAD> --reason '
 
 tellの可否は対象の担当だけで決まります。最新のsyncで対象が完全に読めていること（`complete:true`、履歴欠落なし）を基点に送信直前まで再照合し、対象の新しいイベント、質問・承認待ち、attention不明、履歴欠落、不完全な観測では拒否します。他の担当が未読・不完全でも、対象への指示は妨げません。receiptの`other_work`は、未読の担当を`incomplete`、質問・承認待ちの担当を`human_attention`、sync後のmembership変更を`membership_changed`で返します。空でなければ、送信後もその担当への対応を続けます。`settled`の担当は読まれず回答もできないため、`incomplete`にも`human_attention`にも含めません。その担当の質問は`project sync`の「監視終了」の行に残ります。`--sync-token`で以前のsyncを基点にできるのは、その後に対象が完全に再読されていない間だけです。質問・承認待ちは常に最新のsyncで判定します。サーバーが観測版と送信を原子的に照合する保証はなく、最終観測の後に起きる競合は残ります。代理回答はせず、同じ意図やunknownを自動再送しません。検収待ちでもidleなら`--new-turn`が必要です。同じ委任の未完了作業がある場合だけ続け、受付後に新turnがactiveになれば動作中へ戻ります。検収待ちは成果の受入や全体の完了認定ではありません。
 
-実行中のDesktop Cloudターンでは、質問・承認待ちを観測できません。tellはその場合も送信の可否を変えず、receiptに`attention_coverage:"running_turn_unobserved"`を付けます。対象が質問で止まっていないかは、Codexの画面で確認します。
+実行中のDesktop Cloudターンでは、質問・承認待ちを観測できません。tellはその場合も送信の可否を変えず、receiptに`attention_coverage:"running_turn_unobserved"`を付けます。対象が質問で止まっていないかは、Codexの画面で確認します。`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=on`では、tellは送信前の確認でそのターンを1回だけ読みます。質問かサーバー要求が見えれば`WORK_TELL_HUMAN_REQUIRED`で、sync後に新しい項目が出ていれば`WORK_TELL_STALE_SYNC`で送りません（[Desktop Cloud](desktop-cloud.md)を参照）。
 
 controlはproject全体の新しい監督IDを作らず、各担当の既存recordを制御します。`--all`と`--work`はどちらか一方を指定します。返り値のrequested・changed・already・failed、各code、membership_digestを確認してください。部分失敗でも全担当の結果を返し、CLIは終了値1（JSONはok:false）です。busyは未完了、binding不在は失敗、同じ状態への再実行はalreadyです。stop済みはresumeできません。対象集合は呼出し開始時のsnapshotで、新しく追加された担当は含まれません。
 
@@ -115,7 +115,7 @@ waitは、自分を起動したコマンドが生きているかも確かめま�
 
 `unreadable`は直近の照会の結果です。`reported:false`の担当はその照会で失敗しただけで、一時的な失敗のことがあります。waitはその担当を読み続け、読めない状態が続けば報告します。`reported:true`の担当は、stopしていなくても、次に読めるまで監視されていません。その間のターン終了・質問・承認待ちは、読めるようになるまで返りません。その担当は`codexteer status <THREAD>`やその担当のbranchで別に確認し、読めないことと確認結果をユーザーへ報告します。waitを静かにする目的でその担当をstopしないでください。stopは検収後の終了操作で、stop後に`--exclude-unreadable`で除外した担当の作業は以後どこからも検知されません。読めない担当が検収してstop済みなら`--exclude-unreadable`で除外し、作業中なら原因を調べます。
 
-Desktop Cloudの担当は、ターンの実行中は開始時の指示しか読めず、その間の質問・承認待ち・進捗を観測できません。syncはその担当の行に`attention_coverage:"running_turn_unobserved"`を付け（ターンが実行中でないと確認できない担当にも付けます）、syncの全ページとwaitの全ての結果（timeoutを含みます）は`attention_unobserved:[{thread_id, attention_coverage}]`にその担当を並べます。該当する担当がいなければ付きません。`attention`・`group`・`complete`の値は変えません。この担当について、codexteerの結果から「待っているものはない」とは言えません。Codexの画面で確認します。ターン中に出た質問は、ターンが終わるとwaitが返します。
+Desktop Cloudの担当は、ターンの実行中は開始時の指示しか読めず、その間の質問・承認待ち・進捗を観測できません。syncはその担当の行に`attention_coverage:"running_turn_unobserved"`を付け（ターンが実行中でないと確認できない担当にも付けます）、syncの全ページとwaitの全ての結果（timeoutを含みます）は`attention_unobserved:[{thread_id, attention_coverage}]`にその担当を並べます。該当する担当がいなければ付きません。`attention`・`group`・`complete`の値は変えません。この担当について、codexteerの結果から「待っているものはない」とは言えません。Codexの画面で確認します。ターン中に出た質問は、ターンが終わるとwaitが返します。`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=on`では、syncとwaitの照会は実行中のターンを1回ずつ読み、ターン中の質問を実行中に返します。読めた担当に印は付きません。読めなかった担当には従来どおり印が付き、その質問は遅くともターンが終わると返ります。サーバー要求は`attention`の`pendingRequest:<メソッド名>`として「対応が必要」になります。
 
 承認・質問のフラグは、読了済みcursorとは別に、各担当の基準に対応する直近の観測を保存します。同じフラグが立ち続ける間は通知せず、消えたことを観測した後の再出現は同じ実行turnでも通知します。この観測はtimeout後のwait再起動にも引き継ぎ、その担当の基準が更新されたときに初期化します。`attention:null`など現在のフラグが不明な場合は空配列と区別し、`PROJECT_WAIT_ATTENTION_UNKNOWN`の読み取り失敗として扱います。その担当のcursorと基準は進めません。
 

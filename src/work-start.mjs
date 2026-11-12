@@ -148,7 +148,8 @@ export async function startWork(input, dependencies = {}) {
       if (!record.sync_cursor) {
         let observation, cursor; const initialEvents = []; const seen = new Set(); let pages = 0;
         do {
-          observation = await dependencies.read(record.thread_id, { connection, limit: 1000, fullEvents: true, ...(cursor ? { since: cursor } : {}) });
+          // The creation check reads the history only; the first sync reads a running Desktop Cloud turn live.
+          observation = await dependencies.read(record.thread_id, { connection, limit: 1000, fullEvents: true, liveTurn: false, ...(cursor ? { since: cursor } : {}) });
           if (observation.omitted_older_events > 0 || (!cursor && observation.omitted_older_events !== 0)) throw fail("Initial history has an unproven boundary; no cursor was saved.", "WORK_INITIAL_HISTORY_GAP");
           assertHistoryBatch(initialEvents, observation.events ?? []);
           if (connection === "desktop-cloud") {

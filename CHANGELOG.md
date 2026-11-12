@@ -15,6 +15,16 @@ Desktop Cloudの担当は、ターンの実行中は開始時の指示しか読�
 - Desktop Cloudの`doctor`は、この接続の制限として`running_turn_attention:"unobserved"`を常に返します。`approval_roundtrip`とは別の項目です。
 - オーケストレーター本文は、この印の付いた担当について「待っているものはない」とユーザーへ伝えず、Codexの画面で確認が必要だと伝えるよう指示します。
 
+環境変数`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=on`を設定すると、codexteerは実行中のDesktop Cloudターンを読めます。ターン中に出た質問を、ターンの実行中に`project wait`が返します。既定は無効です。
+
+- 有効なら、`read`・`status`・`project sync`・`project wait`・`work tell`・`doctor --thread`は、実行中のターンが1つだけで最新の担当を、別の接続で`thread/resume`して、そのターンのここまでの項目を読みます。読めた項目は履歴と同じ形のイベントで返り、結果は`live_turn_id`を持ち、`attention_coverage`は付きません。`watch`と`work start`の作成直後の確認は読みません。
+- 実行中のターンがない担当、状態の確かでない担当、`settled`の担当はresumeしません。1回の`project sync`、`project wait`の1回の照会、1回の`work tell`は、実行中の担当ごとに1回だけresumeします。
+- resumeした接続はサーバー要求に応答せず、メソッド名だけを記録して閉じます。届いた要求は`attention`の`pendingRequest:<メソッド名>`と`pending_requests`で返り、担当行は「対応が必要」になり、`work tell`は送りません。
+- 読んだ項目は、ターンが終わって履歴に現れても、同じ内容なら再び返しません。resumeが失敗した担当は従来どおり履歴だけで読み、印が付きます。ターンが終わった履歴に読んだ項目のIDがなければ、履歴の項目を全て返して`live_mismatch`を付け、そのタスクは以後resumeしません。
+- `work tell`は、sync後に実行中のターンが新しい項目を出していれば、localの担当と同じく`WORK_TELL_STALE_SYNC`で送りません。
+- `doctor`は有効なら`running_turn_attention:"live"`を返します。このとき書いたcursorは0.24.x以前では`STALE_CURSOR`になります。
+- 承認待ちで止まったターンのresumeと、ターンが終わった直後のresumeは、サービスで確認していません。そのため既定は無効です。
+
 Desktop Cloudのスレッドは、最後のターンが終わった後も`status`が`active`のまま残ることがあります。codexteerはその担当を「動作中」と表示し、停止済みでも`settled`にせず読み続けていました。
 
 - Desktop Cloudの担当の`execution`は、ターンの状態（最新ターンの状態と実行中ターンの数）で決めます。実行中のターンがあれば`active`、全てのターンが終わっていれば、スレッドの`status`が`active`でも`idle`です。最後のターンが`completed`なら「検収待ち」、`failed`なら「対応が必要」になります。
