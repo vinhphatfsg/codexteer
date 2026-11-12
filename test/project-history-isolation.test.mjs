@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, readdir, writeFile, chmod } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { tempPrefix } from "../test-support/temp.mjs";
 import { readSnapshot } from "../src/observe.mjs";
 import { registerManagedThread, getManagedThread } from "../src/project-index.mjs";
@@ -304,4 +305,81 @@ test("a token found nowhere is not found even when another project's bucket cann
   await assert.rejects(continueProjectSync(neighbour.sync_token, {}, f.storage), { code: "STORE_UNSAFE" });
   await writeFile(storePath(historyBucket("project-sync-results", P), page.sync_token, f.home), "{");
   await assert.rejects(continueProjectSync(page.sync_token, {}, f.storage), SyntaxError);
+});
+
+const head = (f, project) => readRecord("project-sync-heads", headKey(project), f.storage);
+const syncLock = project => `project-sync-${headKey(project)}`;
+async function askedQuestion(f) {
+  f.threads.get(f.member[P]).turns[0].items.push({ ...message(4 * KiB), questions: ["Which?"] });
+  const asked = await f.sync(P);
+  f.add(P, 1, 16 * KiB); await f.sync(P);
+  f.add(P, 1, 16 * KiB); await f.sync(P);
+  return { asked, question: asked.works[0].events[0].token };
+}
+// Between its pending head, which no longer names the earlier attention, and
+// its final head, where a refused cursor has restored that attention.
+async function pausedPrevious(f, project, during) {
+  return withStoreLock(syncLock(project), () => withStoreLock("project-history", async () => {
+    const before = await head(f, project), next = randomUUID(), event = { ...flatEvent(f, project), sync_token: next };
+    await writeRecord("project-sync-events", event.token, event, f.storage);
+    await writeRecord("project-sync-heads", headKey(project), { ...before, sync_token: next, complete: false, complete_work_ids: [], unresolved_attention: {}, publication_pending: true }, f.storage);
+    await during();
+    await writeRecord("project-sync-results", next, { schema: 2, project_id: project, works: [], complete: false, created_at: new Date().toISOString() }, f.storage);
+    await writeRecord("project-sync-heads", headKey(project), { ...before, sync_token: next }, f.storage);
+  }, f.storage), f.storage);
+}
+
+test("a prune without the project's sync lock deletes nothing while a previous-version publication is between its pending and final head", async t => {
+  const f = await fixture(t), { asked, question } = await askedQuestion(f);
+  await pausedPrevious(f, P, async () => {
+    const manual = await pruneProjectHistory(P, f.storage);
+    assert.deepEqual(manual.deleted, { events: 0, results: 0, initial_payloads: 0 }); assert.equal(manual.reclaimed_bytes, 0);
+    assert.equal(manual.publication_in_progress, true);
+    f.storage.historyLimitBytes = await own(f) + KiB;
+    await assert.rejects(f.start(P, "at the quota", 4 * KiB), { code: "PROJECT_HISTORY_LIMIT", publication_in_progress: true });
+    f.add(P, 1, 4 * KiB);
+    await assert.rejects(f.sync(P), { code: "PROJECT_HISTORY_LIMIT", publication_in_progress: true }, "the conflict path's reservation prunes nothing");
+    delete f.storage.historyLimitBytes;
+  });
+  assert.equal((await projectEvent(question, f.storage)).event.questions[0], "Which?");
+  await readable(f, asked);
+  const later = await pruneProjectHistory(P, f.storage);
+  assert.ok(later.deleted.results >= 3); assert.equal(later.publication_in_progress, undefined);
+  assert.equal((await projectEvent(question, f.storage)).event.questions[0], "Which?", "the final head names it again");
+});
+
+test("a prune without the project's sync lock cannot run while this version's publication is between its pending and final head", async t => {
+  const f = await fixture(t), { question } = await askedQuestion(f);
+  await withStoreLock(syncLock(P), () => withHistoryReservation({ projectId: P, records: [], publishing: true }, async () => {
+    const before = await head(f, P);
+    await writeRecord("project-sync-heads", headKey(P), { ...before, sync_token: randomUUID(), unresolved_attention: {}, publication_pending: true }, f.storage);
+    await assert.rejects(pruneProjectHistory(P, f.storage), { code: "RECORD_BUSY" });
+    f.storage.historyLimitBytes = await own(f) + KiB;
+    await assert.rejects(f.start(P, "at the quota", 4 * KiB), { code: "RECORD_BUSY" });
+    f.add(P, 1, 4 * KiB); await assert.rejects(f.sync(P), { code: "RECORD_BUSY" });
+    delete f.storage.historyLimitBytes;
+    await writeRecord("project-sync-heads", headKey(P), before, f.storage);
+  }, f.storage), f.storage);
+  assert.equal((await projectEvent(question, f.storage)).event.questions[0], "Which?");
+});
+
+test("a publication's own prune at the quota still works, also over a pending head and lock a crashed publication left", async t => {
+  const f = await fixture(t);
+  f.add(P, 1, 64 * KiB); const old = await f.sync(P);
+  f.add(P, 1, 64 * KiB); const superseded = await f.sync(P);
+  const crashed = randomUUID(), pinned = { schema: 1, project_id: P, sync_token: crashed, token: randomUUID(), thread_id: f.member[P], event: message(KiB) };
+  await writeRecord(historyBucket("project-sync-events", P), pinned.token, pinned, f.storage);
+  await writeRecord("project-sync-heads", headKey(P), { ...await head(f, P), sync_token: crashed, complete: false, complete_work_ids: [], publication_pending: true }, f.storage);
+  await writeRecord("locks", syncLock(P), { token: randomUUID(), pid: spawnSync(process.execPath, ["-e", ""]).pid }, f.storage);
+  f.storage.historyLimitBytes = await own(f) + KiB;
+  f.add(P, 1, 64 * KiB); const next = await f.sync(P);
+  assert.equal(next.complete, true); assert.equal(next.history_pruned.deleted.results, 2);
+  await gone(f, old); await gone(f, superseded); await readable(f, next);
+  assert.equal((await projectEvent(pinned.token, f.storage)).token, pinned.token, "the crashed generation stayed pinned");
+  delete f.storage.historyLimitBytes;
+  f.add(P, 1, 64 * KiB); await f.sync(P);
+  f.threads.get(f.member[P]).turns.push({ id: "turn-2", status: "completed", items: [message(64 * KiB)] });
+  f.storage.historyLimitBytes = await own(f) + KiB;
+  const waited = await f.wait(P);
+  assert.equal(waited.sync.complete, true); assert.equal(waited.sync.history_pruned.deleted.results, 1);
 });
