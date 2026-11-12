@@ -27,8 +27,8 @@
 同じ`CODEX_HOME`の全projectが、履歴の上限（256 MiB）、保存と整理の排他、整理の読み取りを共有していました。あるprojectの履歴が上限を占めると他projectのsync・wait・`work start`が`PROJECT_HISTORY_LIMIT`で拒否され、あるprojectの保存中は他projectの保存と整理が`RECORD_BUSY`で失敗し、あるprojectの壊れたrecordが他projectの整理と`work tell`を失敗させていました。
 
 - 履歴（イベント・sync結果・担当詳細・work startの記録）は、projectごとに別の場所へ保存します。256 MiBの上限はprojectごとで、そのprojectが保存した量だけを数えます。保存と整理の排他もprojectごとで、別のprojectの保存・整理は互いを待たせません。
-- `project prune`と自動削除は、そのprojectの履歴だけを読んで削除します。他projectの壊れたrecordで失敗することはありません。結果の形は変わらず、`storage_bytes`は整理後の、そのprojectの使用量です。`PROJECT_HISTORY_LIMIT`の`storage_bytes`も同じです。
-- 0.24.x以前が保存した履歴は、移動も書き換えもせず元の場所のまま使います。tokenはどちらの場所のrecordでも使え、`project event`・`project sync --continue`・`work tell`・waitの結果の復元は従来どおりです。古い履歴はどのprojectの上限にも数えず、新しく書き足すこともないため、その総量は減る一方です。そのprojectの`project prune`と自動削除が、従来と同じ基準で古い履歴のうち自分のprojectのものも削除し、`deleted`と`reclaimed_bytes`に含めます。読めない古いrecordは飛ばします。
+- `project prune`と自動削除が削除するのは、そのprojectの履歴だけです。他projectの保存場所は読まず、他projectの壊れたrecordで失敗することもありません。結果の形は変わらず、`storage_bytes`は整理後の、そのprojectの使用量です。`PROJECT_HISTORY_LIMIT`の`storage_bytes`も同じです。
+- 0.24.x以前が保存した履歴は、新しい場所へ移さず元の場所のまま使います。tokenはどちらの場所のrecordでも使え、`project event`・`project sync --continue`・`work tell`・waitの結果の復元は従来どおりです。古い履歴はどのprojectの上限にも数えず、新しく書き足すこともないため、その総量は減る一方です。そのprojectの`project prune`と自動削除が、従来と同じ基準で古い履歴のうち自分のprojectのものも削除し、`deleted`と`reclaimed_bytes`に含めます。提示済み初回結果の重複全文は、従来どおり元の場所のrecordから削除します。古い履歴が残る間は、各projectの整理がその全体を読みます。読めない古いrecordは飛ばします。
 - 0.24.x以前に戻すと、このversionが保存した履歴は見えません。そのversionでは、このversionが返したtokenは見つからず、`work tell`は次の`project sync`まで`WORK_TELL_SYNC_INCOMPLETE`になり、同じ引数の`work start`は別の担当を作ります。戻したversionが保存した履歴は、再びこのversionにしたときに古い履歴として使えます。
 
 ## 0.24.2 — 2026-11-11公開
