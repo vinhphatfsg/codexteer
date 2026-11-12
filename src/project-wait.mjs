@@ -197,6 +197,7 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
       const owner = await (dependencies.orchestratorIdentity ?? (() => orchestratorIdentity(dependencies)))();
       const record = { schema: 1, project_id: projectId, pid: process.pid, process_start: start, owner, created_at: new Date().toISOString() };
       await writeRecord("project-waits", key, record, storage);
+      let watch;
       try {
         // Separate from reviewed cursors: retain observed clear/reappearance
         // edges across bounded waits, keyed to each member's baseline entry.
@@ -224,19 +225,29 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
         // A wait that outlives its session would hold the project lock forever and
         // publish changes nobody reads. An inspection error is not proof of exit.
         const ownerExited = async () => !!owner && await identity(owner.pid).then(start => start !== owner.process_start, () => false);
+        // A poll reads every member, which can take minutes. The launcher is
+        // watched meanwhile so the record and lock go within a second; the read
+        // left behind stops at its probe. A poll whose probe chose to publish is
+        // awaited, so a change is never published without being returned.
+        let publishing = false, stopReading = null;
+        watch = launcher > 1 ? setInterval(() => { if (!publishing && launcherExited()) stopReading?.(); }, 1000) : null;
         for (;;) {
           const abandoned = launcherExited() ? "launcher_exited" : await ownerExited() ? "owner_exited" : null;
           if (abandoned) return { project_id: projectId, changed: false, timed_out: false, reason: abandoned, unreadable: unreadable(), sync: null };
           let reason;
-          const sync = await syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => {
+          publishing = false;
+          const reading = syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => {
             // The launcher went during this read: leave the change to the next wait.
             if (launcherExited()) return null;
             failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete ? [] : [[id, state.error]]));
             const { lasting, report } = unreadStreaks(snapshot.previous, observedAttention, failures, graceMs);
             // A quiet poll adds no member, so this is also what the head holds.
             reported = report;
-            return (reason = probeReason(snapshot, observedAttention, lasting)) ? report : null;
+            publishing = !!(reason = probeReason(snapshot, observedAttention, lasting));
+            return publishing ? report : null;
           } });
+          const sync = await new Promise((resolve, reject) => { reading.then(resolve, reject); stopReading = () => resolve(null); });
+          stopReading = null;
           // A newer sync won the head: nothing this wait read was published or reviewed.
           if (sync?.publication_conflict) {
             reason = "observation_failed";
@@ -249,15 +260,16 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
             await writeRecord("project-wait-attention", key, observedAttention, storage); savedAttention = observed;
           }
           if (sync) return { project_id: projectId, changed: reason !== "observation_failed", timed_out: false, reason, unreadable: unreadable(), sync };
+          if (launcherExited()) continue;
           if (performance.now() >= deadline) return { project_id: projectId, changed: false, timed_out: true, reason: "timeout", unreadable: unreadable(), sync: null };
           const next = Math.min(deadline, performance.now() + pollMs);
           while (performance.now() < next && !launcherExited()) await delay(Math.min(1000, next - performance.now()));
         }
-      } finally { await removeRecord("project-waits", key, storage); }
+      } finally { clearInterval(watch); await removeRecord("project-waits", key, storage); }
     } finally { process.title = originalTitle; }
   }, storage).catch(error => {
     // A record busy inside a running wait is not another session's wait.
-    if (error.code === "RECORD_BUSY" && !owned) error.message = "Project wait is already owned by another operation. Use one orchestrator per CODEX_HOME, host and project. Do not adopt another session's wait or remove its lock; have the owning session finish/cancel its wait and hand off before retrying. A wait whose session has exited ends by itself at its next poll, and one whose launching command was stopped ends within a second; after either, retry shortly.";
+    if (error.code === "RECORD_BUSY" && !owned) error.message = "Project wait is already owned by another operation. Use one orchestrator per CODEX_HOME, host and project. Do not adopt another session's wait or remove its lock; have the owning session finish/cancel its wait and hand off before retrying. A wait whose session has exited ends by itself at its next poll, and one whose launching command was stopped releases the project within a second; after either, retry shortly.";
     throw error;
   });
 }

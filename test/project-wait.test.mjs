@@ -289,6 +289,7 @@ test("a wait between slow polls ends within about a second of its launcher going
   assert.deepEqual(await listRecords("project-waits", f.storage), []);
   await slow; await delay(50);
   assert.deepEqual(await readRecord("project-sync-heads", headKey, f.storage), head, "the read left behind publishes nothing when it ends");
+  assert.equal((await waitProject("P", { timeoutMs: 0 }, f.dependencies)).reason, "work_changed", "the next wait returns the change");
   let detachedParent = 1;
   setTimeout(() => { detachedParent = 77; }, 10);
   assert.equal((await waitProject("P", { timeoutMs: 40 }, { ...f.dependencies, parentPid: () => detachedParent })).reason, "timeout");
