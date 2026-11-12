@@ -73,6 +73,8 @@ test("publication and cleanup source use the modeled history boundary", async ()
   assert.match(history, /const lock = [^\n]*\n[^\n]*\n\s*return withStoreLock\(`project-history-\$\{key\(projectId\)\}`/);
   for (const name of ["withHistoryReservation", "writeHistoryRecord", "pruneProjectHistory"]) assert.match(history, new RegExp(`function ${name}\\([\\s\\S]*?return lock\\(`));
   assert.doesNotMatch(history, /withStoreLock\(`(?:project-sync|project-index|work-start)-/);
+  assert.equal((history.match(/withStoreLock\("project-history"/g) ?? []).length, 1);
+  assert.match(history, /async function prune\([^)]*\) \{\n[^\n]*\n\s*try \{ return await withStoreLock\("project-history"/);
 });
 
 test("the history limit is set only through the storage argument, which no command builds from user input", async () => {

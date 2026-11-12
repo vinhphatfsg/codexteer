@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { readRecord, writeRecord, recordStats, removeRecord, withStoreLock, listBuckets } from "./store.mjs";
+import { lstat } from "node:fs/promises";
+import { readRecord, writeRecord, recordStats, removeRecord, withStoreLock, listBuckets, storePath } from "./store.mjs";
 import { listManagedThreads } from "./project-index.mjs";
 import { hostFields } from "./target.mjs";
 
@@ -24,16 +25,14 @@ const legacyRows = (bucket, storage) => recordStats(bucket, { ...storage, skipUn
 const readLegacy = (bucket, id, storage) => readRecord(bucket, id, storage).catch(() => null);
 
 // The project's bucket, then the flat one. Without a project, every project's
-// bucket: a bucket that fails is passed over unless the record is found nowhere.
+// bucket: one that cannot be read is passed over unless it holds this record.
 export async function readHistoryRecord(bucket, id, projectId, storage = {}) {
   if (projectId) return await readRecord(historyBucket(bucket, projectId), id, storage) ?? readRecord(bucket, id, storage);
-  let failed = null;
   for (const name of await listBuckets(new RegExp(`^${bucket}-[0-9a-f]{40}$`), storage)) {
-    try { const record = await readRecord(name, id, storage); if (record) return record; } catch (error) { failed ??= error; }
+    try { const record = await readRecord(name, id, storage); if (record) return record; }
+    catch (error) { if (await lstat(storePath(name, id, storage.home)).then(() => true, () => false)) throw error; }
   }
-  const record = await readRecord(bucket, id, storage);
-  if (record || !failed) return record;
-  throw failed;
+  return readRecord(bucket, id, storage);
 }
 // A record that also has an earlier copy in the flat bucket is read from the project's bucket.
 export async function listHistoryRecords(bucket, projectId, storage = {}) {
@@ -78,8 +77,11 @@ async function room(records, projectId, storage, earlier = null) {
   capacity(state.total, state.need, storage, pruned);
   return { ...state, pruned };
 }
-// Lock order: work-start OR project-publication -> that project's history -> membership.
-// prune acquires history only. No network/supervisor operations under history.
+// Lock order: work-start OR project-publication -> that project's history ->
+// the previous version's shared history lock (prune only, never waited for) ->
+// membership. The previous version takes work-start OR project-publication ->
+// shared history -> membership, so the order stays acyclic. prune acquires
+// history only. No network/supervisor operations under history.
 // Each of `records` is at least as large as what the action writes for it: once
 // the first write succeeds, the rest fit. The action also receives what was pruned.
 export function withHistoryReservation({ projectId, records = [], pruned }, action, storage = {}) {
@@ -122,15 +124,26 @@ export async function pruneProjectHistory(projectId, storage = {}) {
   }, storage);
 }
 
-// Under the project's history lock: what project prune and a publication at the
-// quota remove, from the project's buckets and from the flat ones. `reclaimed`
-// counts both; only the first is the project's usage.
+// The previous version publishes flat records under one history lock shared by
+// every project. Flat records are removed or rewritten only while holding it,
+// taken without waiting: while it is busy they are left to a later prune.
 async function prune(projectId, storage, before) {
+  let entered = false;
+  try { return await withStoreLock("project-history", () => { entered = true; return pruneRows(projectId, storage, before, true); }, storage); }
+  catch (error) { if (entered || error.code !== "RECORD_BUSY") throw error; }
+  return pruneRows(projectId, storage, before, false);
+}
+// Under the project's history lock: what project prune and a publication at the
+// quota remove, from the project's buckets and from the flat ones. Flat records
+// always count toward protection. `reclaimed` counts both; only the first is the
+// project's usage.
+async function pruneRows(projectId, storage, before, flatWritable) {
   const head = await readRecord("project-sync-heads", key(projectId), storage);
   const protectedTokens = references(head), members = await listManagedThreads(projectId, storage);
   const memberIds = new Set(members.map(member => member.thread_id));
   const rows = await Promise.all(buckets.map(async (bucket, i) => [...before.stats[i].map(row => ({ ...row, bucket: historyBucket(bucket, projectId) })),
     ...(await legacyRows(bucket, storage)).map(row => ({ ...row, bucket, legacy: true }))]));
+  const writable = row => !row.legacy || flatWritable;
   const read = row => row.legacy ? readLegacy(row.bucket, row.id, storage) : readRecord(row.bucket, row.id, storage);
   let legacyReclaimed = 0;
   const remove = async row => {
@@ -160,18 +173,18 @@ async function prune(projectId, storage, before) {
   const removedResults = new Set(), deleted = { events: 0, results: 0, initial_payloads: 0 };
   for (const row of rows[1]) {
     const result = await read(row);
-    if (result?.project_id === projectId && row.id !== head?.sync_token && row.id !== head?.wait_sync_token) {
+    if (writable(row) && result?.project_id === projectId && row.id !== head?.sync_token && row.id !== head?.wait_sync_token) {
       // Remove continuation first: a crash cannot leave it pointing to deleted events.
       await remove(row); removedResults.add(row.id); deleted.results++;
     }
   }
-  for (const row of events) if (!protectedTokens.has(row.id)
+  for (const row of events) if (writable(row) && !protectedTokens.has(row.id)
     && (row.project_id === projectId || removedResults.has(row.sync_token) || (!row.project_id && memberIds.has(row.thread_id)))) {
     await remove(row); deleted.events++;
   }
   for (const row of rows[2]) {
     const start = await read(row), member = members.find(m => m.thread_id === start?.thread_id);
-    if (start?.project_id === projectId && Array.isArray(start.initial_events) && member?.sync_cursor
+    if (writable(row) && start?.project_id === projectId && Array.isArray(start.initial_events) && member?.sync_cursor
       && head?.complete_work_ids?.includes(start.thread_id) && latest?.works?.some(work => work.thread_id === start.thread_id && work.complete && work.sync_revision === member.sync_revision)) {
       const { initial_events, ...receipt } = start;
       await writeRecord(row.bucket, row.id, receipt, storage); deleted.initial_payloads++;

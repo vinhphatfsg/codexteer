@@ -239,7 +239,7 @@ test("a publication of the previous version in flight keeps its records through 
     f.add(P, 1, 64 * KiB); await f.sync(P);
     f.storage.historyLimitBytes = await own(f) + KiB;
     const started = await f.start(P, "at the quota", 64 * KiB);
-    assert.equal(started.observed, true); assert.equal(started.history_pruned.deleted.results, 1); await gone(f, superseded);
+    assert.equal(started.observed, true); assert.equal(started.history_pruned.deleted.results, 2); await gone(f, superseded);
     assert.equal((await projectEvent(inFlight.token, f.storage)).token, inFlight.token, "a work start's quota prune keeps it");
   });
   delete f.storage.historyLimitBytes;
