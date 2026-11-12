@@ -41,8 +41,6 @@ codexteer --connection desktop-cloud thread create --environment CONFIG --model 
 
 作成開始済みの `work start` は発注ごとに選択を保存します。同じ発注の再実行は、途中で既定値を変更しても元の選択を維持し、明示引数の変更は拒否します。受付不明は読み取り照合のみです。作成 RPC の未送信を保存記録で確認できた場合だけ、同じ attempt の再実行を許可します。既存スレッドや通常の継続送信には新しい既定値を上書きしません。
 
-形式モデル、実装との対応、検証結果と限界は [モデル選択の検証報告](cloud-models-verification.md) を参照してください。
-
 Desktop Cloud environment configurations use a different service from Web Cloud tasks. Use the same observation, sending, supervision, findings and instruction commands with a `durable_` task identifier or a `codex://threads/<UUID>?hostId=durable` link. A bare UUID continues to mean a local Desktop task; it never silently selects Cloud.
 
 ```sh

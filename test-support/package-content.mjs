@@ -20,7 +20,7 @@ export async function preparePackageContent() {
   const ID = "11111111-1111-4111-8111-111111111111", TURN = "22222222-2222-4222-8222-222222222222";
   try {
   await mkdir(home, { mode: 0o700 }); await mkdir(workspace);
-  const cloudDocs = new Set(["docs/cloud.md", "docs/desktop-cloud.md", "docs/cloud-models-verification.md"]);
+  const cloudDocs = new Set(["docs/cloud.md", "docs/desktop-cloud.md"]);
   const source = await describeDistribution(repo);
   const sourcePackage = JSON.parse(source.contents.get("package.json"));
   assert.equal(sourcePackage.name, "codexteer");

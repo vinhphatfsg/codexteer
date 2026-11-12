@@ -9,7 +9,6 @@
   "scripts": {
     "check": "node scripts/check-syntax.mjs",
     "test": "node --test",
-    "test:models-formal": "node scripts/check-cloud-models-tla.mjs",
     "test:protocol": "node scripts/probe-app-server.mjs",
     "test:remote-control": "node scripts/probe-remote-control.mjs",
     "test:connection": "node scripts/probe-desktop-connection.mjs",
@@ -30,7 +29,6 @@
   "files": [
     "docs/cloud.md",
     "docs/desktop-cloud.md",
-    "docs/cloud-models-verification.md",
     "bin/*.mjs",
     "src/*.mjs",
     "scripts/*.applescript",
