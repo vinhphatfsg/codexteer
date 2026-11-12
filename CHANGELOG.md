@@ -79,6 +79,13 @@ Desktop Cloudの`work start`と`thread create`は、常にCloudの既定モデ�
 - `settled`の担当の行（`observation:"settled"`）の`group`は、新しい値「監視終了」になりました。未回答の質問や失敗で終わった担当も、`attention`・`reason`・`events`はそのまま残り、`group`だけが変わります。0.24.xでは最後に読んだときの分類（「検収待ち」など）のままでした。未回答の質問や失敗で終わった担当を`settled`にすると、その行が「対応が必要」に残り続け、読み続けている担当の新しい質問と見分けにくくなるため、分けました。「対応が必要」は読み続けている担当だけになります。0.24.xが保存した`settled`の行も「監視終了」で返します。`settled`にする回の行は、その回に読んだ結果なので従来の分類のままです。
 - `work tell`のreceiptの`other_work.human_attention`は、`settled`の担当を含めなくなりました。停止済みで読まれない担当には対応を続けられないためです。その担当の質問は`project sync`の「監視終了」の行で確認できます。
 
+同じprojectの`project prune`や`work start`の保存が動いている間に、sync・waitがちょうど公開しようとすると、そのsync・waitは`RECORD_BUSY`のエラーで終わっていました。整理や保存はすぐ終わり、変化も失われませんが、実行中のwaitがエラーで終わり、オーケストレーターが理由なく起こされていました。
+
+- sync・waitの公開は、同じprojectの`project prune`や`work start`の保存（上限に達したときの自動削除を含みます）が終わるのを最長10秒待ってから行います。1回の整理や保存は、上限近くまで保存したprojectでも数秒で終わるためです。待つ間は何の排他も持たず、他のprojectの整理・保存と、0.24.x以前が使う共通の排他は待ちません。排他を持つプロセスがすでに終了している場合は、従来どおり待たずに回収します。
+- 10秒待っても公開できなかったsync・waitは、エラーにせず、何も公開しないまま`publication_conflict:"RECORD_BUSY"`の付いた結果を返します。waitは`reason:observation_failed, changed:false`、終了値1です。この結果の保存もできなかった場合は`history_unsaved:true`を持ち、`sync_token`と`continuation_token`は`null`で、今回読んだイベントと`detail_token`を含みません。cursorは進まず、次のsync・waitが同じ変化を返します。
+- 同じprojectで別のsync・waitが公開している間に公開しようとしたsync・waitも、その公開が終わるのを同じく待ちます。待った後は、先の公開がheadを更新していれば従来の競合（`publication_conflict:"SYNC_CURSOR_CONFLICT"`）を返し、更新していなければ公開します。これまでは待たずに`publication_conflict:"RECORD_BUSY"`を返していました。0.24.x以前の公開も同じく待ちます。
+- `project prune`と`work start`の保存は待ちません。互いの実行中と、そのprojectのsync・waitが公開している間は、従来どおり`RECORD_BUSY`になります。
+
 ### 履歴の上限と保存場所
 
 履歴の上限（256 MiB）の確認が、観測したデータの8倍と1 MiBの空きを求めていました。実際に書く量の数倍にあたり、使用量が上限よりずっと少なくてもsyncとwaitが`PROJECT_HISTORY_LIMIT`で拒否されました。拒否されるとcursorが進まないため、次の実行は同じ履歴を読み直していました。上限に達した後は、人が`project prune`を実行するまで保存できませんでした。

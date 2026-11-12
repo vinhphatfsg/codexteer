@@ -77,15 +77,22 @@ test("publication and cleanup source use the modeled history boundary", async ()
   assert.equal((history.match(/withStoreLock\(/g) ?? []).length, 2);
   assert.match(history, /async function attempt\([\s\S]*?withStoreLock\(name[\s\S]*?error\.code !== "RECORD_BUSY"\) throw error; return null;/);
   assert.match(history, /async function prune\([\s\S]*?attempt\("project-history"[\s\S]*?publishing \? rows\(\) : \(await attempt\(`project-sync-\$\{key\(projectId\)\}`/);
+  // The only waits: both publication paths, each outside every lock it then takes.
+  assert.equal((sync.match(/await untilFree\(projectId, deadline, entered => with(?:StoreLock|HistoryReservation)\(/g) ?? []).length, 2);
+  assert.equal((history.match(/untilFree\(/g) ?? []).length, 2, "defined once, and called by no history path");
+  assert.match(history, /export async function untilFree\([\s\S]*?catch \(error\) \{ if \(last \|\| entered \|\| error\.code !== "RECORD_BUSY"\) throw error; \}/);
   assert.equal((sync.match(/publishing: true/g) ?? []).length, 1, "only the publication's main path holds the project's publication lock");
   assert.match(sync, /withStoreLock\(`project-sync-[^`]*`, async \(\) => withHistoryReservation\(\{ projectId, records, publishing: true \}/);
 });
 
-test("the history limit is set only through the storage argument, which no command builds from user input", async () => {
+test("the history limit and the lock wait are set only through the storage argument, which no command builds from user input", async () => {
   const sources = await Promise.all(["src", "bin", "scripts"].map(async dir => (await readdir(dir, { recursive: true })).filter(name => /\.m?js$/.test(name)).map(name => `${dir}/${name}`)));
   const naming = [];
   for (const file of sources.flat()) if ((await readFile(file, "utf8")).includes("historyLimitBytes")) naming.push(file);
   assert.deepEqual(naming, ["src/project-history.mjs"]);
+  const waiting = [];
+  for (const file of sources.flat()) if ((await readFile(file, "utf8")).includes("historyLockWaitMs")) waiting.push(file);
+  assert.deepEqual(waiting, ["src/project-history.mjs"]);
   // The commands call history, sync, wait and work start with the default storage.
   for (const file of ["src/cli.mjs", "src/cloud-cli.mjs"]) assert.doesNotMatch((await readFile(file, "utf8")).replace(/storage_bytes/g, ""), /storage/);
 });

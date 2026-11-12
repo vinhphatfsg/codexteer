@@ -1,5 +1,5 @@
 import { parseCursor } from "./cursor.mjs";
-import { withHistoryReservation, assertHistoryBatch, readHistoryRecord, listHistoryRecords } from "./project-history.mjs";
+import { withHistoryReservation, assertHistoryBatch, readHistoryRecord, listHistoryRecords, lockDeadline, untilFree } from "./project-history.mjs";
 import { validateSyncPage } from "./sync-page.mjs";
 export { validateSyncPage } from "./sync-page.mjs";
 import { createHash, randomUUID } from "node:crypto";
@@ -449,10 +449,13 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     resultRecord(works.map(work => reserved.get(work) ?? work), { wait_sync_token: dependencies.waitProbe ? syncToken : head.wait_sync_token, complete: false })];
   // The existing project head lock protects only publication, never network I/O.
   // A stale reader must not replace a newer attention head, even after a CAS miss.
-  let conflict = null, pruned;
+  // A prune or a work start save of this project holds these locks for a short
+  // time: both paths wait for them, against one deadline.
+  let conflict = null, pruned, unsaved = false;
+  const deadline = lockDeadline(storage);
   try {
-    await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => withHistoryReservation({ projectId, records, publishing: true }, async (historyWrite, report) => {
-      pruned = report;
+    await untilFree(projectId, deadline, entered => withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => withHistoryReservation({ projectId, records, publishing: true }, async (historyWrite, report) => {
+      entered(); pruned = report;
       const current = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage);
       if (hash(current ?? null) !== hash(previous ?? null)) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");
       // Persist attention evidence before advancing any cursor. A crash during
@@ -516,21 +519,32 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       await historyWrite(...resultRecord(works, { wait_sync_token: head.wait_sync_token, complete: head.complete }), storage);
       for (const work of observed) await historyWrite(...detailRecord(work), storage);
       await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), head, storage);
-    }, storage), storage);
+    }, storage), storage), storage);
   } catch (error) {
     if (!["SYNC_CURSOR_CONFLICT", "PROJECT_SYNC_CONFLICT", "RECORD_BUSY"].includes(error.code)) throw error;
     conflict = error.code; head.complete = false;
     for (const work of observed) { work.complete = false; work.cursor = null; work.error ??= error.code === "SYNC_CURSOR_CONFLICT" ? "SYNC_CURSOR_CONFLICT" : "PROJECT_SYNC_CONFLICT"; work.observation = "incomplete"; }
     const records = [resultRecord(works, { complete: false }), ...eventRecords.map(eventRecord), ...observed.map(work => detailRecord(work))];
-    await withHistoryReservation({ projectId, records, pruned }, async (historyWrite, report) => {
-      pruned = report;
-      for (const record of records) await historyWrite(...record, storage);
-    }, storage);
+    let writing = false;
+    try {
+      await untilFree(projectId, deadline, entered => withHistoryReservation({ projectId, records, pruned }, async (historyWrite, report) => {
+        entered(); writing = true; pruned = report;
+        for (const record of records) await historyWrite(...record, storage);
+      }, storage), storage);
+    } catch (busy) {
+      if (writing || busy.code !== "RECORD_BUSY") throw busy;
+      // The history lock stayed busy, so this result has no record: it names
+      // no token of its own, and the next sync or wait reads the same again.
+      unsaved = true;
+      const unwritten = new Set(eventRecords.map(record => record.token));
+      for (const work of observed) { delete work.detail_token; work.events = work.events.filter(event => !unwritten.has(event.token)); }
+    }
   }
-  const page = withUnobserved(pageResult({ project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, syncToken, byteBudget, 0, 0, options.connection), works);
+  const page = withUnobserved(pageResult({ project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, unsaved ? null : syncToken, byteBudget, 0, 0, options.connection), works);
   // Outside the paged envelope, whose byte count is already final. Only this
   // marker tells a result that was never published from one where every read failed.
   if (conflict) page.publication_conflict = conflict;
+  if (unsaved) page.history_unsaved = true;
   // Tokens of results older than the latest sync and the latest wait result no longer resolve.
   if (pruned) page.history_pruned = pruned;
   if (!exclusion) return page;

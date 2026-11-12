@@ -61,6 +61,12 @@ export async function withStoreLock(key, fn, { home = codexHome() } = {}) {
   return withRecordLock("locks", key, fn, { home });
 }
 
+// Whether a live process holds the lock now. A hint only: it takes nothing,
+// and a lock it cannot inspect counts as free.
+export async function storeLockHeld(key, { home = codexHome() } = {}) {
+  try { const owner = await readRecord("locks", key, { home }); return !!owner && isAlive(owner.pid); } catch { return false; }
+}
+
 async function withRecordLock(bucket, key, fn, { home }) {
   await directory(bucket, home, true);
   const file = storePath(bucket, key, home), token = randomUUID(), temp = `${file}.${token}.tmp`;

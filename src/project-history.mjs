@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
-import { readRecord, writeRecord, recordStats, removeRecord, withStoreLock, listBuckets, storePath } from "./store.mjs";
+import { setTimeout as delay } from "node:timers/promises";
+import { readRecord, writeRecord, recordStats, removeRecord, withStoreLock, storeLockHeld, listBuckets, storePath } from "./store.mjs";
 import { listManagedThreads } from "./project-index.mjs";
 import { hostFields } from "./target.mjs";
 
 export const HISTORY_LIMIT_BYTES = 256 * 1024 * 1024;
 export const HISTORY_BATCH_BYTES = 16 * 1024 * 1024;
+// How long one publication waits for its project's locks. Their other holders
+// are one prune or one work start save: local file work over at most the
+// quota, a few seconds for a quota of small records.
+export const HISTORY_LOCK_WAIT_MS = 10_000;
 const buckets = ["project-sync-events", "project-sync-results", "work-starts"];
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
 // The file writeRecord stores: host fields and the final newline included.
@@ -86,9 +91,34 @@ async function room(records, projectId, storage, earlier = null, publishing = fa
 // under the history lock, that project's publication lock (against this order)
 // and then the previous version's shared history lock. Store locks never wait:
 // a held one fails as RECORD_BUSY, and attempt() turns that into pruning
-// nothing or keeping the flat records, so no path waits on another. The
-// previous version takes work-start OR project-publication -> shared history
-// -> membership. No network/supervisor operations under history.
+// nothing or keeping the flat records, so no path waits on another while it
+// holds a lock. A publication does wait for its own project's publication and
+// history locks, in untilFree(): it holds neither between its tries, so a
+// prune or a work start save that holds the history lock always ends. It
+// never waits for another project's lock or the shared one. A wait that
+// publishes keeps its project-wait lock meanwhile, which no holder of these
+// two locks takes. The previous version takes work-start OR
+// project-publication -> shared history -> membership. No network/supervisor
+// operations under history.
+export const lockDeadline = storage => performance.now() + (storage.historyLockWaitMs ?? HISTORY_LOCK_WAIT_MS);
+// Runs `take` again while a lock it needs is busy, until `deadline`: at least
+// once, and never again after `take` called `entered`, which it does once it
+// holds its locks. A lock whose owner died is recovered by the try itself.
+// While the history lock is held and the publication lock is free, a prune is
+// about to try the publication lock: a try then would hold that lock for a
+// moment, fail on the history lock and make the prune remove nothing.
+export async function untilFree(projectId, deadline, take, storage = {}) {
+  const pruneStarting = async () => await storeLockHeld(`project-history-${key(projectId)}`, storage) && !await storeLockHeld(`project-sync-${key(projectId)}`, storage);
+  for (let pause = 2; ; pause = Math.min(pause * 2, 10)) {
+    const last = performance.now() >= deadline;
+    if (last || !await pruneStarting()) {
+      let entered = false;
+      try { return await take(() => { entered = true; }); }
+      catch (error) { if (last || entered || error.code !== "RECORD_BUSY") throw error; }
+    }
+    await delay(Math.min(pause * (0.5 + Math.random()), Math.max(0, deadline - performance.now())));
+  }
+}
 // Each of `records` is at least as large as what the action writes for it: once
 // the first write succeeds, the rest fit. The action also receives what was pruned.
 export function withHistoryReservation({ projectId, records = [], pruned, publishing = false }, action, storage = {}) {

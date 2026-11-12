@@ -345,9 +345,9 @@ test("a prune without the project's sync lock deletes nothing while a previous-v
       const text = printed.mock.calls.map(call => call.arguments[0]).join("\n");
       assert.ok(json ? JSON.parse(text).error.publication_in_progress === true : text.includes("publication_in_progress: true"));
     }
-    f.add(P, 1, 4 * KiB);
+    f.add(P, 1, 4 * KiB); f.storage.historyLockWaitMs = 20;
     await assert.rejects(f.sync(P), { code: "PROJECT_HISTORY_LIMIT", publication_in_progress: true }, "the conflict path's reservation prunes nothing");
-    delete f.storage.historyLimitBytes;
+    delete f.storage.historyLimitBytes; delete f.storage.historyLockWaitMs;
   });
   assert.equal((await projectEvent(question, f.storage)).event.questions[0], "Which?");
   await readable(f, asked);
@@ -364,8 +364,10 @@ test("a prune without the project's sync lock cannot run while this version's pu
     await assert.rejects(pruneProjectHistory(P, f.storage), { code: "RECORD_BUSY" });
     f.storage.historyLimitBytes = await own(f) + KiB;
     await assert.rejects(f.start(P, "at the quota", 4 * KiB), { code: "RECORD_BUSY" });
-    f.add(P, 1, 4 * KiB); await assert.rejects(f.sync(P), { code: "RECORD_BUSY" });
-    delete f.storage.historyLimitBytes;
+    f.add(P, 1, 4 * KiB); f.storage.historyLockWaitMs = 20;
+    const refused = await f.sync(P);
+    assert.equal(refused.publication_conflict, "RECORD_BUSY"); assert.equal(refused.history_unsaved, true, "nothing was written or pruned");
+    delete f.storage.historyLimitBytes; delete f.storage.historyLockWaitMs;
     await writeRecord("project-sync-heads", headKey(P), before, f.storage);
   }, f.storage), f.storage);
   assert.equal((await projectEvent(question, f.storage)).event.questions[0], "Which?");
