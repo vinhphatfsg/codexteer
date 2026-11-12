@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { tempPrefix } from "../test-support/temp.mjs";
 import { legacyHead } from "../test-support/fixtures/project-sync-head-0.23.0.mjs";
+import { settledHead } from "../test-support/fixtures/project-sync-head-0.24.1.mjs";
 import { registerManagedThread, getManagedThread, listManagedThreads, managedMembershipDigest, updateManagedThreadCursor } from "../src/project-index.mjs";
 import { registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
 import { syncProject, continueProjectSync, projectEvent } from "../src/project-sync.mjs";
@@ -214,6 +215,28 @@ test("the first sync on a 0.23.0 head still reads a work that was stopped earlie
   assert.ok(row(upgraded, B).events.some(event => event.token === question), "the 0.23.0 question is shown by the sync that settles its work");
   const next = await f.sync(); assert.deepEqual(f.calls, []);
   assert.equal(row(next, B).attention, "human"); assert.deepEqual(row(next, B).events.map(event => event.token), [question]);
+});
+
+test("a row settled by 0.24.1 is carried in the group of settled rows, in sync and in the sync of a wait", async t => {
+  const f = await fixture(t, { project: "legacy" });
+  for (const id of [A, B]) { await updateManagedThreadCursor(id, "c0", "c1", f.storage); f.works.get(id).events.push(message("done")); }
+  await f.stop(A);
+  await writeRecord("project-sync-heads", headKey("legacy"), settledHead(managedMembershipDigest(await listManagedThreads("legacy", f.storage))), f.storage);
+  const written = (await f.head()).settled[A];
+  assert.equal(written.row.group, "検収待ち", "the group 0.24.1 saved");
+  const check = (result, source) => {
+    const carried = row(result, A);
+    assert.equal(f.calls.includes(A), false, `${source} does not read the settled work`);
+    assert.equal(carried.observation, "settled"); assert.equal(carried.group, "監視終了", source);
+    assert.equal(carried.attention, "review"); assert.equal(carried.execution, "idle"); assert.equal(carried.title, "work 1"); assert.equal(carried.cursor, "c1");
+    assert.deepEqual(carried.reason, written.row.reason); assert.deepEqual(carried.settled, { basis: "observed", settled_at: written.settled_at });
+    assert.equal(row(result, B).group, "検収待ち", "a work still read keeps its classified group");
+  };
+  check(await f.sync(), "sync");
+  f.works.get(B).events.push(message("more")); f.works.get(B).turn = "turn-3"; f.calls.length = 0;
+  const waited = await waitProject("legacy", { timeoutMs: 0 }, { storage: f.storage, read: f.read, pollMs: 5, processIdentity: async () => "same-start" });
+  assert.equal(waited.reason, "work_changed"); check(waited.sync, "wait");
+  assert.deepEqual((await f.head()).settled[A], written, "the saved entry is kept as written");
 });
 
 test("a sync that loses the publication race settles nothing and the newer head keeps settled work and its attention", async t => {

@@ -56,6 +56,24 @@ test("a stopped Desktop Cloud member whose thread stays active after all turns e
   assert.equal(row(second, f.id).reason.backend_status, "active");
 });
 
+for (const [name, question, group, attention] of [["a completed turn", false, "検収待ち", "review"], ["an unanswered question", true, "対応が必要", "human"]]) {
+  test(`a member settled on turn evidence after ${name} keeps its row and moves to the group of settled rows`, async t => {
+    const f = await fixture(t);
+    if (question) f.work.events.push({ id: "q", type: "agentMessage", text: "Which?", questions: ["Which?"] });
+    await f.stop();
+    const settling = row(await f.sync(), f.id);
+    assert.equal(settling.settled.basis, "observed"); assert.equal(settling.group, group, "the result that read it keeps the classified group");
+    assert.equal(settling.reason.execution_basis, "turn_status"); assert.equal(settling.reason.backend_status, "active");
+    for (const result of [await f.sync(), (await f.wait()).sync ?? await f.sync()]) {
+      const carried = row(result, f.id);
+      assert.deepEqual(f.calls, [], "the settled member is not read");
+      assert.equal(carried.observation, "settled"); assert.equal(carried.group, "監視終了");
+      assert.equal(carried.execution, "idle"); assert.equal(carried.attention, attention);
+      assert.deepEqual(carried.reason, settling.reason, "the turn evidence that settled it stays on the row");
+    }
+  });
+}
+
 test("a turn that ends while the Desktop Cloud thread status stays active is returned by wait", async t => {
   const f = await fixture(t); Object.assign(f.work, { turnStatus: "inProgress", activeTurns: 1 });
   assert.equal((await f.wait()).reason, "initial_sync"); assert.equal((await f.wait()).timed_out, true);
