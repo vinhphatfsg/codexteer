@@ -174,9 +174,9 @@ APIの検証中に`CAPABILITY_UNVERIFIED`または`RUNTIME_PROTOCOL_UNVERIFIED`�
 
 送信ではDesktopへの再開要求と実際の送信直前にも必要な仕様とruntimeの同一性を確認します。`--based-on`等の安全確認も再開前と送信直前に検証し、必要なAPIが使えないままタスクを再開しません。切り替わっていれば`RUNTIME_CHANGED`で拒否します。新規ターン用ソケットも使用前に所有者・権限・種類を再検査します。不明な受付結果の自動再送はしません。`help`・`supervise prompt`・ローカル履歴一覧・`--dry-run`はruntimeの版に依存しません。
 
-送信前の状態確認では、`historyMode: paginated`のタスクは`thread/read`の`includeTurns:false`と`thread/turns/list`の`itemsView:notLoaded`を使います。全ページからターンIDと状態を確認し、タスク情報を再確認してから送信します。ページ取得の失敗・非対応時は送信とDesktop経由の再開を拒否し、全履歴取得へ切り替えません。旧形式の履歴は従来の取得方式を使います。`--based-on`がv1の場合は従来どおり全履歴で鮮度を確認し、v2の場合は分割取得で確認します。
+送信前の状態確認では、`historyMode: paginated`のタスクは`thread/read`の`includeTurns:false`と`thread/turns/list`の`itemsView:notLoaded`を使います。全ページからターンIDと状態を確認し、タスク情報を再確認してから送信します。ページ取得の失敗・非対応時は送信とDesktop経由の再開を拒否し、全履歴取得へ切り替えません。旧形式の履歴は従来の取得方式を使います。`--based-on`がv1の場合は従来どおり全履歴で鮮度を確認し、v2の場合は分割取得で確認します。Desktop Cloudのタスクは、`thread/read`と最新ターン1つの`thread/turns/list`（`itemsView:notLoaded`）で状態を確認し、`--based-on`がv3の場合はcursorが指すターン以後だけで鮮度を確認します。
 
-WebSocketの受信上限は1メッセージ64 MiBです。Desktop Cloud接続は16 MiBで、エラー文は失敗した接続の上限を示します。超過は`PAYLOAD_TOO_LARGE`として停止し、サーバーの本文や生のエラーは表示しません。送信APIを呼ぶ前なら`not_sent`、呼び出した後で受付を確認できなければ`unknown`を維持します。個別の履歴ページや旧形式の全履歴が上限を超える場合にも上限は解除しません。
+WebSocketの受信上限は1メッセージ64 MiBです。Desktop Cloud接続は16 MiBで、エラー文は失敗した接続の上限を示します。超過は`PAYLOAD_TOO_LARGE`として停止し、サーバーの本文や生のエラーは表示しません。送信APIを呼ぶ前なら`not_sent`、呼び出した後で受付を確認できなければ`unknown`を維持します。個別の履歴ページや旧形式の全履歴が上限を超える場合にも上限は解除しません。Desktop Cloudの読み取りは1回に1ターンを受け取るため、最新ターン1つが16 MiBを超えるタスクは読めません。
 
 ## 監督状態・指摘と接続方式
 

@@ -3,6 +3,7 @@ import { threadSnapshot, fetchThread } from "./observe.mjs";
 import { parseCursor } from "./cursor.mjs";
 import { getCheckpoint, verifyCheckpoint } from "./checkpoint.mjs";
 import { verifyPagedFreshness } from "./paged-read.mjs";
+import { verifyCloudFreshness } from "./desktop-cloud-read.mjs";
 import { assertFindingSend, getFinding } from "./findings.mjs";
 
 export const kindLabels = { decision: "ユーザー決定の伝達", review: "レビュー", hypothesis: "仮説（未確定）", suggestion: "任意提案" };
@@ -32,6 +33,7 @@ export async function prepareDirective(threadId, body, options, id, storage = {}
     if (expiresAt && Date.parse(expiresAt) <= Date.now()) throw Object.assign(new Error("Directive expired before sending."), { code: "EXPIRED_DIRECTIVE" });
     if (observed) {
       if (observed.v === 2) await verifyPagedFreshness(client, threadId, basedOn);
+      else if (observed.v === 3) await verifyCloudFreshness(client, threadId, observed);
       else {
         if (thread.turns?.some(t => t.itemsView && t.itemsView !== "full") || !thread.turns?.length) thread = await fetchThread(client, threadId);
         const current = threadSnapshot(thread);

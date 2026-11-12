@@ -9,6 +9,9 @@
 // not grow with the thread. parseCursor needs no server and returns a claim.
 // resolveTurns checks the claim against the live turn list and rebuilds the
 // in-memory cursor that readPaged and verifyPagedFreshness use.
+//
+// A v3 body is a v1 body over a window of the history: the turn `window` and
+// every newer turn. Desktop Cloud reads list only that window.
 import { createHash } from "node:crypto";
 import { hostFields, targetHost, remoteTransport } from "./target.mjs";
 
@@ -36,6 +39,10 @@ const HASH = /^[a-f0-9]{64}$/;
  *   active_turn_id: string | null, latest_turn_id?: string | null, user_revision?: string }} SnapshotCursor
  */
 /**
+ * `settled`: the window is one final turn, delivered in full, with nothing running or pending.
+ * @typedef {Omit<SnapshotCursor, "v"> & { v: 3, window: string | null, window_started_at: number | null, settled: boolean }} TailCursor
+ */
+/**
  * @typedef {{ v: 2, thread_id: string, turns: { id: string, status: string }[],
  *   head: { cursor: string | null, id: string | null, turn_id: string | null, hash: string | null },
  *   groups: { cursor: string | null, turn_id: string | null, count: number,
@@ -46,12 +53,12 @@ const HASH = /^[a-f0-9]{64}$/;
 export function invalidCursor() { return Object.assign(new Error("Cursor is invalid or history changed. Read again without --since."), { code: "STALE_CURSOR" }); }
 
 /**
- * @param {PagedCursor | SnapshotCursor} cursor
+ * @param {PagedCursor | SnapshotCursor | TailCursor} cursor
  * @param {string} threadId
  */
 export function encodeCursor(cursor, threadId) {
   const w = new Writer();
-  if (cursor.v === 1) writeSnapshotBody(w, cursor); else writePagedBody(w, claimOf(cursor), threadId);
+  if (cursor.v === 2) writePagedBody(w, claimOf(cursor), threadId); else writeSnapshotBody(w, cursor);
   const body = w.done(), token = PREFIX + Buffer.concat([check(threadId, body), body]).toString("base64url");
   // v1 is the --full-history fallback and has always been uncapped, so only the fast cursor is refused here.
   if (cursor.v === 2 && token.length > MAX_TOKEN) throw Object.assign(new Error("Too many in-progress items for a fast cursor. Use --full-history."), { code: "CURSOR_TOO_LARGE" });
@@ -62,7 +69,7 @@ export function encodeCursor(cursor, threadId) {
  * Parse without the server. Accepts "c1" tokens and the earlier base64url JSON tokens.
  * @param {unknown} token
  * @param {string} threadId
- * @returns {PagedClaim | SnapshotCursor}
+ * @returns {PagedClaim | SnapshotCursor | TailCursor}
  */
 export function parseCursor(token, threadId) {
   try {
@@ -74,8 +81,8 @@ export function parseCursor(token, threadId) {
     const body = bytes.subarray(8);
     if (!check(threadId, body).equals(bytes.subarray(0, 8))) throw invalidCursor();
     const r = new Reader(body), version = r.byte();
-    if (version !== 1 && version !== 2) throw invalidCursor();
-    const claim = version === 1 ? readSnapshotBody(r) : readPagedBody(r, threadId);
+    if (version < 1 || version > 3) throw invalidCursor();
+    const claim = version === 2 ? readPagedBody(r, threadId) : readSnapshotBody(r, version);
     r.end();
     return claim;
   } catch { throw invalidCursor(); }
@@ -199,21 +206,26 @@ function readPagedBody(r, threadId) {
 }
 
 // v1 body: 0x01 flags count open prefix state user_revision active? latest?
-// Flags: 1 active turn, 2 latest turn. readSnapshot always sets every field.
+// v3 body: 0x03 and the same fields, then window? window_started_at?
+// Flags: 1 active turn, 2 latest turn, and for v3 4 window turn, 8 its start
+// time, 16 settled. readSnapshot always sets every v1 field.
 function writeSnapshotBody(w, cursor) {
-  w.byte(1);
-  w.byte((cursor.active_turn_id !== null ? 1 : 0) | (cursor.latest_turn_id !== null ? 2 : 0));
+  const tail = cursor.v === 3, window = tail ? cursor.window : null, startedAt = tail ? cursor.window_started_at : null;
+  w.byte(cursor.v);
+  w.byte((cursor.active_turn_id !== null ? 1 : 0) | (cursor.latest_turn_id !== null ? 2 : 0) | (window !== null ? 4 : 0) | (startedAt !== null ? 8 : 0) | (tail && cursor.settled ? 16 : 0));
   w.uint(cursor.count); w.uint(cursor.open.length);
   let previous = -1;
   for (const { index, hash } of cursor.open) { w.uint(index - previous - 1); w.hash(hash); previous = index; }
   w.hash(cursor.prefix); w.hash(cursor.state); w.hash(cursor.user_revision);
   if (cursor.active_turn_id !== null) writeId(w, cursor.active_turn_id);
   if (cursor.latest_turn_id !== null) writeId(w, cursor.latest_turn_id);
+  if (window !== null) writeId(w, window);
+  if (startedAt !== null) w.uint(startedAt);
 }
 
-function readSnapshotBody(r) {
+function readSnapshotBody(r, version) {
   const flags = r.byte();
-  if (flags > 3) throw invalidCursor();
+  if (flags > (version === 1 ? 3 : 31)) throw invalidCursor();
   const count = r.uint(), open = [];
   for (let n = r.count(), index = -1; n > 0; n--) {
     index += r.uint() + 1;
@@ -222,7 +234,9 @@ function readSnapshotBody(r) {
   }
   const prefix = r.hash(), state = r.hash(), user_revision = r.hash();
   const active_turn_id = flags & 1 ? readId(r) : null, latest_turn_id = flags & 2 ? readId(r) : null;
-  return { v: 1, count, open, prefix, state, active_turn_id, latest_turn_id, user_revision };
+  if (version === 1) return { v: 1, count, open, prefix, state, active_turn_id, latest_turn_id, user_revision };
+  const window = flags & 4 ? readId(r) : null, window_started_at = flags & 8 ? r.uint() : null;
+  return { v: 3, window, window_started_at, settled: (flags & 16) === 16, count, open, prefix, state, active_turn_id, latest_turn_id, user_revision };
 }
 
 // An id is a tag and a payload: 0 a UUID, 1 a short prefix and a UUID, 2 a prefix and lowercase hex, 3 text.

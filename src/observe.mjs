@@ -13,7 +13,7 @@ import { encodeCursor, parseCursor, invalidCursor } from "./cursor.mjs";
 import { withAttentionCoverage } from "./attention-coverage.mjs";
 
 export const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-const mutableStatus = new Set(["inProgress", "running", "pending"]);
+export const mutableStatus = new Set(["inProgress", "running", "pending"]);
 const protocolFailure = message => new RpcFailure(message, { code: "PROTOCOL_ERROR" });
 export function project(item, turnId) {
   if (!item?.id || ["reasoning", "hookPrompt"].includes(item.type)) return null;
@@ -69,7 +69,7 @@ export function threadSnapshot(thread) {
   return { state, events, hashes: events.map(digest), user_revision: digest(events.filter(e => e.type === "userMessage")) };
 }
 
-function prefixHash(hashes, count, open) {
+export function prefixHash(hashes, count, open) {
   const excluded = new Set(open.map(x => x.index));
   return digest(hashes.slice(0, count).map((h, i) => excluded.has(i) ? null : h));
 }
@@ -83,10 +83,21 @@ export function trimEvent(event, maxChars, includeOutput) {
   return copy;
 }
 
-export function readSnapshot(thread, { since, limit = 50, maxChars = 2000, includeOutput = false, fullEvents = false } = {}) {
+export function assertReadOptions({ limit = 50, maxChars = 2000 } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isInteger(maxChars) || maxChars < 100 || maxChars > 20000) throw Object.assign(new Error("Invalid read limit or max-chars."), { code: "OPTIONS_INVALID" });
-  const s = threadSnapshot(thread), old = since ? parseCursor(since, thread.id) : null;
+}
+
+export function readSnapshot(thread, options = {}) {
+  const old = options.since ? parseCursor(options.since, thread.id) : null;
   if (old && old.v !== 1) throw invalidCursor();
+  const result = snapshotRead(thread, threadSnapshot(thread), old, options);
+  return { ...result, cursor: encodeCursor({ v: 1, ...result.cursor }, thread.id) };
+}
+
+// The delta from `old` (count, open, prefix, state) over the events of `s`. The
+// returned cursor holds the same fields, unencoded.
+export function snapshotRead(thread, s, old, { limit = 50, maxChars = 2000, includeOutput = false, fullEvents = false } = {}) {
+  assertReadOptions({ limit, maxChars });
   if (old && (old.count > s.events.length || prefixHash(s.hashes, old.count, old.open) !== old.prefix)) throw invalidCursor();
   const updates = old ? old.open.filter(x => s.hashes[x.index] !== x.hash).map(x => x.index) : [];
   const added = Array.from({ length: s.events.length - (old?.count ?? Math.max(0, s.events.length - limit)) }, (_, i) => i + (old?.count ?? Math.max(0, s.events.length - limit)));
@@ -98,8 +109,8 @@ export function readSnapshot(thread, { since, limit = 50, maxChars = 2000, inclu
     if (pending || mutableStatus.has(s.events[i].status) || i === count - 1) open.push({ index: i, hash: pending?.hash ?? s.hashes[i] });
   }
   const stateHash = digest(s.state);
-  const cursor = encodeCursor({ v: 1, count, open, prefix: prefixHash(s.hashes, count, open), state: stateHash,
-    active_turn_id: s.state.active_turn_id, latest_turn_id: thread.turns?.at(-1)?.id ?? null, user_revision: s.user_revision }, thread.id);
+  const cursor = { count, open, prefix: prefixHash(s.hashes, count, open), state: stateHash,
+    active_turn_id: s.state.active_turn_id, latest_turn_id: thread.turns?.at(-1)?.id ?? null, user_revision: s.user_revision };
   return { ...s.state, events: selected.map(i => ({ ...(fullEvents ? s.events[i] : trimEvent(s.events[i], maxChars, includeOutput)), change: old && i < old.count ? "updated" : "added" })),
     running_commands: s.events.filter(e => e.type === "commandExecution" && mutableStatus.has(e.status)).map(e => trimEvent(e, maxChars, includeOutput)),
     ...hostFields(), cursor, changed: !old || selected.length > 0 || old.state !== stateHash, has_more: updates.length + added.length > selected.length,
@@ -126,7 +137,7 @@ export async function fetchThread(client, threadId, metadata) {
 
 async function readAttempt(client, threadId, options) {
   const old = options.since ? parseCursor(options.since, threadId) : null;
-  if (options.fullHistory && old?.v === 2) throw Object.assign(new Error("A v2 cursor uses paged history. Omit --full-history, or read --full-history without --since to start a full check."), { code: "OPTIONS_INVALID" });
+  if (options.fullHistory && old && old.v !== 1) throw Object.assign(new Error(`A v${old.v} cursor reads only part of the history. Omit --full-history, or read --full-history without --since to start a full check.`), { code: "OPTIONS_INVALID" });
   const { thread } = await client.request("thread/read", { threadId, includeTurns: false });
   if (thread?.id !== threadId || !Array.isArray(thread.turns)) throw protocolFailure("App Server returned invalid task metadata.");
   if (thread.historyMode === "paginated" && !options.fullHistory) {
@@ -134,7 +145,11 @@ async function readAttempt(client, threadId, options) {
     const { readPaged } = await import("./paged-read.mjs");
     return readPaged(client, thread, options);
   }
-  if (old?.v === 2) throw invalidCursor();
+  if (isDesktopCloudTask(threadId) && !options.fullHistory) {
+    const { readCloudTail } = await import("./desktop-cloud-read.mjs");
+    return readCloudTail(client, thread, options);
+  }
+  if (old && old.v !== 1) throw invalidCursor();
   return { ...readSnapshot(await fetchThread(client, threadId, thread), options), history_scope: thread.observationSource ?? "full" };
 }
 

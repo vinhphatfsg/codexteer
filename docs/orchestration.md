@@ -73,7 +73,7 @@ codexteer project event <EVENT-TOKEN> --json
 codexteer project sync --project sample --exclude-unreadable <THREAD> --reason '履歴が受信上限を超える' --json
 ```
 
-停止済みなのに読めない担当（履歴が受信上限を超えたDesktop Cloudタスクなど）は、そのままではsyncを不完全にし続けます。理由を付けてこの指定を実行すると、syncはその担当をもう一度読み、結果を`exclude_unreadable.outcome`で返します。
+停止済みなのに読めない担当（最新ターン1つが受信上限を超えるDesktop Cloudタスク、前の版のcursorを読み直す全履歴が上限を超えるタスクなど）は、そのままではsyncを不完全にし続けます。理由を付けてこの指定を実行すると、syncはその担当をもう一度読み、結果を`exclude_unreadable.outcome`で返します。
 
 | outcome | 意味 |
 | --- | --- |

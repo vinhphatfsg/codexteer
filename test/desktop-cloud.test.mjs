@@ -19,6 +19,7 @@ const metadata = () => ({ id, turns: [], status: { type: "idle" }, historyMode: 
 const client = (calls, fail) => ({ close() {}, async request(method, params) {
   calls.push({ method, params });
   if (method === "thread/read") return { thread: metadata() };
+  if (method === "thread/turns/list") return { data: [], nextCursor: null, backwardsCursor: null };
   if (method === "model/list") return { data: [{ model: "fixture-default", isDefault: true, defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "high" }] }] };
   if (method === "thread/start") return { thread: { ...metadata(), id } };
   if (method === "thread/name/set") return {};

@@ -8,7 +8,8 @@ import { fail } from "../src/cli.mjs";
 import { startWork } from "../src/work-start.mjs";
 import { createDesktopCloudTask, reconcileDesktopCloudCreation, desktopCloudReceipt, sendDesktopCloudInput } from "../src/desktop-cloud.mjs";
 import { DesktopCloudClient } from "../src/desktop-cloud-api.mjs";
-import { fetchThread, readSnapshot, observeThread } from "../src/observe.mjs";
+import { observeThread } from "../src/observe.mjs";
+import { desktopCloudService } from "../test-support/desktop-cloud-service.mjs";
 import { listRecords, storePath } from "../src/store.mjs";
 import { historyBucket } from "../src/project-history.mjs";
 import { getManagedThread, managedMembershipDigest } from "../src/project-index.mjs";
@@ -25,31 +26,10 @@ async function fixture(t) {
   const home = await mkdtemp(tempPrefix("ct-dc-home-")), root = await mkdtemp(tempPrefix("ct-dc-root-"));
   t.after(() => Promise.all([rm(home, { recursive: true, force: true }), rm(root, { recursive: true, force: true })]));
   const policy = "方針 ${literal}\r\n末尾\n"; await writeFile(`${root}/CODEXTEER.md`, policy);
-  const state = { turns: [], flags: [], environment: ENV, status: "idle", lost: false, missing: false, calls: [] };
-  const rpc = { close() {}, async request(method, params) {
-    state.calls.push({ method, params });
-    if (method === "model/list") return { data: [{ model: "neutral-default", isDefault: true, defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "high" }] }] };
-    if (method === "thread/start" && state.lostCreate) throw Object.assign(new Error("creation receipt lost"), { uncertain: true });
-    if (method === "thread/start") return { thread: { id: uuid } };
-    if (method === "thread/name/set") return {};
-    if (method === "thread/read") {
-      if (state.missing) throw Object.assign(new Error("not visible"), { code: "THREAD_NOT_FOUND" });
-      return { thread: { id: uuid, name: "worker", status: { type: state.status, ...(state.flags === null ? {} : { activeFlags: state.flags }) },
-        environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: state.environment }] } };
-    }
-    if (method === "thread/turns/list") return { data: state.turns.map(turn => ({ ...turn, itemsView: "full" })), nextCursor: null, backwardsCursor: null };
-    if (method === "turn/start") {
-      const turn = { id: `turn-${state.turns.length}`, status: "inProgress", items: [{ id: randomUUID(), type: "userMessage", clientId: state.nullClientId ? null : params.clientUserMessageId, content: params.input }] };
-      state.turns.push(turn); state.status = "active";
-      if (state.lost) throw Object.assign(new Error("lost receipt"), { uncertain: true });
-      return { turn: { id: turn.id } };
-    }
-    if (method === "turn/steer") { state.turns.at(-1).items.push({ id: randomUUID(), type: "userMessage", clientId: params.clientUserMessageId, content: params.input }); return { turnId: state.turns.at(-1).id }; }
-    throw new Error(`Unexpected ${method}`);
-  } };
+  const { rpc, state } = desktopCloudService(uuid, { environment: ENV });
   const storage = { home }, connect = async () => new DesktopCloudClient(rpc), environments = async () => ({ environments: [{ id: ENV, name: "Fixture" }] });
   const transport = { ...storage, connect, environments };
-  const read = async (id, options) => readSnapshot(await fetchThread(await connect(), id), options);
+  const read = (id, options) => observeThread(id, options, { connect });
   const deps = { storage, resolveEnvironment: async selector => { assert.ok([ENV, "Fixture"].includes(selector)); return { id: ENV, name: "Fixture" }; },
     resolveModelSelection: options => resolveCloudModelSelection(options, transport),
     create: ({ environmentConfigId, prompt, title, attemptId, modelSelection }) => createDesktopCloudTask(environmentConfigId, prompt, { title, attemptId, modelSelection }, transport),
