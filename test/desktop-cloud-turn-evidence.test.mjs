@@ -147,21 +147,17 @@ test("a read from the cursor's turn keeps the unobserved mark, with and without 
 
 test("a wait that ends because its launcher is gone still names the members it could not observe", async t => {
   const f = await member(t); f.running();
-  const wait = dependencies => waitProject("P", {}, { ...f.dependencies, ...dependencies });
   assert.equal((await waitProject("P", { timeoutMs: 0 }, f.dependencies)).reason, "initial_sync");
-  let parent = 4242;
-  setTimeout(() => { parent = 1; }, 50);
-  const stopped = await wait({ pollMs: 15000, parentPid: () => parent });
-  assert.deepEqual(stopped, { project_id: "P", changed: false, timed_out: false, reason: "launcher_exited", unreadable: [],
-    attention_unobserved: [{ thread_id: ID, attention_coverage: UNOBSERVED }], sync: null });
-
-  // The launcher goes while a poll is still reading: the last completed read names them.
-  parent = 4242;
-  const began = performance.now();
-  const midRead = await wait({ parentPid: () => parent, read: async (...args) => {
-    if (parent !== 1 && performance.now() - began > 100) { parent = 1; await delay(1500); }
-    return f.read(...args);
-  } });
-  assert.equal(midRead.reason, "launcher_exited"); assert.equal(midRead.sync, null);
-  assert.deepEqual(midRead.attention_unobserved, [{ thread_id: ID, attention_coverage: UNOBSERVED }]);
+  const expected = { project_id: "P", changed: false, timed_out: false, reason: "launcher_exited", unreadable: [],
+    attention_unobserved: [{ thread_id: ID, attention_coverage: UNOBSERVED }], sync: null };
+  // The launcher goes at the tenth read, so several polls of this wait have
+  // completed: first at the start of a poll, then while that read is slow.
+  for (const slow of [0, 1500]) {
+    let parent = 4242, reads = 0;
+    const stopped = await waitProject("P", {}, { ...f.dependencies, parentPid: () => parent, read: async (...args) => {
+      if (++reads === 10) { parent = 1; await delay(slow); }
+      return f.read(...args);
+    } });
+    assert.deepEqual(stopped, expected, slow ? "the launcher went during a read" : "the launcher went between reads");
+  }
 });
