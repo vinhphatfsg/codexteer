@@ -134,8 +134,9 @@ test("the orchestrator prompt and help say what a running Desktop Cloud turn hid
   for (const cloudCommand of [null, "prepared-cloud --connection desktop-cloud"]) {
     const { prompt } = orchestrationPrompt("P", "goal", "prepared-command --connection shared", { cloudCommand });
     assert.match(prompt, /attention_coverage:running_turn_unobserved/); assert.match(prompt, /attention_unobserved/);
-    assert.match(prompt, /「待っているものはない」とユーザーへ伝えず、codexteerは実行中のDesktop Cloudターンを観測できないことと、Codexの画面で確認が必要なことを伝えます/);
-    assert.match(prompt, /ターン中に出た質問は、ターンが終わるとwaitが返します/);
+    assert.match(prompt, /実行中のDesktop Cloudターンで、codexteerには質問・承認待ちが見えません/);
+    assert.match(prompt, /「待っているものはない」と伝えず、見えないこととCodexの画面で確認が必要なことをユーザーへ伝えます/);
+    assert.match(prompt, /その質問はターンが終わるとwaitが返します/);
     assert.doesNotMatch(prompt, /Desktop Cloudの質問は(?:見え|観測でき)ません/);
   }
   for (const name of ["status", "read", "project", "work", "desktop-cloud"]) {

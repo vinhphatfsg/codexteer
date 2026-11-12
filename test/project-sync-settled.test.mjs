@@ -144,7 +144,7 @@ test("an excluded unreadable work keeps its unresolved attention through later s
     const next = await f.sync(), carried = row(next, A);
     assert.equal(f.calls.includes(A), false, `sync ${attempt} after exclusion`); assert.equal(next.complete, true);
     assert.equal(carried.observation, "settled"); assert.equal(carried.complete, false);
-    assert.equal(carried.attention, "human"); assert.equal(carried.group, "対応が必要"); assert.equal(carried.attention_repeated, true);
+    assert.equal(carried.attention, "human"); assert.equal(carried.group, "監視終了"); assert.equal(carried.attention_repeated, true);
     assert.equal(carried.settled.reason, "history exceeds the receive limit"); assert.equal(carried.settled.error, "PAYLOAD_TOO_LARGE");
     assert.equal(next.works.at(-1).thread_id, A, "a settled row follows the rows still being read, unresolved attention or not");
     assert.deepEqual(carried.events.map(event => event.token), [token], "the carried row still cites the unresolved question");
@@ -383,7 +383,7 @@ test("a question a complete sync showed stays on the row of its stopped work, wh
     const next = await f.sync({ byteBudget: 4096 }), carried = row(next, A);
     assert.equal(f.calls.includes(A), false, `sync ${attempt} after settling`); assert.equal(next.complete, true);
     assert.deepEqual(next.works.map(work => work.thread_id), [C, B, A], "the settled row follows every row still being read");
-    assert.equal(carried.observation, "settled"); assert.equal(carried.attention, "human"); assert.equal(carried.group, "対応が必要");
+    assert.equal(carried.observation, "settled"); assert.equal(carried.attention, "human"); assert.equal(carried.group, "監視終了");
     assert.equal(carried.attention_repeated, true); assert.deepEqual(carried.events.map(event => event.token), [token]);
     assert.deepEqual(carried.reason, settling.reason); assert.equal(carried.reason.evidence[0].question_event, true);
     assert.deepEqual((await f.head()).unresolved_attention[A], attention);
@@ -395,6 +395,32 @@ test("a question a complete sync showed stays on the row of its stopped work, wh
   assert.deepEqual(paged.works.map(work => work.thread_id), [C, B], "a settled row that needs attention does not take the first page from the rows still being read");
   const rest = await continueProjectSync(paged.sync_token, { byteBudget: 4096, offset: paged.next_offset }, f.storage);
   assert.deepEqual(rest.works.map(work => work.thread_id), [A]); assert.equal(rest.works[0].attention, "human"); assert.equal(rest.continuation_token, null);
+});
+
+test("settled rows have their own group, so only works still read are grouped as needing action", async t => {
+  const f = await fixture(t, { count: 4 }), D = uuid(4);
+  for (const id of [A, C]) f.works.get(id).events.push(message(`question-${id.slice(-1)}`, { questions: ["Which?"] }));
+  f.works.get(D).events.push(message("report"));
+  await f.sync(); await f.stop(A); await f.stop(D);
+  const settling = await f.sync();
+  assert.equal(row(settling, A).settled.basis, "observed"); assert.equal(row(settling, A).group, "対応が必要", "the result that settles a work still shows it as read");
+  assert.equal(row(settling, D).settled.basis, "observed"); assert.equal(row(settling, D).group, "検収待ち");
+  const synced = await f.sync();
+  f.works.get(B).turn = "turn-2b";
+  const waited = await wait(f, 2000);
+  assert.equal(waited.reason, "work_changed");
+  for (const result of [synced, waited.sync]) {
+    assert.deepEqual(result.works.filter(work => work.group === "対応が必要").map(work => work.thread_id), [C], "only the live question needs action");
+    for (const id of [A, D]) { assert.equal(row(result, id).observation, "settled"); assert.equal(row(result, id).group, "監視終了"); }
+    const asked = row(result, A);
+    assert.equal(asked.attention, "human"); assert.equal(asked.attention_repeated, true); assert.equal(asked.resolution_unconfirmed, true);
+    assert.deepEqual(asked.reason, row(settling, A).reason); assert.deepEqual(asked.events.map(event => event.event_id), ["question-1"]);
+    assert.equal(row(result, D).attention, "review"); assert.deepEqual(row(result, D).events, []);
+    assert.deepEqual(result.works.map(work => work.thread_id), [C, B, A, D]);
+  }
+  const compact = await f.sync({ byteBudget: 4096 }, { read: async (id, options) => ({ ...(await f.read(id, options)), title: "題".repeat(700) }) });
+  const rest = await continueProjectSync(compact.sync_token, { byteBudget: 4096, offset: compact.next_offset }, f.storage);
+  assert.ok(rest.works.length && rest.works.every(work => work.observation === "settled" && work.group === "監視終了"), "a later page keeps the group");
 });
 
 test("a stopped work with nothing new since the last wait return settles in a partial sync", async t => {

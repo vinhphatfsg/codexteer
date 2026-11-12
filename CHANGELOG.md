@@ -36,11 +36,27 @@ Desktop Cloudのスレッドは、最後のターンが終わった後も`status
 - 全ての結果の`unreadable`は`[{thread_id, error, reported}]`になりました。`reported:true`の担当は、次に読めるまで監視されていません。`reported:false`の担当は直近の照会で失敗しただけで、waitは読み続け、読めない状態が続けば報告します。他の理由で返る結果が続いても、最初の失敗から数え続けます。公開競合で返った結果の`reported`は、先に公開されたheadの記録を示します。
 - 読めた担当の変化は、他の担当が読めない間も従来どおり返します。全ての結果の`unreadable`は、従来どおり直近の照会で読めなかった担当を並べます。`initial_sync`・`membership_changed`・`work_changed`・公開競合・`owner_exited`・timeoutと終了値は変わりません。
 
+バックグラウンドタスクとして動かした`project wait`は、そのタスクを停止しても動き続けていました。停止で終了するのは起動したシェルだけで、waitにはシグナルも届かないためです。残ったwaitがprojectのlockを持ち続け、次のwaitは`RECORD_BUSY`になり、誰にも通知されない変化を公開していました。
+
+- `project wait`は、自分を起動したコマンド（親プロセス）が終了すると、1秒以内にwait記録とlockを解放し、何も公開せずに`reason:launcher_exited, changed:false, timed_out:false, sync:null`、終了値1で終わります。担当を読んでいる途中でも記録とlockは1秒以内に解放し、プロセスはその読み取りの終了後に何も公開せず終わります。公開しなかった変化は次のwaitが返します。公開を始めていた照会だけは、その結果を返してから終わります。
+- フォアグラウンドの実行、終了通知付きのバックグラウンドタスク、生き続けるラッパースクリプトからの実行は変わりません。開始時に既に親から切り離されているwait（シェルの最後のコマンドとして`nohup … &`で起動した場合など）も従来どおり動き続けます。waitを起動したシェルが後から終了する形で切り離したwaitは、そのシェルの終了時に終わるようになります。
+
+`project sync --continue TOKEN`は、`--offset`と`--event-offset`を省略すると先頭ページを返していました。結果にも次のコマンドが示されないため、tokenだけを繰り返すと同じ担当を読み続け、担当の多いprojectでは残りを読めませんでした。
+
+- syncとwaitの結果は`continuation_command`を持ちます。続きがあれば次に実行するコマンド全体（token・`--offset`・`--event-offset`入り）、最後のページでは`null`です。`null`になるまで実行すれば全ての担当を読み切れます。
+- `project sync --continue TOKEN`は`--offset`と`--event-offset`の両方を必須にしました。どちらかがなければ`PROJECT_SYNC_OFFSET_REQUIRED`で拒否し、渡す値をエラーに示します。両方を渡す呼び出しは変わりません。tokenだけの呼び出し（`wait_sync_token`からのwait結果の復元を含む）は`--offset 0 --event-offset 0`を付けてください。
+
+`--connection desktop-cloud`（と`--connection cloud`）の`project guard --project ID --status`は、helpに載っているのに`CLOUD_OPTIONS_INVALID`で失敗していました。
+
+- `project guard --status`は、どの`--connection`でも同じ結果（`stop_hook:configured|unverified`）を返します。helpに載る他の`project`の使い方は、接続指定による違いがないことを確認しました。
+
 最後のターンが未回答の質問や失敗で終わった停止済みの担当を、syncとwaitが毎回読み続けていました。停止済みの担当には誰も回答しないため、この状態は終わらず、projectが長く続くほど読む担当が増えていました。
 
 - `project control stop`した担当は、停止後の完全な観測で終了済みか実行中ターンのないidleで、承認・質問のフラグが空と分かれば、未解決attentionが残っていても`settled`になり、次のsyncから読みません。`settled`にする回の担当行がその質問・失敗を`attention`と`events`で示し、以後の行も同じ未解決attentionと根拠のイベントを再掲します。未解決attentionは消えません。承認・質問のフラグが立っている担当、ターン実行中の担当、フラグが不明な担当は、従来どおり読み続けます。
 - waitの基準があるprojectの`complete:false`のsyncは、未解決attentionが残る担当を従来どおり`settled`にしません。その担当は、次にwaitが返した回か完全なsyncの回に、質問・失敗を示した行で`settled`になります。waitに返すべき質問を、読めない担当が残るsyncが先に消費することはありません。
-- `settled`の担当の行は、「対応が必要」でも、今回読んだ全ての担当の行の後に並びます。読まなくなった担当の行が結果の最初のページを占めることはなくなりました。
+- `settled`の担当の行は、今回読んだ全ての担当の行の後に並びます。読まなくなった担当の行が結果の最初のページを占めることはなくなりました。
+- `settled`の担当の行（`observation:"settled"`）の`group`は、新しい値「監視終了」になりました。未回答の質問や失敗で終わった担当も、`attention`・`reason`・`events`はそのまま残り、`group`だけが変わります。これまでは毎回「対応が必要」に並び、読み続けている担当の新しい質問と見分けにくくなっていました。「対応が必要」は読み続けている担当だけになります。`settled`にする回の行は、その回に読んだ結果なので従来の分類のままです。
+- `work tell`のreceiptの`other_work.human_attention`は、`settled`の担当を含めなくなりました。停止済みで読まれない担当には対応を続けられないためです。その担当の質問は`project sync`の「監視終了」の行で確認できます。
 
 履歴の上限（256 MiB）の確認が、観測したデータの8倍と1 MiBの空きを求めていました。実際に書く量の数倍にあたり、使用量が上限よりずっと少なくてもsyncとwaitが`PROJECT_HISTORY_LIMIT`で拒否されました。拒否されるとcursorが進まないため、次の実行は同じ履歴を読み直していました。上限に達した後は、人が`project prune`を実行するまで保存できませんでした。
 

@@ -179,6 +179,12 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
     throw failure("Use project wait --project ID [--timeout-ms N], with a nonnegative integer timeout.");
   }
   const storage = dependencies.storage ?? {}, identity = dependencies.processIdentity ?? processIdentity;
+  // Nobody is told the result once the command that started this wait is gone.
+  // A killed shell sends its child no signal and closes nothing the child can
+  // see: the child only gets another parent. A wait that starts already
+  // detached (nohup as its shell's last command) has no launcher to lose.
+  const parentPid = dependencies.parentPid ?? (() => process.ppid), launcher = parentPid();
+  const launcherExited = () => launcher > 1 && parentPid() !== launcher;
   // A second waiter must not consume a change that the first is about to return.
   const key = createHash("sha256").update(projectId).digest("hex").slice(0, 40);
   let owned = false;
@@ -192,6 +198,7 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
       const owner = await (dependencies.orchestratorIdentity ?? (() => orchestratorIdentity(dependencies)))();
       const record = { schema: 1, project_id: projectId, pid: process.pid, process_start: start, owner, created_at: new Date().toISOString() };
       await writeRecord("project-waits", key, record, storage);
+      let watch;
       try {
         // Separate from reviewed cursors: retain observed clear/reappearance
         // edges across bounded waits, keyed to each member's baseline entry.
@@ -222,10 +229,20 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
         // A wait that outlives its session would hold the project lock forever and
         // publish changes nobody reads. An inspection error is not proof of exit.
         const ownerExited = async () => !!owner && await identity(owner.pid).then(start => start !== owner.process_start, () => false);
+        // A poll reads every member, which can take minutes. The launcher is
+        // watched meanwhile so the record and lock go within a second; the read
+        // left behind stops at its probe. A poll whose probe chose to publish is
+        // awaited, so a change is never published without being returned.
+        let publishing = false, stopReading = null;
+        watch = launcher > 1 ? setInterval(() => { if (!publishing && launcherExited()) stopReading?.(); }, 1000) : null;
         for (;;) {
-          if (await ownerExited()) return { project_id: projectId, changed: false, timed_out: false, reason: "owner_exited", ...coverage(), sync: null };
+          const abandoned = launcherExited() ? "launcher_exited" : await ownerExited() ? "owner_exited" : null;
+          if (abandoned) return { project_id: projectId, changed: false, timed_out: false, reason: abandoned, ...coverage(), sync: null };
           let reason;
-          const sync = await syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => {
+          publishing = false;
+          const reading = syncProject(projectId, {}, { ...dependencies, waitProbe: snapshot => {
+            // The launcher went during this read: leave the change to the next wait.
+            if (launcherExited()) return null;
             failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete ? [] : [[id, state.error]]));
             unobserved = [...snapshot.states].flatMap(([thread_id, state]) => {
               const attention_coverage = attentionCoverage(state.latest, state.member.connection);
@@ -234,8 +251,11 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
             const { lasting, report } = unreadStreaks(snapshot.previous, observedAttention, failures, graceMs);
             // A quiet poll adds no member, so this is also what the head holds.
             reported = report;
-            return (reason = probeReason(snapshot, observedAttention, lasting)) ? report : null;
+            publishing = !!(reason = probeReason(snapshot, observedAttention, lasting));
+            return publishing ? report : null;
           } });
+          const sync = await new Promise((resolve, reject) => { reading.then(resolve, reject); stopReading = () => resolve(null); });
+          stopReading = null;
           // A newer sync won the head: nothing this wait read was published or reviewed.
           if (sync?.publication_conflict) {
             reason = "observation_failed";
@@ -248,14 +268,16 @@ export async function waitProject(projectId, { timeoutMs } = {}, dependencies = 
             await writeRecord("project-wait-attention", key, observedAttention, storage); savedAttention = observed;
           }
           if (sync) return { project_id: projectId, changed: reason !== "observation_failed", timed_out: false, reason, ...coverage(), sync };
+          if (launcherExited()) continue;
           if (performance.now() >= deadline) return { project_id: projectId, changed: false, timed_out: true, reason: "timeout", ...coverage(), sync: null };
-          await delay(Math.max(0, Math.min(pollMs, deadline - performance.now())));
+          const next = Math.min(deadline, performance.now() + pollMs);
+          while (performance.now() < next && !launcherExited()) await delay(Math.min(1000, next - performance.now()));
         }
-      } finally { await removeRecord("project-waits", key, storage); }
+      } finally { clearInterval(watch); await removeRecord("project-waits", key, storage); }
     } finally { process.title = originalTitle; }
   }, storage).catch(error => {
     // A record busy inside a running wait is not another session's wait.
-    if (error.code === "RECORD_BUSY" && !owned) error.message = "Project wait is already owned by another operation. Use one orchestrator per CODEX_HOME, host and project. Do not adopt another session's wait or remove its lock; have the owning session finish/cancel its wait and hand off before retrying. A wait whose session has exited ends by itself at its next poll; after a resume, retry shortly.";
+    if (error.code === "RECORD_BUSY" && !owned) error.message = "Project wait is already owned by another operation. Use one orchestrator per CODEX_HOME, host and project. Do not adopt another session's wait or remove its lock; have the owning session finish/cancel its wait and hand off before retrying. A wait whose session has exited ends by itself at its next poll, and one whose launching command was stopped releases the project within a second; after either, retry shortly.";
     throw error;
   });
 }

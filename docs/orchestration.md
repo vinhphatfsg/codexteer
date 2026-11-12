@@ -44,20 +44,20 @@ sharedの作成先はDesktopの実在project ID・完全一致名とrootsを照�
 
 作成結果の担当IDとreceiptを記録します。`create_not_dispatched`は作成側が未作成・作成RPC未送信・指示未送信・担当IDなしを明示した段階です。原因を直して同じ発注・開始オプションを再実行すると同じattempt_idで作成をやり直せます。部分成功・unknown・観測不能では同じ担当を読み取り照合し、createを繰り返しません。membershipを先に登録してから監督を結び、stoppedを自動で置き換えません。初回観測で省略件数が0と確認できない場合は、sharedとDesktop Cloudの双方でhistory gapとして止まり、cursorを保存しません。完全な初回観測の公開イベント全文は未提示として保存し、次のsyncで返します。
 
-syncは全担当を一巡してからbacklogを読み、動作中・対応が必要・検収待ち・未確認へ分類します。Desktop Cloudのスレッドは、最後のターンが終わった後も`status`が`active`のまま残ることがあります。そのためDesktop Cloudの担当の`execution`は、ターンの状態（最新ターンの状態と実行中ターンの数）で決めます。実行中のターンがあれば`active`、全てのターンが終わっていれば`idle`です。スレッドの`status`と食い違うときはターンの状態を採り、行の`reason`に`backend_status`（スレッドの`status`）と`execution_basis:"turn_status"`・`latest_turn_status`・`active_turn_count`を残します。最後のターンが`completed`なら検収待ちになります。ターンの状態が欠けているか矛盾するときは、スレッドの`status`のままにします。他の接続の`execution`は従来どおりスレッドの`status`で決めます。未解決attentionは解消証拠が得られるまで根拠とtokenを再掲します。バックエンドの待機フラグは完全な最新観測で消えたら解消します。質問は後続の人間入力または同じイベントの回答済み状態、失敗は該当turnの状態更新または後続turnの成功を根拠に解消します。空の待機フラグだけでは質問や失敗を消しません。根拠不足の古いattentionは、完全な成功観測後にhistory_notesへ分け、現在の分類を上書きしません。履歴の欠落、429、不完全な取得を変化なしと扱いません。idleで直近turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ちです。開始前idleや証明不足は未確認として区別します。旧Cloudの質問・承認状態は未確認なので、completedだけでは検収待ちとしません。再起動・要約後はsyncから再開します。
+syncは全担当を一巡してからbacklogを読み、動作中・対応が必要・検収待ち・未確認へ分類します。読むのを終えた停止済みの担当（`settled`）の行は、5つ目の「監視終了」に分けます。Desktop Cloudのスレッドは、最後のターンが終わった後も`status`が`active`のまま残ることがあります。そのためDesktop Cloudの担当の`execution`は、ターンの状態（最新ターンの状態と実行中ターンの数）で決めます。実行中のターンがあれば`active`、全てのターンが終わっていれば`idle`です。スレッドの`status`と食い違うときはターンの状態を採り、行の`reason`に`backend_status`（スレッドの`status`）と`execution_basis:"turn_status"`・`latest_turn_status`・`active_turn_count`を残します。最後のターンが`completed`なら検収待ちになります。ターンの状態が欠けているか矛盾するときは、スレッドの`status`のままにします。他の接続の`execution`は従来どおりスレッドの`status`で決めます。未解決attentionは解消証拠が得られるまで根拠とtokenを再掲します。バックエンドの待機フラグは完全な最新観測で消えたら解消します。質問は後続の人間入力または同じイベントの回答済み状態、失敗は該当turnの状態更新または後続turnの成功を根拠に解消します。空の待機フラグだけでは質問や失敗を消しません。根拠不足の古いattentionは、完全な成功観測後にhistory_notesへ分け、現在の分類を上書きしません。履歴の欠落、429、不完全な取得を変化なしと扱いません。idleで直近turnのcompletedと実行中turnなしを証明でき、未解決attentionがなければ検収待ちです。開始前idleや証明不足は未確認として区別します。旧Cloudの質問・承認状態は未確認なので、completedだけでは検収待ちとしません。再起動・要約後はsyncから再開します。
 
 ```sh
 codexteer project sync --continue <TOKEN> --offset <NEXT_OFFSET> --event-offset <NEXT_EVENT_OFFSET> --json
 codexteer project event <EVENT-TOKEN> --json
 ```
 
-出力は既定16000 UTF-8 bytes、指定範囲4096〜1048576です。同じ担当内のイベントも分割します。続きは返されたtokenと両offsetを使い、`details_omitted:true`ならeventのtokenまたは担当行のdetail_tokenから詳細を取得します。
+出力は既定16000 UTF-8 bytes、指定範囲4096〜1048576です。同じ担当内のイベントも分割します。続きがある結果は`continuation_command`に次のコマンド全体（token、`next_offset`、`next_event_offset`入り）を持ち、最後のページでは`null`です。続きはこのコマンドを実行し、`null`になるまで繰り返します。保存済みCLIや`--connection`を使っている場合は、同じCLIと接続指定で`project sync`以降の引数を使います。`--continue`には`--offset`と`--event-offset`の両方が必須で、どちらかがなければ`PROJECT_SYNC_OFFSET_REQUIRED`で拒否します。位置を省略すると先頭ページを繰り返し返すためです。snapshotを先頭から読み直すときは`--offset 0 --event-offset 0`を付けます。`details_omitted:true`ならeventのtokenまたは担当行のdetail_tokenから詳細を取得します。
 
 ### 停止済みの担当を読むのを終える
 
-`project control stop`した担当は、停止を確認した後のsyncでもう一度完全に読みます。実行が終了済みか、idleで実行中のターンがないと確かめられ、承認・質問のフラグが空と分かれば、その回の担当行に通常の観測結果と`settled`（`basis:"observed"`と`settled_at`）を付け、次のsyncからその担当を読みません。以後の行は`observation:"settled"`で、今回読んだ全ての担当の後に並び、最後に読んだときの題名・状態・cursorを示します。cursor・イベント・詳細recordは増えません。`complete`は今回読んだ担当だけで決まり、`membership_count`とmembership digestは全担当のままです。
+`project control stop`した担当は、停止を確認した後のsyncでもう一度完全に読みます。実行が終了済みか、idleで実行中のターンがないと確かめられ、承認・質問のフラグが空と分かれば、その回の担当行に通常の観測結果と`settled`（`basis:"observed"`と`settled_at`）を付け、次のsyncからその担当を読みません。以後の行は`observation:"settled"`、`group:"監視終了"`で、今回読んだ全ての担当の後に並び、最後に読んだときの題名・状態・cursorを示します。cursor・イベント・詳細recordは増えません。`complete`は今回読んだ担当だけで決まり、`membership_count`とmembership digestは全担当のままです。
 
-最後のターンが未回答の質問や失敗で終わった担当も、同じ条件で`settled`になります。停止済みの担当には誰も回答しないため、その質問や失敗は解消しないからです。`settled`にする回の担当行は、その質問・失敗を`attention`と`events`で示します。以後の行も同じ`attention`と根拠のイベントを再掲し、「対応が必要」のまま残ります。未解決attentionは消えません。未解決attentionのない`settled`の行は`events:[]`です。
+最後のターンが未回答の質問や失敗で終わった担当も、同じ条件で`settled`になります。停止済みの担当には誰も回答しないため、その質問や失敗は解消しないからです。`settled`にする回の担当行は、その質問・失敗を`attention`と`events`で示します。以後の行も同じ`attention`・`reason`と根拠のイベントを再掲します。未解決attentionは消えません。ただし`group`は「監視終了」になり、「対応が必要」には読み続けている担当だけが並びます。停止済みの担当の古い質問と、動いている担当の新しい質問を`group`で見分けられます。`settled`にする回の行は、その回に読んだ結果なので通常の分類（質問や失敗があれば「対応が必要」）のままです。未解決attentionのない`settled`の行は`events:[]`です。
 
 承認・質問のフラグが立っている担当、ターン実行中の担当、フラグが不明な担当は、停止済みでも読み続けます。idleの担当を`settled`にするのは、全てのターンが終わったと確認できた場合だけです。実行中ターンの数が不明な担当、最新ターンの状態が不明か実行中の担当、数と最新ターンが食い違う担当は、どの接続でも読み続けます。フラグの解消とidleを完全な観測で確認した回に`settled`になります。
 
@@ -82,11 +82,11 @@ codexteer project sync --project sample --exclude-unreadable <THREAD> --reason '
 | `already_settled` | 既に`settled`だった。読まず、保存済みの理由も変えない。 |
 | `not_applied` | 除外しなかった。429など再試行を求める応答、ページ上限、読み取り中の更新、cursorやheadの競合が該当する。`error`のcodeを確認して再実行する。 |
 
-除外した担当の未解決attentionは解消しません。以後のsyncでも「対応が必要」として、今回読んだ担当の後に残ります。除外を取り消す操作はありません。Desktopが起動していないなど接続全体の失敗も読み取り失敗として扱うため、同じエラーが続くことと、他の担当は読めることを確認してから実行してください。
+除外した担当の未解決attentionは解消しません。以後のsyncでも行の`attention`と根拠に残り、「監視終了」として今回読んだ担当の後に並びます。除外を取り消す操作はありません。Desktopが起動していないなど接続全体の失敗も読み取り失敗として扱うため、同じエラーが続くことと、他の担当は読めることを確認してから実行してください。
 
 停止していない担当は除外できません（`PROJECT_SYNC_EXCLUDE_NOT_STOPPED`）。読めない担当がまだ作業中なら不完全のまま扱い、原因を調べます。syncを完全にする目的で、検収前の担当をstopしないでください。stopは取り消せず、その担当へは二度と指示を送れません。
 
-tellの可否は対象の担当だけで決まります。最新のsyncで対象が完全に読めていること（`complete:true`、履歴欠落なし）を基点に送信直前まで再照合し、対象の新しいイベント、質問・承認待ち、attention不明、履歴欠落、不完全な観測では拒否します。他の担当が未読・不完全でも、対象への指示は妨げません。receiptの`other_work`は、未読の担当を`incomplete`、質問・承認待ちの担当を`human_attention`、sync後のmembership変更を`membership_changed`で返します。空でなければ、送信後もその担当への対応を続けます。`--sync-token`で以前のsyncを基点にできるのは、その後に対象が完全に再読されていない間だけです。質問・承認待ちは常に最新のsyncで判定します。サーバーが観測版と送信を原子的に照合する保証はなく、最終観測の後に起きる競合は残ります。代理回答はせず、同じ意図やunknownを自動再送しません。検収待ちでもidleなら`--new-turn`が必要です。同じ委任の未完了作業がある場合だけ続け、受付後に新turnがactiveになれば動作中へ戻ります。検収待ちは成果の受入や全体の完了認定ではありません。
+tellの可否は対象の担当だけで決まります。最新のsyncで対象が完全に読めていること（`complete:true`、履歴欠落なし）を基点に送信直前まで再照合し、対象の新しいイベント、質問・承認待ち、attention不明、履歴欠落、不完全な観測では拒否します。他の担当が未読・不完全でも、対象への指示は妨げません。receiptの`other_work`は、未読の担当を`incomplete`、質問・承認待ちの担当を`human_attention`、sync後のmembership変更を`membership_changed`で返します。空でなければ、送信後もその担当への対応を続けます。`settled`の担当は読まれず回答もできないため、`incomplete`にも`human_attention`にも含めません。その担当の質問は`project sync`の「監視終了」の行に残ります。`--sync-token`で以前のsyncを基点にできるのは、その後に対象が完全に再読されていない間だけです。質問・承認待ちは常に最新のsyncで判定します。サーバーが観測版と送信を原子的に照合する保証はなく、最終観測の後に起きる競合は残ります。代理回答はせず、同じ意図やunknownを自動再送しません。検収待ちでもidleなら`--new-turn`が必要です。同じ委任の未完了作業がある場合だけ続け、受付後に新turnがactiveになれば動作中へ戻ります。検収待ちは成果の受入や全体の完了認定ではありません。
 
 実行中のDesktop Cloudターンでは、質問・承認待ちを観測できません。tellはその場合も送信の可否を変えず、receiptに`attention_coverage:"running_turn_unobserved"`を付けます。対象が質問で止まっていないかは、Codexの画面で確認します。
 
@@ -109,6 +109,8 @@ waitは担当ごとに、最後にwaitが返した観測か完全なproject sync
 
 返り値の`changed:true`と`sync`に、syncと同じsnapshot・詳細token・continuationを返します。waitが返した時点と完全なsyncの公開時点を基準更新点とし、同じ変化を繰り返し通知しません。更新するのは読めた担当の基準だけで、読めなかった担当は前の基準を保持します。基準が未作成（旧版のsnapshotを含む）なら`reason:initial_sync`として最初のsyncを返します。timeoutは`changed:false, timed_out:true, reason:timeout, sync:null`です。通常のsyncでも全体が不完全なら、waitの基準は進めません。projectごとにwaitは1つで、重複起動は`RECORD_BUSY`です。waitは各照会の前に、開始時に特定した自分のClaude/Codex CLIセッションが生きているかを確かめます。そのセッションが異常終了していれば、照会も公開もせずに`reason:owner_exited, changed:false, timed_out:false, sync:null`で終わり、終了値1になります。照会の途中で終了した場合は、その照会の結果を通常どおり返してから終わります。wait記録とlockも解放するため、再開したセッションはその後に新しいwaitを開始できます。それまでの`RECORD_BUSY`は少し待って再実行してください。セッションを特定できなかったwaitと、プロセスを一時的に調べられなかった照会は、従来どおり待ち続けます。送信や担当制御は行いません。
 
+waitは、自分を起動したコマンドが生きているかも確かめます。バックグラウンドタスクを停止してシェルだけが終了すると、子プロセスのwaitにはシグナルも届かず、出力先のファイルも閉じられません。変わるのは親プロセスだけです。waitは開始時の親プロセスを覚え、照会の前、公開を決める直前、それ以外の間は1秒ごとに確かめます。親が変わっていれば、1秒以内にwait記録とlockを解放し、何も公開せずに`reason:launcher_exited, changed:false, timed_out:false, sync:null`、終了値1で終わります。次のwaitはその後すぐ開始できます。担当を読んでいる途中だった場合、プロセス自体はその読み取りが終わるまで残りますが、記録とlockは先に解放済みで、読み終えても公開しません。公開しなかった変化は次のwaitが返します。公開を始めていた照会だけは、変化を失わないよう、その結果を通常どおり返してから終わります。フォアグラウンドの実行、終了通知付きのバックグラウンドタスク、生き続けるラッパースクリプトからの実行では親は変わりません。開始時に既に親から切り離されているwait（シェルの最後のコマンドとして`nohup … &`で起動した場合など）は親を持たないため、この確認の対象外です。waitを起動したシェルが後から終了する形で切り離したwaitは、そのシェルの終了時に終わります。
+
 読めない担当がいても、waitは読めた担当の変化を待ち、`sync.complete:false`のままでも`changed:true`と`work_changed`などで返します。サーバーが読み取りを拒否した担当（`error:"RPC_REJECTED"`）の行は`error_detail`を持ちます。`rpc_code`と、サーバーが返した場合は`rpc_reason`（`serverShuttingDown`など）と`rpc_message`（300バイトまで）です。byte budgetに収まらず詳細を省いた行では`rpc_code`と`rpc_reason`だけです。返り値はtimeoutを含めて常に`unreadable:[{thread_id, error, reported}]`を持ち、直近の観測で読めなかった担当とエラーcodeを示します。`reported:true`の担当は、次に読めるまで監視されていません。`reported:false`の担当は直近の照会で失敗しただけで、waitは読み続け、読めない状態が続けば報告します。1回の読み取り失敗では返りません。読み取りの失敗は担当の状態を示さず、次に読めたときにcursor以後の出来事を受け取れるためです。同じ担当が2回以上の照会で続けて読めず、最初の失敗から60秒以上経ったときに、waitはその担当を報告します。他に返す理由がなければ、一度だけ`reason:observation_failed, changed:false, timed_out:false`と不完全なsyncを返し、終了値1になります。同じ照会が他の理由で返る場合は、その結果の`unreadable`で`reported:true`にし、`observation_failed`では返しません。この経過はtimeoutや他の理由で返った後に再開したwaitにも引き継ぎ、途中でwaitの照会が一度でも完全に読めれば数え直します。通常のsyncが読めただけでは数え直しません。報告した担当は、エラーcodeが変わっても、waitの照会が途中で読めた後に再び失敗しても、再び返しません。その間はsyncの履歴も保存しません。他の理由で返った結果に`reported:false`で載った担当は報告した扱いにせず、最初の失敗から数え続けます。waitの結果か通常の`project sync`がその担当を完全に読めた状態で示した後に、読めない状態がまた続いた場合は、新しい失敗としてもう一度報告します。報告した失敗はwaitだけが記録し直すため、その担当を読めなかった通常の`project sync`を間に実行しても、同じ失敗を再び返しません。waitの公開より先に別のsyncがheadを更新した場合は、何も公開されていないため、読めた変化があっても`reason:observation_failed, changed:false`で返り、終了値1になります。このときの`sync`は`publication_conflict`にエラーcodeを持ち、`reported`は先に公開されたheadの記録を示します。`project sync`も同じ場合に`publication_conflict`を返し、その結果はheadになりません。このwaitは基準を進めていません。先に公開されたsyncが完全なら変化はそのsyncの結果に含まれて基準も更新されているため、waitは同じ変化を再通知しません。不完全なsyncだった場合は、waitを再開すると同じ変化を返します。最新の`project sync`を読んでからwaitを再開してください。completeにする目的でsyncやwaitを繰り返し実行しないでください。他の返り値と同じく結果を読んでwaitを再開します。
 
 `unreadable`は直近の照会の結果です。`reported:false`の担当はその照会で失敗しただけで、一時的な失敗のことがあります。waitはその担当を読み続け、読めない状態が続けば報告します。`reported:true`の担当は、stopしていなくても、次に読めるまで監視されていません。その間のターン終了・質問・承認待ちは、読めるようになるまで返りません。その担当は`codexteer status <THREAD>`やその担当のbranchで別に確認し、読めないことと確認結果をユーザーへ報告します。waitを静かにする目的でその担当をstopしないでください。stopは検収後の終了操作で、stop後に`--exclude-unreadable`で除外した担当の作業は以後どこからも検知されません。読めない担当が検収してstop済みなら`--exclude-unreadable`で除外し、作業中なら原因を調べます。
@@ -117,7 +119,7 @@ Desktop Cloudの担当は、ターンの実行中は開始時の指示しか読�
 
 承認・質問のフラグは、読了済みcursorとは別に、各担当の基準に対応する直近の観測を保存します。同じフラグが立ち続ける間は通知せず、消えたことを観測した後の再出現は同じ実行turnでも通知します。この観測はtimeout後のwait再起動にも引き継ぎ、その担当の基準が更新されたときに初期化します。`attention:null`など現在のフラグが不明な場合は空配列と区別し、`PROJECT_WAIT_ATTENTION_UNKNOWN`の読み取り失敗として扱います。その担当のcursorと基準は進めません。
 
-wait終了後に出力を失った場合、次の`project sync`が返す`wait_sync_token`を`project sync --continue TOKEN`へ渡すと、最新のwait結果を復元できます。最新のwait snapshotとその全文参照は、pruneでも上限到達時の自動削除でも保持します。プロセス終了や出力配送は読了の証明にはならないため、オーケストレーター自身がsnapshotを読み切って検収します。
+wait終了後に出力を失った場合、次の`project sync`が返す`wait_sync_token`を`project sync --continue TOKEN --offset 0 --event-offset 0`へ渡すと、最新のwait結果を先頭ページから復元できます。最新のwait snapshotとその全文参照は、pruneでも上限到達時の自動削除でも保持します。プロセス終了や出力配送は読了の証明にはならないため、オーケストレーター自身がsnapshotを読み切って検収します。
 
 同じCODEX_HOMEで0.22.0など旧版のsyncを併用すると、旧版がheadの`wait_baseline`など未対応フィールドを保存せず、次のwaitが`initial_sync`を返す場合があります。`settled`、`--exclude-unreadable`の除外、報告済みの失敗も保存されないため、停止済みの担当を読み直し、読めない停止済みの担当は除外し直す必要があります。基準不明を変化なしと扱わず、そのwaitの結果で基準を作り直す動作です。結果を読んでwaitを再開してください。以後は新しい基準で待機しますが、旧syncを再び使うと再初期化が必要になります。基準と復元tokenを維持する運用では、生成した同じ保存済みCLIを一貫して使います。
 
