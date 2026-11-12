@@ -1,9 +1,9 @@
-import { writeHistoryRecord, assertHistoryBatch } from "./project-history.mjs";
+import { writeHistoryRecord, assertHistoryBatch, readHistoryRecord, historyBucket } from "./project-history.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, open } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
-import { readRecord, withStoreLock, storePath } from "./store.mjs";
+import { withStoreLock, storePath } from "./store.mjs";
 import { registerSupervisor } from "./supervision.mjs";
 import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
 import { repositorySource } from "./repository-source.mjs";
@@ -53,7 +53,7 @@ export function composeWorkOrder(order, policy) {
 }
 
 function summary(record) {
-  return { ...(record.connection === "desktop-cloud" ? { execution_environment: "cloud" } : {}), attempt_id: record.attempt_id, receipt_path: record.receipt_path ?? null, stage: record.stage, project_id: record.project_id, connection: record.connection,
+  return { ...(record.connection === "desktop-cloud" ? { execution_environment: "cloud", model_selection: record.model_selection ?? record.creation_receipt?.model_selection ?? null } : {}), attempt_id: record.attempt_id, receipt_path: record.receipt_path ?? null, stage: record.stage, project_id: record.project_id, connection: record.connection,
     environment_config_id: record.environment_config_id ?? null, environment_verified: !!record.initial_environment_verified, source: record.source ?? null,
     thread_id: record.thread_id ?? record.known_thread_id ?? null, supervisor_registered: !!record.supervisor_registered,
     indexed: !!record.indexed, observed: !!record.sync_cursor, policy: { present: record.policy_present, sha256: record.policy_sha256, source: record.policy_source } };
@@ -67,7 +67,8 @@ function reconciledChild(found, record) {
   const projectMatches = candidate && (record.connection === "desktop-cloud" ? candidate.environment_config_id === record.environment_config_id : candidate.backend_project_id === record.project_id || candidate.project_selector === record.project_id);
   if (!candidate || typeof candidate.thread_id !== "string" || candidate.attempt_id !== record.attempt_id
     || (record.connection === "desktop-cloud" && !isDesktopCloudTask(candidate.thread_id))
-    || !projectMatches || candidate.prompt_sha256 !== record.prompt_sha256) {
+    || !projectMatches || candidate.prompt_sha256 !== record.prompt_sha256
+    || (record.model_selection && (candidate.model_selection?.model !== record.model_selection.model || candidate.model_selection?.thinking !== record.model_selection.thinking))) {
     throw fail("Creation reconciliation did not match its attempt, project, and prompt digest.", "WORK_RECONCILE_MISMATCH");
   }
   return candidate;
@@ -86,28 +87,35 @@ export async function startWork(input, dependencies = {}) {
   const prompt = composeWorkOrder(order, policy), key = attemptKey({ project, title, order, policySha256: policy.sha256 });
   const hook = dependencies.hook ?? (async () => {});
   return withStoreLock(`work-start-${key}`, async () => {
-    let record = await readRecord("work-starts", key, storage);
+    let record = await readHistoryRecord("work-starts", key, project, storage), pruned;
+    // An attempt an earlier version saved in the flat bucket continues in the project's.
+    const receipt = storePath(historyBucket("work-starts", project), key, storage.home);
+    const save = async () => { record.receipt_path = receipt; pruned = await writeHistoryRecord("work-starts", key, record, storage, pruned); };
     if (!record) {
-      record = { schema: 1, receipt_path: storePath("work-starts", key, storage.home), attempt_id: randomUUID(), idempotency_key: key, stage: "prepared", project_id: project, title: normalized(title),
+      const modelSelection = connection === "desktop-cloud" ? await dependencies.resolveModelSelection?.(input) : undefined;
+      record = { schema: 1, receipt_path: receipt, attempt_id: randomUUID(), idempotency_key: key, stage: "prepared", project_id: project, title: normalized(title),
+        ...(connection === "desktop-cloud" ? { model_selection: modelSelection ?? null, model_options: { model: input.model ?? null, thinking: input.thinking ?? null } } : {}),
         connection, branch: branch ?? null, root: path.resolve(root), order_sha256: sha(order), prompt_sha256: sha(prompt), policy_present: policy.present,
         policy_source: policy.present ? "CODEXTEER.md" : null, policy_sha256: policy.sha256, policy_text: policy.text, policy_bytes_base64: policy.bytes.toString("base64"),
         environment_config_id: selected?.id ?? null, environment_name: selected?.name ?? null, source: (dependencies.repositorySource ?? repositorySource)(path.resolve(root)), prompt, created_at: new Date().toISOString() };
-      await writeHistoryRecord("work-starts", key, record, storage); await hook("attempt_saved", record);
+      await save(); await hook("attempt_saved", record);
     } else if (record.prompt_sha256 !== sha(prompt) || record.connection !== connection || record.branch !== (branch ?? null) || record.root !== path.resolve(root) || (record.environment_config_id ?? null) !== (selected?.id ?? null)) {
       throw fail("This work order is already reserved with different start options.", "WORK_START_CONFLICT");
     }
+    if (connection === "desktop-cloud" && ((record.model_options?.model ?? null) !== (input.model ?? null) || (record.model_options?.thinking ?? null) !== (input.thinking ?? null))) throw fail("This work order is already reserved with different model options.", "WORK_START_CONFLICT");
     if (!record.thread_id) {
       if (record.stage === "create_dispatching" || record.stage === "create_unknown") {
         const found = reconciledChild(await dependencies.reconcile?.(record), record);
         if (!found) throw Object.assign(fail("Creation may have been dispatched. Read-only reconciliation did not find one child; creation was not repeated.", "WORK_CREATE_UNKNOWN"), summary(record));
         delete record.create_error; delete record.create_failure; delete record.known_thread_id;
-        Object.assign(record, found, { stage: "child_known" }); await writeHistoryRecord("work-starts", key, record, storage);
+        Object.assign(record, found, { stage: "child_known" }); await save();
       } else {
         await hook("before_create_rpc", record);
         delete record.create_error; delete record.create_failure; delete record.known_thread_id;
-        record.stage = "create_dispatching"; await writeHistoryRecord("work-starts", key, record, storage);
+        record.stage = "create_dispatching"; await save();
         let created;
-        try { created = await dependencies.create({ project, title, prompt, branch, attemptId: record.attempt_id, environmentConfigId: record.environment_config_id, connection }); }
+        try { created = await dependencies.create({ project, title, prompt, branch, attemptId: record.attempt_id, environmentConfigId: record.environment_config_id, connection,
+          ...(record.model_selection ? { modelSelection: record.model_selection } : {}) }); }
         catch (error) {
           // not_created can also describe a rejected RPC after dispatch. Only
           // the creator's explicit pre-dispatch proof permits the same attempt again.
@@ -115,32 +123,33 @@ export async function startWork(input, dependencies = {}) {
           record.stage = notDispatched ? "create_not_dispatched" : "create_unknown";
           record.create_error = error.code ?? "CREATE_FAILED"; record.known_thread_id = error.thread_id ?? null;
           record.create_failure = { creation_status: error.creation_status, creation_dispatched: error.creation_dispatched, sent: error.sent, thread_id: error.thread_id ?? null };
-          await writeHistoryRecord("work-starts", key, record, storage); throw Object.assign(error, summary(record));
+          await save(); throw Object.assign(error, summary(record));
         }
         await hook("create_returned", { ...record, created });
-        if (!created?.thread_id) { record.stage = "create_unknown"; await writeHistoryRecord("work-starts", key, record, storage); throw Object.assign(fail("Creation returned no child ID; creation was not repeated.", "WORK_CREATE_UNKNOWN"), summary(record)); }
+        if (!created?.thread_id) { record.stage = "create_unknown"; await save(); throw Object.assign(fail("Creation returned no child ID; creation was not repeated.", "WORK_CREATE_UNKNOWN"), summary(record)); }
         if (connection === "desktop-cloud") reconciledChild(created, record);
         Object.assign(record, { thread_id: created.thread_id, backend_project_id: connection === "desktop-cloud" ? null : created.backend_project_id ?? created.project_id ?? project, creation_receipt: created, stage: "child_known" });
-        await writeHistoryRecord("work-starts", key, record, storage); await hook("child_saved", record);
+        await save(); await hook("child_saved", record);
       }
     }
     if (!record.indexed) {
       await registerManagedThread(record.thread_id, { projectId: project, connection, backendProjectId: record.backend_project_id,
         environmentConfigId: record.environment_config_id ?? undefined, creationAttemptId: record.attempt_id, policySha256: record.policy_sha256 }, storage);
       await hook("membership_registered", record);
-      record.indexed = true; record.stage = "indexed"; await writeHistoryRecord("work-starts", key, record, storage); await hook("index_updated", record);
+      record.indexed = true; record.stage = "indexed"; await save(); await hook("index_updated", record);
     }
     if (!record.supervisor_registered) {
       await hook("before_supervisor_registration", record);
       record.supervisor_session_id ??= randomUUID();
       await registerSupervisor(record.thread_id, record.supervisor_session_id, { ...storage, owner: "codexteer-orchestrator", connection });
-      record.supervisor_registered = true; record.stage = "supervisor_registered"; await writeHistoryRecord("work-starts", key, record, storage); await hook("supervisor_registered", record);
+      record.supervisor_registered = true; record.stage = "supervisor_registered"; await save(); await hook("supervisor_registered", record);
     }
     try {
       if (!record.sync_cursor) {
         let observation, cursor; const initialEvents = []; const seen = new Set(); let pages = 0;
         do {
-          observation = await dependencies.read(record.thread_id, { connection, limit: 1000, fullEvents: true, ...(cursor ? { since: cursor } : {}) });
+          // The creation check reads the history only; the first sync reads a running Desktop Cloud turn live.
+          observation = await dependencies.read(record.thread_id, { connection, limit: 1000, fullEvents: true, liveTurn: false, ...(cursor ? { since: cursor } : {}) });
           if (observation.omitted_older_events > 0 || (!cursor && observation.omitted_older_events !== 0)) throw fail("Initial history has an unproven boundary; no cursor was saved.", "WORK_INITIAL_HISTORY_GAP");
           assertHistoryBatch(initialEvents, observation.events ?? []);
           if (connection === "desktop-cloud") {
@@ -157,7 +166,7 @@ export async function startWork(input, dependencies = {}) {
         await hook("initial_read", { ...record, observation });
         record.initial_environment_verified = connection === "desktop-cloud";
         record.initial_boundary_proven = true; record.initial_events = initialEvents; record.sync_cursor = cursor; record.initial_state = observation.status ?? "unknown"; record.stage = "observed";
-        await writeHistoryRecord("work-starts", key, record, storage);
+        await save();
       }
     } catch (error) {
       throw Object.assign(error, summary(record), { observed: false,
@@ -165,6 +174,6 @@ export async function startWork(input, dependencies = {}) {
         history_gap: ["WORK_INITIAL_HISTORY_GAP", "INVALID_CURSOR", "STALE_CURSOR", "OBSERVATION_CHANGED"].includes(error.code) });
     }
 
-    return { ...summary(record), prompt_sha256: record.prompt_sha256, initial_status: record.initial_state };
+    return { ...summary(record), prompt_sha256: record.prompt_sha256, initial_status: record.initial_state, ...(pruned ? { history_pruned: pruned } : {}) };
   }, storage);
 }

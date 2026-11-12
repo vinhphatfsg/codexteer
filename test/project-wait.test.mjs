@@ -26,7 +26,7 @@ async function fixture(t, mode = "aggregate") {
   const storage = { home }, connection = cloud ? "desktop-cloud" : "shared";
   await registerManagedThread(id, { projectId: "P", connection, ...(cloud ? { environmentConfigId: "config" } : {}) }, storage);
   await registerSupervisor(id, SESSION, { ...storage, connection });
-  const dependencies = { storage, read, pollMs: 5, processIdentity: async pid => pid === 123 ? "owner-start" : "same-start",
+  const dependencies = { storage, read, pollMs: 5, unreadGraceMs: 0, processIdentity: async pid => pid === 123 ? "owner-start" : "same-start",
     orchestratorIdentity: async () => ({ pid: 123, process_start: "owner-start" }) };
   await syncProject("P", {}, dependencies);
   return { home, id, thread, server, storage, dependencies };
@@ -79,7 +79,7 @@ test("membership changes wake wait; empty projects establish a baseline then tim
 
 test("failed observations are explicit, preserve the complete baseline and do not hide a later successful turn", async t => {
   const f = await fixture(t);
-  const failed = await waitProject("P", { timeoutMs: 0 }, { ...f.dependencies, read: async () => { throw Object.assign(new Error(), { code: "CLOUD_RATE_LIMITED" }); } });
+  const failed = await waitProject("P", { timeoutMs: 1000 }, { ...f.dependencies, read: async () => { throw Object.assign(new Error(), { code: "CLOUD_RATE_LIMITED" }); } });
   assert.equal(failed.changed, false); assert.equal(failed.timed_out, false); assert.equal(failed.reason, "observation_failed");
   assert.equal(failed.sync.complete, false);
   assert.deepEqual(failed.sync.works.map(work => work.error), ["CLOUD_RATE_LIMITED"]);
@@ -118,7 +118,7 @@ test("unknown attention stays distinct and fails observation without advancing w
   assert.equal(projectWaitSignal({}).attention, null);
   assert.deepEqual(projectWaitSignal({ attention: [] }).attention, []);
   f.thread.status = { type: "active", activeFlags: null };
-  const unknown = await waitProject("P", { timeoutMs: 0 }, f.dependencies);
+  const unknown = await waitProject("P", { timeoutMs: 1000 }, f.dependencies);
   assert.equal(unknown.changed, false); assert.equal(unknown.timed_out, false); assert.equal(unknown.reason, "observation_failed");
   assert.equal(unknown.sync.complete, false); assert.equal(unknown.sync.works[0].error, "PROJECT_WAIT_ATTENTION_UNKNOWN");
   assert.deepEqual(await getManagedThread(f.id, f.storage), before);
@@ -262,6 +262,39 @@ test("invalid wait options and inspection failures do not masquerade as monitori
   assert.equal(guard.decision, undefined); assert.match(guard.systemMessage, /could not verify.*EPERM/);
 });
 
+test("a wait between slow polls ends within about a second of its launcher going, and one started detached keeps waiting", async t => {
+  const f = await fixture(t);
+  let parent = 4242;
+  const started = performance.now();
+  setTimeout(() => { parent = 1; }, 50);
+  const stopped = await waitProject("P", {}, { ...f.dependencies, pollMs: 15000, parentPid: () => parent });
+  assert.deepEqual(stopped, { project_id: "P", changed: false, timed_out: false, reason: "launcher_exited", unreadable: [], sync: null });
+  assert.ok(performance.now() - started < 3000, "not after the 15 second poll interval");
+  assert.deepEqual(await listRecords("project-waits", f.storage), []);
+  // The launcher goes while a poll is still reading a slow member.
+  const headKey = createHash("sha256").update("P").digest("hex").slice(0, 40), head = await readRecord("project-sync-heads", headKey, f.storage);
+  let reading = 0, finished;
+  const slow = new Promise(resolve => { finished = resolve; });
+  parent = 4242;
+  const during = performance.now();
+  const midRead = await waitProject("P", {}, { ...f.dependencies, parentPid: () => parent, read: async (...args) => {
+    if (++reading === 1) {
+      parent = 1; f.thread.turns.push({ id: "t1", status: "completed", items: [{ id: "report", type: "agentMessage", text: "Done" }] });
+      await delay(2500);
+    }
+    try { return await f.dependencies.read(...args); } finally { if (reading === 1) finished(); }
+  } });
+  assert.equal(midRead.reason, "launcher_exited"); assert.equal(midRead.sync, null);
+  assert.ok(performance.now() - during < 2000, "the record and lock are released without waiting for the read");
+  assert.deepEqual(await listRecords("project-waits", f.storage), []);
+  await slow; await delay(50);
+  assert.deepEqual(await readRecord("project-sync-heads", headKey, f.storage), head, "the read left behind publishes nothing when it ends");
+  assert.equal((await waitProject("P", { timeoutMs: 0 }, f.dependencies)).reason, "work_changed", "the next wait returns the change");
+  let detachedParent = 1;
+  setTimeout(() => { detachedParent = 77; }, 10);
+  assert.equal((await waitProject("P", { timeoutMs: 40 }, { ...f.dependencies, parentPid: () => detachedParent })).reason, "timeout");
+});
+
 test("a wait whose orchestrator exited ends without publishing and frees the project for the next session", async t => {
   const f = await fixture(t), headKey = createHash("sha256").update("P").digest("hex").slice(0, 40);
   let owner = "owner-start", reads = 0;
@@ -296,4 +329,31 @@ test("a record busy inside a running wait keeps its own message, not another ses
   assert.equal(error?.code, "RECORD_BUSY");
   assert.doesNotMatch(error.message, /already owned|another session|hand off/i);
   await assert.doesNotReject(waitProject("P", { timeoutMs: 0 }, f.dependencies), "the wait lock was released");
+});
+
+test("guard does not count a wait whose launcher is gone, and still counts one launched, detached or recorded without a launcher", async t => {
+  const f = await fixture(t);
+  const recorded = async () => { for (let n = 0; n < 200 && !(await listRecords("project-waits", f.storage)).length; n++) await delay(5); return (await listRecords("project-waits", f.storage))[0]; };
+  let parent = 4242;
+  const guard = (overrides = {}) => guardProject("P", { ...f.dependencies, processParent: async () => parent, ...overrides });
+  const waiting = waitProject("P", {}, { ...f.dependencies, pollMs: 15000, parentPid: () => parent });
+  assert.deepEqual((await recorded()).launcher, { pid: 4242, detached: false });
+  assert.deepEqual(await guard(), {}, "a wait whose launcher lives allows the stop");
+  const unknown = await guard({ processParent: async () => { throw Object.assign(new Error(), { code: "EPERM" }); } });
+  assert.equal(unknown.decision, undefined); assert.match(unknown.systemMessage, /could not verify.*EPERM/);
+  // Stopping the background task ends only the shell that launched the wait.
+  parent = 1;
+  assert.equal((await guard()).decision, "block", "the wait is still alive, but nobody will be told its result");
+  assert.equal((await projectGuardStatus("P", { env: {}, processParent: async () => { throw new Error("not inspected"); } })).stop_hook, "unverified");
+  assert.equal((await waiting).reason, "launcher_exited");
+  assert.equal((await guard()).decision, "block");
+
+  const detached = waitProject("P", { timeoutMs: 400 }, { ...f.dependencies, pollMs: 15000, parentPid: () => parent });
+  assert.deepEqual((await recorded()).launcher, { pid: 1, detached: true });
+  parent = 77;
+  assert.deepEqual(await guard(), {}, "a wait that started detached has no launcher to lose");
+  assert.equal((await detached).reason, "timeout");
+
+  await writeRecord("project-waits", "earlier", { schema: 1, project_id: "P", pid: process.pid, process_start: "same-start", owner: await f.dependencies.orchestratorIdentity() }, f.storage);
+  assert.deepEqual(await guard({ processParent: async () => { throw new Error("not inspected"); } }), {}, "a record without a launcher is counted as before");
 });

@@ -3,13 +3,16 @@ import net from "node:net";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { VERSION } from "./help.mjs";
+import { rpcErrorDetail } from "./rpc-error.mjs";
 
 export class RpcFailure extends Error {
-  constructor(message, { code = "CONNECTION_FAILED", uncertain = false, rpcCode } = {}) {
+  constructor(message, { code = "CONNECTION_FAILED", uncertain = false, rpcCode, rpcMessage, rpcReason } = {}) {
     super(message);
     this.code = code;
     this.uncertain = uncertain;
     this.rpcCode = rpcCode;
+    if (rpcMessage !== undefined) this.rpcMessage = rpcMessage;
+    if (rpcReason !== undefined) this.rpcReason = rpcReason;
   }
 }
 
@@ -92,7 +95,7 @@ export class RpcClient extends EventEmitter {
       if (message.error && typeof message.error === "object" && !Array.isArray(message.error)
         && Number.isSafeInteger(message.error.code) && !Object.hasOwn(message, "result")) {
         request.reject(new RpcFailure(`${request.method} was rejected by App Server.`, {
-          code: "RPC_REJECTED", rpcCode: message.error.code,
+          code: "RPC_REJECTED", rpcCode: message.error.code, ...rpcErrorDetail(message.error, request.method),
         }));
       } else if (Object.hasOwn(message, "result") && message.error == null) request.resolve(message.result);
       else {

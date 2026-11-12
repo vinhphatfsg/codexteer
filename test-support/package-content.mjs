@@ -79,6 +79,10 @@ console.log(JSON.stringify({ prompt, version: result.stdout.trim() }));
   assertOrchestrationContent(orchestration.data.prompt);
   const threadHelp = JSON.parse((await exec("npx", [...npxArgs, "help", "thread", "--json"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
   assert.ok(threadHelp.data.usage.some(usage => usage.startsWith("thread verify <ATTEMPT-ID>")));
+  const modelHelp = JSON.parse((await exec("npx", [...npxArgs, "help", "models", "--json"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
+  assert.ok(modelHelp.data.usage.includes("--connection desktop-cloud models select"));
+  const modelDefaults = JSON.parse((await exec("npx", [...npxArgs, "--connection", "desktop-cloud", "models", "show", "--json"], { cwd: root, env: npxEnv, timeout: 20000 })).stdout);
+  assert.equal(modelDefaults.data.saved, null);
   for (const agent of ["claude", "codex"]) for (const pathMode of [false, true]) {
     const launched = JSON.parse((await exec("npx", [...npxArgs, "orchestrate", "--project", "Package test", "Verify the user outcome", "--agent", agent,
       ...(pathMode ? ["--use-path-cli"] : []), "--", "--model", "fixture-model", "--json"], { cwd: workspace, env: npxEnv, timeout: 20000 })).stdout);

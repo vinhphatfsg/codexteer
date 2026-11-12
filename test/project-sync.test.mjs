@@ -184,8 +184,8 @@ test("a single work with 1000 events splits inside the work without missing toke
   const all = await allPages(result, f, 4096); assert.equal(all.tokens.length, 1000);
   const again = await continueProjectSync(result.sync_token, { byteBudget: 4096 }, f);
   assert.ok(Buffer.byteLength(JSON.stringify(again)) <= 4096);
-  const { readRecord } = await import("../src/store.mjs");
-  const saved = await readRecord("project-sync-results", result.sync_token, f);
+  const { readHistoryRecord } = await import("../src/project-history.mjs");
+  const saved = await readHistoryRecord("project-sync-results", result.sync_token, "project-sync", f);
   assert.deepEqual(all.tokens, saved.works.flatMap(w => w.events.map(e => e.token)));
 });
 
@@ -196,8 +196,8 @@ test("initial and continuation budgets share validation and oversized fixed enve
     await assert.rejects(continueProjectSync(good.sync_token, { byteBudget }, f), { code: "PROJECT_SYNC_INVALID" });
   }
   await assert.rejects(syncProject("大".repeat(5000), { byteBudget: 4096 }, { storage: f, read: async () => assert.fail("must reject before observation") }), { code: "PROJECT_SYNC_BUDGET_TOO_SMALL" });
-  const { writeRecord } = await import("../src/store.mjs");
-  await writeRecord("project-sync-results", good.sync_token, { project_id: "大".repeat(5000), works: [], complete: true }, f);
+  const { writeRecord } = await import("../src/store.mjs"), { historyBucket } = await import("../src/project-history.mjs");
+  await writeRecord(historyBucket("project-sync-results", "project-sync"), good.sync_token, { project_id: "大".repeat(5000), works: [], complete: true }, f);
   await assert.rejects(continueProjectSync(good.sync_token, { byteBudget: 4096 }, f), { code: "PROJECT_SYNC_BUDGET_TOO_SMALL" });
 });
 

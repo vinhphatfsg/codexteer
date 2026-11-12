@@ -8,13 +8,14 @@ import { readSnapshot } from "../src/observe.mjs";
 import { registerManagedThread, getManagedThread } from "../src/project-index.mjs";
 import { readRecord, writeRecord, listRecords, storePath, recordStats } from "../src/store.mjs";
 import { syncProject, projectEvent, continueProjectSync } from "../src/project-sync.mjs";
-import { pruneProjectHistory, withHistoryReservation, writeHistoryRecord, assertHistoryBatch, HISTORY_LIMIT_BYTES, HISTORY_BATCH_BYTES } from "../src/project-history.mjs";
+import { pruneProjectHistory, withHistoryReservation, writeHistoryRecord, assertHistoryBatch, historyBucket, HISTORY_LIMIT_BYTES, HISTORY_BATCH_BYTES } from "../src/project-history.mjs";
 import { startWork } from "../src/work-start.mjs";
 import { controlProject } from "../src/project-control.mjs";
 import { fail } from "../src/cli.mjs";
 
 const id = "11111111-1111-4111-8111-000000000001", other = "22222222-2222-4222-8222-000000000002";
 const key = name => createHash("sha256").update(name).digest("hex").slice(0,40);
+const own = bucket => historyBucket(bucket, "history");
 const message = (name, text = name) => ({ id: name, type: "agentMessage", text });
 async function fixture(t) {
   const home = await mkdtemp(tempPrefix("ct-history-")); t.after(() => rm(home, { recursive: true, force: true }));
@@ -46,11 +47,11 @@ test("prune preserves unpresented initial results and removes the duplicate payl
     storage: f.storage, create: async () => ({ thread_id: other }), read: async (_id, options) => readSnapshot(thread, options),
   });
   await pruneProjectHistory("history", f.storage);
-  assert.ok((await listRecords("work-starts", f.storage))[0].initial_events.length);
+  assert.ok((await listRecords(own("work-starts"), f.storage))[0].initial_events.length);
   const sync = await syncProject("history", {}, { storage: f.storage, read: async (target, options) => readSnapshot(target === other ? thread : f.thread, options) });
   const token = sync.works.find(w => w.thread_id === other).events.find(e => e.event_id === "initial").token;
   await pruneProjectHistory("history", f.storage);
-  const receipt = (await listRecords("work-starts", f.storage))[0];
+  const receipt = (await listRecords(own("work-starts"), f.storage))[0];
   assert.equal(receipt.initial_events, undefined); assert.ok(receipt.sync_cursor); assert.ok(receipt.prompt_sha256);
   assert.equal((await projectEvent(token, f.storage)).event.text, "result".repeat(5000));
 });
@@ -65,10 +66,10 @@ test("prune removes the duplicate initial payload of work that settled syncs ago
   assert.equal(settling.works.find(w => w.thread_id === other).settled.basis, "observed");
   for (let i = 0; i < 2; i++) await syncProject("history", {}, { storage: f.storage, read });
   await pruneProjectHistory("history", f.storage);
-  const receipt = (await listRecords("work-starts", f.storage))[0];
+  const receipt = (await listRecords(own("work-starts"), f.storage))[0];
   assert.equal(receipt.initial_events, undefined); assert.ok(receipt.sync_cursor);
   await assert.rejects(projectEvent(token, f.storage), { code: "PROJECT_EVENT_NOT_FOUND" });
-  assert.equal((await listRecords("project-sync-events", f.storage)).some(record => record.thread_id === other), false);
+  assert.equal((await listRecords(own("project-sync-events"), f.storage)).some(record => record.thread_id === other), false);
   const next = await syncProject("history", {}, { storage: f.storage, read });
   assert.equal(next.complete, true); assert.equal(next.works.find(w => w.thread_id === other).observation, "settled");
 });
@@ -82,20 +83,20 @@ test("prune keeps an interrupted publication generation and does not affect anot
   await pruneProjectHistory("history", f.storage);
   assert.equal((await projectEvent(pinned, f.storage)).event.id, "pending");
   assert.equal((await projectEvent(unrelated, f.storage)).event.id, "unrelated");
-  assert.equal(await readRecord("project-sync-results", old.sync_token, f.storage), null);
+  assert.equal(await readRecord(own("project-sync-results"), old.sync_token, f.storage), null);
 });
 
 test("history quota is checked before cursor publication and initial receipts cannot bypass it", async t => {
   const f = await fixture(t), baseline = (await getManagedThread(id, f.storage)).sync_cursor;
-  await writeRecord("project-sync-events", "filler", {}, f.storage);
+  await writeRecord(own("project-sync-events"), "filler", {}, f.storage);
   // A valid large JSON record, streamed in bounded memory. Quota accounting uses
   // file metadata, so it need not hydrate this payload to refuse the next write.
-  const file = await open(storePath("project-sync-events", "filler", f.home), "w", 0o600), chunk = Buffer.alloc(1024 * 1024, 32);
+  const file = await open(storePath(own("project-sync-events"), "filler", f.home), "w", 0o600), chunk = Buffer.alloc(1024 * 1024, 32);
   try { await file.write('{}'); for (let i = 0; i < 256; i++) await file.write(chunk); } finally { await file.close(); }
   f.thread.turns[0].items.push(message("new"));
   const full = await f.sync().catch(error => error);
   assert.equal(full.code, "PROJECT_HISTORY_LIMIT"); assert.equal(full.limit_bytes, HISTORY_LIMIT_BYTES);
-  assert(full.storage_bytes >= 256 * 1024 * 1024 && full.required_bytes > 1024 * 1024);
+  assert(full.storage_bytes >= 256 * 1024 * 1024 && full.required_bytes > 0 && full.required_bytes < 16 * 1024, `one short message needs ${full.required_bytes} bytes`);
   const numbers = { storage_bytes: full.storage_bytes, required_bytes: full.required_bytes, limit_bytes: full.limit_bytes };
   const printed = (t, json) => {
     const stream = t.mock.method(console, json ? "log" : "error", () => {}), priorExit = process.exitCode;
@@ -108,26 +109,28 @@ test("history quota is checked before cursor publication and initial receipts ca
   const text = printed(t, false);
   for (const [name, value] of Object.entries(numbers)) assert(text.includes(`${name}: ${value}`));
   assert.equal((await getManagedThread(id, f.storage)).sync_cursor, baseline);
-  assert.equal((await listRecords("project-sync-results", f.storage)).length, 0);
-  await assert.rejects(writeHistoryRecord("work-starts", "new", { initial_events: [message("x")] }, f.storage), { code: "PROJECT_HISTORY_LIMIT" });
-  assert.equal(await readRecord("work-starts", "new", f.storage), null);
+  assert.equal((await listRecords(own("project-sync-results"), f.storage)).length, 0);
+  await assert.rejects(writeHistoryRecord("work-starts", "new", { project_id: "history", initial_events: [message("x")] }, f.storage), { code: "PROJECT_HISTORY_LIMIT" });
+  assert.equal(await readRecord(own("work-starts"), "new", f.storage), null);
 });
 
-test("quota also bounds actual publication writes independently of conservative reservation", async t => {
+test("quota also bounds a write the reservation did not list, and history without a project is refused", async t => {
   const f = await fixture(t);
-  await assert.rejects(withHistoryReservation({}, async write => write("project-sync-results", "too-large", { text: "x".repeat(HISTORY_LIMIT_BYTES) }), f.storage), { code: "PROJECT_HISTORY_LIMIT" });
-  assert.equal(await readRecord("project-sync-results", "too-large", f.storage), null);
+  await assert.rejects(withHistoryReservation({ projectId: "history" }, async write => write("project-sync-results", "too-large", { text: "x".repeat(HISTORY_LIMIT_BYTES) }), f.storage), { code: "PROJECT_HISTORY_LIMIT" });
+  assert.equal(await readRecord(own("project-sync-results"), "too-large", f.storage), null);
+  await assert.rejects(withHistoryReservation({}, async write => write("project-sync-results", "orphan", {}), f.storage), { code: "PROJECT_HISTORY_INVALID" });
+  await assert.rejects(writeHistoryRecord("work-starts", "orphan", {}, f.storage), { code: "PROJECT_HISTORY_INVALID" });
 });
 
 test("prune and initial/sync persistence share a fail-closed lock; no protected record is removed mid-write", async t => {
   const f = await fixture(t); let enter, release;
   const entered = new Promise(r => { enter = r; }), gate = new Promise(r => { release = r; });
-  const held = withHistoryReservation({}, async write => { enter(); await gate; await write("project-sync-results", "unpublished", { project_id: "history", works: [] }); }, f.storage);
+  const held = withHistoryReservation({ projectId: "history" }, async write => { enter(); await gate; await write("project-sync-results", "unpublished", { project_id: "history", works: [] }); }, f.storage);
   await entered;
   await assert.rejects(pruneProjectHistory("history", f.storage), { code: "RECORD_BUSY" });
-  await assert.rejects(writeHistoryRecord("work-starts", "racing", {}, f.storage), { code: "RECORD_BUSY" });
+  await assert.rejects(writeHistoryRecord("work-starts", "racing", { project_id: "history" }, f.storage), { code: "RECORD_BUSY" });
   release(); await held;
-  assert.ok(await readRecord("project-sync-results", "unpublished", f.storage));
+  assert.ok(await readRecord(own("project-sync-results"), "unpublished", f.storage));
 });
 
 test("project prune is available from local and Desktop Cloud CLI without contacting a backend", async t => {
@@ -147,7 +150,7 @@ test("legacy initial snapshots with an unproven tail stay pinned and cannot adva
   assert.equal(result.complete, false); assert.equal(result.works.find(w => w.thread_id === other).history_gap, true);
   assert.equal((await getManagedThread(other, f.storage)).sync_cursor, undefined);
   await pruneProjectHistory("history", f.storage);
-  assert.equal((await readRecord("work-starts", "legacy", f.storage)).initial_events.length, 1000);
+  assert.equal((await readRecord(own("work-starts"), "legacy", f.storage)).initial_events.length, 1000);
 });
 
 test("legacy orphaned events are reclaimable after interruption removed their old result", async t => {
@@ -165,5 +168,5 @@ test("oversized real observation does not advance the saved sync cursor", async 
   assert.equal(result.complete, false); assert.equal(result.works[0].error, "PROJECT_HISTORY_BATCH_LIMIT");
   assert.throws(() => assertHistoryBatch("x".repeat(HISTORY_BATCH_BYTES)), { code: "PROJECT_HISTORY_BATCH_LIMIT", required_bytes: HISTORY_BATCH_BYTES + 2, limit_bytes: HISTORY_BATCH_BYTES });
   assert.equal((await getManagedThread(id, f.storage)).sync_cursor, baseline);
-  assert.equal((await listRecords("project-sync-events", f.storage)).some(row => row.event?.id === "too-big"), false);
+  assert.equal((await listRecords(own("project-sync-events"), f.storage)).some(row => row.event?.id === "too-big"), false);
 });

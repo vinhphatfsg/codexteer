@@ -88,6 +88,7 @@ export async function nativeOnAppServer(client, endpoint, action, args, context,
     if (response.ok === false && response.error) {
       const error = failure(response.error.message, response.error.code, !!response.error.uncertain);
       if (Number.isSafeInteger(response.error.rpcCode)) error.rpcCode = response.error.rpcCode;
+      if (typeof response.error.rpcReason === "string" && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(response.error.rpcReason)) error.rpcReason = response.error.rpcReason;
       throw error;
     }
     throw failure("Native helper did not confirm success.", "NATIVE_PROTOCOL_ERROR", mutation);

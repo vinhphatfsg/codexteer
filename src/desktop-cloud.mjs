@@ -1,8 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { connectDesktopCloud, desktopCloudEnvironments } from "./desktop-cloud-api.mjs";
+import { cloudModelsOnClient, resolveCloudModelSelection, validateCloudModelOptions } from "./desktop-cloud-models.mjs";
 import { desktopCloudId, desktopCloudLink } from "./desktop-cloud-id.mjs";
 import { getManagedThread } from "./project-index.mjs";
-import { fetchThread } from "./observe.mjs";
+import { fetchThread, turnObservation } from "./observe.mjs";
+import { turnEvidence, turnRuns } from "./attention-coverage.mjs";
+import { newestTurn, turnStatuses } from "./desktop-cloud-read.mjs";
 import { readRecord, writeRecord, storePath, withStoreLock, listRecords } from "./store.mjs";
 const failure = (message, code = "DESKTOP_CLOUD_OPTIONS_INVALID", uncertain = false) => Object.assign(new Error(message), { code, uncertain });
 const hash = value => createHash("sha256").update(value).digest("hex");
@@ -19,6 +22,7 @@ export async function createDesktopCloudTask(selector, prompt, options = {}, dep
   return withStoreLock(`desktop-cloud-create-${attemptId}`, () => createTask(selector, prompt, { ...options, attemptId }, dependencies), dependencies);
 }
 async function createTask(selector, prompt, options = {}, { environments = desktopCloudEnvironments, connect = connectDesktopCloud, ...storage } = {}) {
+  validateCloudModelOptions(options);
   if (options.project !== undefined) throw failure("Creation cannot currently register a Desktop project for a newly allocated Cloud environment. No chat was created. Use doctor --thread TARGET --project PROJECT to check an existing task's executor-bound assignment API.", "DESKTOP_CLOUD_PROJECT_UNAVAILABLE");
   if (typeof selector !== "string" || !selector.trim() || typeof prompt !== "string" || !prompt.trim()) throw failure("An --environment ID or exact name and initial instruction are required.");
   if (options.title !== undefined && (typeof options.title !== "string" || !options.title.trim() || options.title.length > 1000)) throw failure("Invalid --title.");
@@ -26,37 +30,55 @@ async function createTask(selector, prompt, options = {}, { environments = deskt
   if (matches.length !== 1) throw failure("Select exactly one accessible environment configuration.");
   const selected = matches[0], attempt = options.attemptId ?? randomUUID();
   if (!/^[a-f0-9-]{36}$/.test(attempt)) throw failure("Invalid creation attempt ID.");
-  if (!options.dryRun && await readRecord("desktop-cloud-creations", attempt, storage)) throw failure("This creation attempt already has a receipt. Reconcile it without creating or sending again.", "DESKTOP_CLOUD_CREATION_PENDING");
+  const previous = !options.dryRun && await readRecord("desktop-cloud-creations", attempt, storage);
+  if (previous) {
+    const notDispatched = previous.creation_status === "not_created" && previous.creation_dispatched === false && previous.sent === false && previous.thread_id == null;
+    const sameRequest = previous.environment_config_id === selected.id && previous.prompt_sha256 === hash(prompt) && previous.title === (options.title ?? null)
+      && previous.model_options?.model === (options.model ?? null) && previous.model_options?.thinking === (options.thinking ?? null)
+      && (!options.modelSelection || !previous.model_selection || options.modelSelection.model === previous.model_selection.model && options.modelSelection.thinking === previous.model_selection.thinking);
+    if (!notDispatched || !sameRequest) throw failure("This creation attempt already has a receipt. Reconcile it without creating or sending again.", "DESKTOP_CLOUD_CREATION_PENDING");
+    if (previous.model_selection) options = { ...options, modelSelection: previous.model_selection };
+  }
   let client, receipt = { schema: 1, attempt_id: attempt, environment_config_id: selected.id, environment_name: selected.name, connection_mode: "desktop-cloud",
-    project_membership: "not_requested", creation_status: "not_created", delivery_status: "not_sent", sent: false, prompt_sha256: hash(prompt), dry_run: !!options.dryRun }, creating = false;
-  if (options.dryRun) return receipt;
-  receipt.receipt_path = storePath("desktop-cloud-creations", attempt, storage.home);
+    title: options.title ?? null, model_options: { model: options.model ?? null, thinking: options.thinking ?? null }, creation_dispatched: false,
+    project_membership: "not_requested", creation_status: "not_created", delivery_status: "not_sent", sent: false, prompt_sha256: hash(prompt), dry_run: !!options.dryRun }, creating = false, dispatched = false;
+  if (!options.dryRun) receipt.receipt_path = storePath("desktop-cloud-creations", attempt, storage.home);
   const save = () => writeRecord("desktop-cloud-creations", attempt, receipt, storage);
-  await save();
   try {
     client = await connect();
-    const models = await client.request("model/list", { limit: 100 });
-    const defaults = models?.data?.filter(row => row.isDefault === true);
-    if (defaults?.length !== 1 || typeof defaults[0].model !== "string") throw failure("Cloud did not identify one default model.");
-    receipt.creation_status = "dispatching"; await save(); creating = true;
-    const result = await client.request("thread/start", { model: defaults[0].model, serviceName: "codex_cloud", threadSource: "user", pluginsMcp: { productSku: "codex" },
-      config: { "features.mcp_app_ui": true }, environments: [{ environmentConfigId: selected.id }], deferredEnvironment: true, ephemeral: false }, { mutation: true });
+    const models = await cloudModelsOnClient(client);
+    receipt.model_selection = await resolveCloudModelSelection(options, { ...storage, models });
+    if (options.dryRun) return receipt;
+    receipt.creation_status = "dispatching"; receipt.creation_dispatched = true; await save(); creating = true; dispatched = true;
+    const result = await client.request("thread/start", { model: receipt.model_selection.model, serviceName: "codex_cloud", threadSource: "user", pluginsMcp: { productSku: "codex" },
+      config: { "features.mcp_app_ui": true, model_reasoning_effort: receipt.model_selection.thinking }, environments: [{ environmentConfigId: selected.id }], deferredEnvironment: true, ephemeral: false }, { mutation: true });
     receipt = { ...receipt, creation_status: "created", thread_id: desktopCloudId(result.thread.id), deep_link: desktopCloudLink(result.thread.id) }; creating = false; await save();
     if (options.title) await client.request("thread/name/set", { threadId: receipt.thread_id, name: options.title }, { mutation: true });
     const { sendTrackedMessage } = await import("./journal.mjs");
     const sent = await sendTrackedMessage(receipt.thread_id, prompt, { newTurn: true, connection: "desktop-cloud" }, { ...storage,
-      send: (target, text, settings) => sendDesktopCloudInput(target, text, { ...settings, expectedEnvironmentConfigId: selected.id }, { ...storage, connect: async () => ({ request: (...args) => client.request(...args), close() {} }) }) });
+      send: (target, text, settings) => sendDesktopCloudInput(target, text, { ...settings, expectedEnvironmentConfigId: selected.id, initialModelSelection: receipt.model_selection }, { ...storage, connect: async () => ({ request: (...args) => client.request(...args), close() {} }) }) });
     receipt = { ...receipt, ...sent }; await save(); return receipt;
   } catch (error) {
+    receipt.creation_dispatched = dispatched;
+    if (!dispatched) receipt.creation_status = "not_created";
     if (creating) receipt.creation_status = error.uncertain !== false ? "unknown" : "not_created";
     if (error.delivery_status) Object.assign(receipt, { delivery_status: error.delivery_status, sent: error.sent });
     if (error.message_id) Object.assign(receipt, { message_id: error.message_id, client_message_id: error.client_message_id });
     receipt.error_code = error.code ?? "DESKTOP_CLOUD_FAILED";
-    try { await save(); } catch { error.receipt_update_required = true; }
-    Object.assign(error, { execution_environment: "cloud", creation_status: receipt.creation_status, thread_id: receipt.thread_id, attempt_id: attempt, receipt_path: receipt.receipt_path, sent: receipt.sent, delivery_status: receipt.delivery_status }); throw error;
+    if (!options.dryRun) { try { await save(); } catch { error.receipt_update_required = true; } }
+    Object.assign(error, { execution_environment: "cloud", creation_status: receipt.creation_status, creation_dispatched: dispatched, thread_id: receipt.thread_id, attempt_id: attempt, receipt_path: receipt.receipt_path, sent: receipt.sent, delivery_status: receipt.delivery_status }); throw error;
   } finally { try { client?.close(); } catch { receipt.runtime_cleanup_required = true; } }
 }
-export async function sendDesktopCloudInput(target, text, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend, expectedEnvironmentConfigId } = {}, { connect = connectDesktopCloud, ...storage } = {}) {
+// A send needs the task's status, environment and newest turn, not its history.
+// The newest turn is the steer candidate, and turn/steer checks expectedTurnId.
+// It is marked notLoaded so that a v1 --based-on check still reads the history.
+async function sendState(client, id) {
+  const { thread } = await client.request("thread/read", { threadId: id, includeTurns: false }), newest = await newestTurn(client, id);
+  if (thread?.id !== id) throw failure("Cannot verify the task.", "DESKTOP_CLOUD_PROTOCOL_ERROR");
+  return { ...thread, turns: newest ? [{ ...newest, items: [], itemsView: "notLoaded" }] : [] };
+}
+
+export async function sendDesktopCloudInput(target, text, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend, expectedEnvironmentConfigId, initialModelSelection } = {}, { connect = connectDesktopCloud, ...storage } = {}) {
   const id = desktopCloudId(target);
   if (typeof text !== "string" || !text.trim()) throw failure("A non-empty message is required.");
   const plan = { thread_id: id, deep_link: desktopCloudLink(id), client_message_id: clientMessageId, backend: "desktop-cloud", connection_mode: "desktop-cloud", delivery_action: newTurn ? "new-turn" : "steer", dry_run: dryRun, message_characters: [...text].length };
@@ -68,16 +90,27 @@ export async function sendDesktopCloudInput(target, text, { dryRun = false, newT
     const save = () => writeRecord("desktop-cloud-sends", clientMessageId, receipt, storage);
     try {
       client = await connect();
-      const thread = await fetchThread(client, id), active = thread.turns.filter(turn => turn.status === "inProgress");
-      if (newTurn ? thread.status?.type !== "idle" || active.length !== 0 : active.length !== 1) throw failure("The task state does not match the requested send. Read it again; idle continuation requires --new-turn.", "STALE_OBSERVATION");
+      // The turns decide, as they do for the member's project row: a thread
+      // status left active after its last turn ended does not refuse a new
+      // turn. The newest turn alone cannot show that an older turn still
+      // runs, so that case is proved from every turn's status.
+      const thread = await sendState(client, id), turns = turnObservation(thread.turns), evidence = turnEvidence(turns), active = thread.turns;
+      const ended = async () => { const all = await turnStatuses(client, id); return !!all && turnEvidence(turnObservation(all)) === "none"; };
+      const startable = !turnRuns(turns) && (thread.status?.type === "idle" || (thread.status?.type === "active" && evidence === "none" && await ended()));
+      if (newTurn ? !startable : evidence !== "running") throw failure("The task state does not match the requested send. Read it again; idle continuation requires --new-turn.", "STALE_OBSERVATION");
       const environments = thread.environments;
       if (!Array.isArray(environments) || environments.length !== 1 || typeof environments[0].environmentId !== "string" || !environments[0].environmentId.startsWith("ccarenv_") || typeof environments[0].environmentConfigId !== "string") throw failure("Cannot verify the task's Cloud environment.");
       const managed = await getManagedThread(id, storage);
       if ((expectedEnvironmentConfigId && environments[0].environmentConfigId !== expectedEnvironmentConfigId) || (managed?.environment_config_id && environments[0].environmentConfigId !== managed.environment_config_id)) throw failure("The managed task environment route changed. Nothing was sent.", "DESKTOP_CLOUD_ROUTE_MISMATCH");
+      if (initialModelSelection !== undefined) {
+        validateCloudModelOptions(initialModelSelection);
+        if (!newTurn || !expectedEnvironmentConfigId || thread.turns.length !== 0 || !initialModelSelection.model || !initialModelSelection.thinking) throw failure("Initial model settings require a verified, empty new Cloud thread.");
+      }
       await beforeSend?.(thread, client);
       receipt.delivery_status = "unknown"; await save(); dispatching = true;
       const params = { threadId: id, input: [{ type: "text", text, text_elements: [] }], clientUserMessageId: clientMessageId };
-      const result = await client.request(newTurn ? "turn/start" : "turn/steer", newTurn ? { ...params, environments, deferredEnvironment: true } : { ...params, expectedTurnId: active[0].id }, { mutation: true });
+      const result = await client.request(newTurn ? "turn/start" : "turn/steer", newTurn ? { ...params, environments, deferredEnvironment: true,
+        ...(initialModelSelection === undefined ? {} : { model: initialModelSelection.model, effort: initialModelSelection.thinking }) } : { ...params, expectedTurnId: active[0].id }, { mutation: true });
       const turnId = newTurn ? result?.turn?.id : result?.turnId;
       if (typeof turnId !== "string" || (!newTurn && turnId !== active[0].id)) throw failure("Cloud did not confirm the expected turn. Inspect history before another send.", "DESKTOP_CLOUD_PROTOCOL_ERROR", true);
       receipt = { ...receipt, turn_id: turnId, sent: true, delivery_status: "accepted" };
@@ -123,6 +156,7 @@ export async function reconcileDesktopCloudCreation(record, { connect = connectD
   try { receipt = await desktopCloudReceipt(record.attempt_id, storage); }
   catch (error) { if (error.code === "DESKTOP_CLOUD_CREATION_RECEIPT_NOT_FOUND") return null; throw error; }
   if (receipt.environment_config_id !== record.environment_config_id || receipt.prompt_sha256 !== record.prompt_sha256) throw failure("Creation receipt does not match its environment and prompt.", "WORK_RECONCILE_MISMATCH");
+  if (record.model_selection && (receipt.model_selection?.model !== record.model_selection.model || receipt.model_selection?.thinking !== record.model_selection.thinking)) throw failure("Creation receipt does not match the reserved model and effort.", "WORK_RECONCILE_MISMATCH");
   if (!receipt.thread_id) return null;
   const client = await connect();
   try {
@@ -141,6 +175,7 @@ export async function reconcileDesktopCloudCreation(record, { connect = connectD
     }
     await writeRecord("desktop-cloud-creations", record.attempt_id, { ...receipt, delivery_status: "accepted", sent: true, delivery_verification: "stored" }, storage);
     return { thread_id: receipt.thread_id, attempt_id: record.attempt_id, environment_config_id: record.environment_config_id,
+      ...(receipt.model_selection ? { model_selection: receipt.model_selection } : {}),
       prompt_sha256: record.prompt_sha256, delivery_status: "accepted", delivery_verification: "stored" };
   } finally { client.close(); }
 }

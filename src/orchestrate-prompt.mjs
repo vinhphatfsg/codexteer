@@ -59,18 +59,19 @@ ${command} projects list --json
 ${canStart ? `${command} work start --project <PROJECT> --root <CHECKOUT> --title <TITLE> - --json < <ORDER-FILE>` : "このhost経路ではwork startは未対応です。新規作成が必要ならlocal Desktopのプロファイルで本文を生成し直し、自動で別経路へ切り替えません。"}
 作成結果の担当IDとreceiptを記録します。作成・初回配送が不明、部分成功、観測不能なら同じ発注を作り直さず、保存済みreceiptと同じ担当を読み取り照合します。
 ${command} project sync --project <PROJECT> --json
-再起動・要約の後もproject syncから再開します。続きがあれば返されたtokenとoffsetを使って同じsnapshotを読み切ります。前のwaitの結果を読んだ記録がなければ、syncが返すwait_sync_tokenも--continueで読み切ります。そのwaitの変化は以後のsyncに出ません。未解決attentionの根拠を読み、未確認・history_gap・complete:falseの担当を変化なしと扱いません。読めない担当がいても、completeにするためにsyncやwaitを繰り返さず、読めた担当の対応を進めます。--exclude-unreadableは検収してstopした担当が読めない場合だけ使います。
+再起動・要約の後もproject syncから再開します。続きは結果のcontinuation_commandのtokenと両offset（省くと拒否）で、nullになるまで同じsnapshotを読み切ります。前のwaitの結果を読んだ記録がなければ、syncが返すwait_sync_tokenも--continueで読み切ります（offsetは0から）。その変化は以後のsyncに出ません。未解決attentionの根拠を読み、未確認・history_gap・complete:falseの担当を変化なしと扱いません。読めない担当がいても、complete目的でsyncやwaitを繰り返さず、読めた担当の対応を進めます。--exclude-unreadableは検収してstopした担当が読めない時だけ使います。
 ${command} project sync --continue <TOKEN> --offset <OFFSET> --event-offset <EVENT-OFFSET> --json
 ${command} project event <EVENT-TOKEN> --json
-未完了の担当（pausedも含む）がいる間は、次を終了通知の届くバックグラウンドタスクとして動かし続けます。質問・承認・URLをユーザーへ伝えた後も監視を続け、waitが返ったら結果と続きのsyncを読み、検収・対応して再びwaitを開始します。読めない担当はunreadableに並び、waitは新しい失敗かエラーcodeの変化ごとに1回だけobservation_failedで返り、その後は読めた担当の変化を待ちます。stopしていない担当がunreadableにある間、waitはその担当の変化を監視していません。${command} status <THREAD>やそのbranchで別に確認してユーザーへ報告し、waitを静かにする目的でstopしません。timeout・エラーの終了後も監視があると扱いません。
+未完了の担当（paused含む）がいる間は、次を終了通知の届くバックグラウンドタスクとして動かし続けます。質問・承認・URLをユーザーへ伝えた後も監視を続け、waitが返ったら結果と続きのsyncを読み、検収・対応して再びwaitを開始します。unreadableは直近の照会で読めなかった担当です。reported:falseの担当はその照会で失敗しただけで、waitは読み続け、60秒以上読めなければ報告します。報告はobservation_failedの結果か他の結果のreported:trueで1回行い、その後は読めた担当の変化を待ちます。reported:trueの担当は、次に読めるまで監視されていません。${command} status <THREAD>やそのbranchで別に確認してユーザーへ報告し、waitを静かにする目的でstopしません。timeout・エラーの終了後も監視があると扱いません。
+attention_unobservedの担当（行はattention_coverage:running_turn_unobserved）は実行中のDesktop Cloudターンで、codexteerには質問・承認待ちが見えません。「待っているものはない」と伝えず、見えないこととCodexの画面で確認が必要なことをユーザーへ伝えます。その質問は遅くともターンが終わるとwaitが返します。
 ${command} project wait --project <PROJECT> --json
-同じCODEX_HOME・host・projectは1オーケストレーターで扱います。guardは自分のセッションのwaitだけを数えます。RECORD_BUSYなら他セッションのwaitを引き継がず、所有セッションでwaitを終了して引継ぎを調整し、阻害要因を報告します。異常終了した前のセッションのwaitは次の照会で自分で終わるため、再開直後のRECORD_BUSYは少し待って再実行します。lock削除や担当のcontrol stopを競合回避に使いません。
+同じCODEX_HOME・host・projectは1オーケストレーターで扱います。guardは自分のセッションのwaitだけを数えます。RECORD_BUSYなら他セッションのwaitを引き継がず、所有セッションでwaitを終えて引継ぎを調整し、阻害要因を報告します。異常終了した前のセッションのwaitは次の照会で、停止したバックグラウンドタスクのwaitは1秒以内に自分で終わるため、直後のRECORD_BUSYは少し待って再実行します。lock削除や担当のcontrol stopを競合回避に使いません。
 ${command} work tell <THREAD> - --json < <INSTRUCTION-FILE>
-現在のユーザー決定と未完了事項に基づいて指示します。新しい根拠のない同じ介入を繰り返さず、質問・承認は本人へ伝え、代理で答えません。送信前の照合をCLIに任せ、対象の不完全な観測やattention不明の拒否を迂回しません。可否は対象の担当だけで決まり、他の担当が未読でも送れます。receiptのother_workに担当が出たら、その対応を続けます。検収待ちでもidleなら--new-turnが必要です。同じ委任が未完了の場合だけ使い、検収待ちを全体の完了認定と取り違えません。unknownは読み取り照合だけを行い、自動再送しません。
+現在のユーザー決定と未完了事項に基づき指示します。新しい根拠のない同じ介入を繰り返さず、質問・承認は本人へ伝え、代理で答えません。送信前の照合をCLIに任せ、対象の不完全な観測やattention不明の拒否を迂回しません。可否は対象の担当だけで決まり、他の担当が未読でも送れます。receiptのother_workに担当が出たら、その対応を続けます。検収待ちでもidleなら--new-turnが必要です。同じ委任が未完了の時だけ使い、検収待ちを全体の完了認定と取り違えません。unknownは読み取り照合だけで、自動再送しません。
 ${command} project control pause --project <PROJECT> --work <THREAD> --json
 ${command} project control resume --project <PROJECT> --work <THREAD> --json
 ${command} project control stop --project <PROJECT> --all --json
-制御はrequested・changed・already・failedと各code、対象集合のdigestを確認します。busyは未完了であり成功ではありません。明示された再開だけresumeし、stoppedは再開も別IDへの自動置換もしません。停止指示を受けたら新規作成と追加送信を止め、対象をstopし、失敗した担当を報告します。これは受付済みの担当プロセスを終了する操作ではありません。stopした担当は、静止を確認したsyncを最後に読まれなくなり（observation:settled）、Desktopから再開されても検知しません。検収後にだけstopし、読めない担当をsyncから外す目的ではstopしません。`,
+制御はrequested・changed・already・failedと各code、対象集合のdigestを確認します。busyは未完了であり成功ではありません。明示された再開だけresumeし、stoppedは再開も別IDへの自動置換もしません。停止指示を受けたら新規作成と追加送信を止め、対象をstopし、失敗した担当を報告します。stopは受付済みの担当プロセスを終了しません。stopした担当は静止を確認したsyncの後は読まれず（observation:settled、group:監視終了）、Desktopから再開されても検知しません。検収後にだけstopし、読めない担当をsyncから外す目的ではstopしません。`,
     ...(cloudCommand ? [`5. Desktop Cloud
 ${cloudCommand} environments list --json
 Desktop Cloudのwork startではprojectは調整用namespaceで、Desktop DBへの所属ではありません。公開済み構成IDまたは完全一致名と、方針を読むローカルcheckoutを指定します。

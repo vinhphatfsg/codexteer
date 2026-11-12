@@ -9,6 +9,7 @@ import { listLocalThreads } from "./thread-store.mjs";
 import { sendTrackedMessage, listMessages, getMessage, messageSummary, reconcileMessages, markMessage, listInstructions } from "./journal.mjs";
 import { launchDesktopUpdate, desktopUpdateStatus } from "./update.mjs";
 import { appServerDoctor, startDesktop } from "./launcher.mjs";
+import { publicRpcDetail } from "./rpc-error.mjs";
 import { VERSION, helpData, renderHelp, renderErrors, errorRemedy, topicFor } from "./help.mjs";
 import { observeThread, printObservation } from "./observe.mjs";
 import { monitorCommand } from "./monitor.mjs";
@@ -29,7 +30,7 @@ import { createProjectThread } from "./thread-create.mjs";
 import { startWork } from "./work-start.mjs";
 import { tellWork } from "./work-tell.mjs";
 import { readRecord } from "./store.mjs";
-import { syncProject, continueProjectSync, projectEvent } from "./project-sync.mjs";
+import { syncProject, continueProjectSync, continuationPosition, projectEvent } from "./project-sync.mjs";
 import { waitProject, guardProject, projectGuardStatus, withStopHook } from "./project-wait.mjs";
 import { verifyProjectThread } from "./thread-verify.mjs";
 import { withDeviceAccount, prepareDevice, recoverDeviceKey, enrollDevice, pairDevice, verifyDevice, deviceStatus, deviceIdentityInfo, readPairingCode } from "./remote-device.mjs";
@@ -46,7 +47,7 @@ function success(command, data, json) {
 
 export function fail(error, json, argv = []) {
   const message = error instanceof Error ? error.message : String(error);
-  const remedy = errorRemedy(argv, error.code);
+  const remedy = errorRemedy(argv, error.code), rpc = publicRpcDetail(error);
   if (json) console.log(JSON.stringify({ ok: false, ...(error.watch ? { command: "watch", data: error.watch } : {}), error: {
     message, code: error.code, ...remedy, ...hostFields(), delivery_status: error.delivery_status,
     operation: error.operation, capability: error.capability,
@@ -58,6 +59,7 @@ export function fail(error, json, argv = []) {
       http_status: error.http_status, retry_after_ms: error.retry_after_ms,
     } : {}),
     sent: error.sent, thread_id: error.thread_id, rpc_code: error.rpc_code ?? error.rpcCode,
+    rpc_message: rpc?.rpc_message, rpc_reason: rpc?.rpc_reason,
     message_id: error.message_id, client_message_id: error.client_message_id, journal_update_required: error.journal_update_required,
     existing_message_id: error.existing_message_id, unknown_options: error.unknown_options,
     existing_attempt_id: error.existing_attempt_id, existing_receipt_path: error.existing_receipt_path,
@@ -71,13 +73,16 @@ export function fail(error, json, argv = []) {
     remote_process_id: error.remote_process_id,
     verification_checks: error.verification_checks,
     remote_control_auth: error.remote_control_auth,
-    storage_bytes: error.storage_bytes, required_bytes: error.required_bytes, limit_bytes: error.limit_bytes,
+    storage_bytes: error.storage_bytes, required_bytes: error.required_bytes, limit_bytes: error.limit_bytes, history_pruned: error.history_pruned, publication_in_progress: error.publication_in_progress,
   } }));
   else {
     console.error(`codexteer: ${message}`);
+    if (rpc) console.error(`rpc: ${rpc.rpc_code}${rpc.rpc_reason ? ` ${rpc.rpc_reason}` : ""}${rpc.rpc_message ? `: ${rpc.rpc_message}` : ""}`);
     for (const line of remedy?.usage ?? []) console.error(`使い方: codexteer ${line}`);
     if (remedy?.action) console.error(`対処: ${remedy.action}`);
     for (const key of ["storage_bytes", "required_bytes", "limit_bytes"]) if (Number.isSafeInteger(error[key])) console.error(`${key}: ${error[key]}`);
+    if (error.history_pruned) console.error(`history_pruned: ${JSON.stringify(error.history_pruned)}`);
+    if (error.publication_in_progress) console.error("publication_in_progress: true");
     if (error.execution_environment === "cloud" || (typeof error.code === "string" && error.code.startsWith("DESKTOP_CLOUD_"))) {
       // Recovery metadata must survive an uncertain submission or a stale
       // on-disk receipt. Never print the child error, prompt, or diagnostics.
@@ -212,7 +217,7 @@ async function mainOnTarget(argv) {
   try {
     const sessionOption = takeOption(args, "--supervisor", undefined);
     const supervisor = sessionOption === undefined ? undefined : supervisorId(sessionOption);
-    const connection = connectionMode(takeOption(args, "--connection", "shared"));
+    const givenConnection = takeOption(args, "--connection", undefined), connection = connectionMode(givenConnection ?? "shared");
     const connectionDependencies = observationConnection(connection);
     const requiredNode = takeOption(args, "--require-node-version", undefined);
     if (requiredNode !== undefined) {
@@ -248,11 +253,11 @@ async function mainOnTarget(argv) {
           return;
         }
         if (action === "guard") { console.log(JSON.stringify(await guardProject(project))); return; }
-        const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout) }, {
+        const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout), connection: givenConnection }, {
           read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),
         }));
         success("project.wait", data, json); if (!json) console.log(JSON.stringify(data, null, 2));
-        if (["observation_failed", "owner_exited"].includes(data.reason)) process.exitCode = 1;
+        if (["observation_failed", "owner_exited", "launcher_exited"].includes(data.reason)) process.exitCode = 1;
         return;
       }
       if (action === "control") {
@@ -273,10 +278,10 @@ async function mainOnTarget(argv) {
       if (action === "sync") {
         if (supervisor) throw Object.assign(new Error("A bound supervisor cannot sync an entire project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         const project = takeOption(args, "--project", undefined), byteBudget = Number(takeOption(args, "--byte-budget", "16000"));
-        const continuation = takeOption(args, "--continue", undefined), offset = Number(takeOption(args, "--offset", "0")), eventOffset = Number(takeOption(args, "--event-offset", "0"));
+        const continuation = takeOption(args, "--continue", undefined), offset = takeOption(args, "--offset", undefined), eventOffset = takeOption(args, "--event-offset", undefined);
         const excludeUnreadable = takeOption(args, "--exclude-unreadable", undefined), reason = takeOption(args, "--reason", undefined);
-        if (args.length || (!project && !continuation) || (continuation && (excludeUnreadable !== undefined || reason !== undefined))) throw usage("Expected: project sync --project ID [--exclude-unreadable THREAD --reason TEXT], or project sync --continue TOKEN --offset N.");
-        const data = await withStopHook(continuation ? await continueProjectSync(continuation, { byteBudget, offset, eventOffset }) : await syncProject(project, { byteBudget, excludeUnreadable, reason }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) }));
+        if (args.length || (!project && !continuation) || (continuation && (excludeUnreadable !== undefined || reason !== undefined))) throw usage("Expected: project sync --project ID [--exclude-unreadable THREAD --reason TEXT], or project sync --continue TOKEN --offset N --event-offset N.");
+        const data = await withStopHook(continuation ? await continueProjectSync(continuation, { byteBudget, connection: givenConnection, ...continuationPosition(offset, eventOffset) }) : await syncProject(project, { byteBudget, excludeUnreadable, reason, connection: givenConnection }, { read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)) }));
         success("project.sync", data, json); if (!json) console.log(JSON.stringify(data, null, 2)); return;
       }
       if (action === "event") {
@@ -585,7 +590,7 @@ async function mainOnTarget(argv) {
           console.log(`  observation compatibility: ${report.compatibility.status} (${report.compatibility.scope})`);
           for (const [method, status] of Object.entries(report.compatibility.api_checks)) console.log(`    ${method}: ${status}`);
           if (target === undefined) console.log("  Verify a target: codexteer doctor --thread <THREAD> --json");
-          if (report.failure) console.log(`  failure: ${report.failure.code}${report.failure.rpc_code === null ? "" : ` (RPC ${report.failure.rpc_code})`}`);
+          if (report.failure) console.log(`  failure: ${report.failure.code}${report.failure.rpc_code === null ? "" : ` (RPC ${report.failure.rpc_code}${report.failure.rpc_reason ? ` ${report.failure.rpc_reason}` : ""}${report.failure.rpc_message ? `: ${report.failure.rpc_message}` : ""})`}`);
         }
         if (report.remediation) console.log(`\n${report.remediation}`);
       }

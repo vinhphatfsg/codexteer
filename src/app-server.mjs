@@ -16,13 +16,15 @@ import { isCloudTask } from "./task-id.mjs";
 import { sendCloudInput } from "./cloud-send.mjs";
 
 export class SendFailure extends Error {
-  constructor(message, { code = "NOT_SENT", uncertain = false, threadId, rpcCode, capability, operation, remoteControlAuth } = {}) {
+  constructor(message, { code = "NOT_SENT", uncertain = false, threadId, rpcCode, rpcMessage, rpcReason, capability, operation, remoteControlAuth } = {}) {
     super(message);
     this.code = code;
     this.delivery_status = uncertain ? "unknown" : "not_sent";
     this.sent = uncertain ? null : false;
     this.thread_id = threadId;
     this.rpc_code = rpcCode;
+    if (rpcMessage !== undefined) this.rpc_message = rpcMessage;
+    if (rpcReason !== undefined) this.rpc_reason = rpcReason;
     this.capability = capability;
     this.operation = operation;
     this.remote_control_auth = remoteControlAuth;
@@ -148,7 +150,7 @@ export async function sendAppServerMessage(threadInput, message, { dryRun = fals
   } catch (error) {
     throw new SendFailure(error.uncertain
       ? "Delivery is unknown because App Server did not confirm receipt. Check the target task before retrying."
-      : error.message, { code: error.code ?? "NOT_SENT", uncertain: error.uncertain, threadId, rpcCode: error.rpcCode, capability: error.capability, operation: error.operation, remoteControlAuth: error.remote_control_auth });
+      : error.message, { code: error.code ?? "NOT_SENT", uncertain: error.uncertain, threadId, rpcCode: error.rpcCode, rpcMessage: error.rpcMessage, rpcReason: error.rpcReason, capability: error.capability, operation: error.operation, remoteControlAuth: error.remote_control_auth });
   } finally {
     // Cleanup failure must never turn an acknowledged send into a retryable
     // error. Keep its acceptance receipt and leave any stale lock fail-closed.

@@ -6,10 +6,17 @@ import { hostNamespace, hostFields } from "./target.mjs";
 
 const valid = value => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,150}$/.test(value);
 // The persisted namespace predates the codexteer rename; keep existing records.
+const root = home => { const namespace = hostNamespace(); return path.join(home, "codex-steer", ...(namespace ? ["hosts", namespace] : [])); };
 export function storePath(bucket, id, home = codexHome()) {
   if (!valid(bucket) || (id != null && !valid(id))) throw Object.assign(new Error("Invalid local record identifier."), { code: "OPTIONS_INVALID" });
-  const namespace = hostNamespace();
-  return path.join(home, "codex-steer", ...(namespace ? ["hosts", namespace] : []), bucket, ...(id == null ? [] : [`${id}.json`]));
+  return path.join(root(home), bucket, ...(id == null ? [] : [`${id}.json`]));
+}
+
+// Names only; each bucket's ownership is checked when one of its records is read.
+export async function listBuckets(pattern, options = {}) {
+  let entries;
+  try { entries = await readdir(root(options.home ?? codexHome()), { withFileTypes: true }); } catch (e) { if (e.code === "ENOENT") return []; throw e; }
+  return entries.filter(entry => entry.isDirectory() && pattern.test(entry.name)).map(entry => entry.name).sort();
 }
 
 async function owned(file, directory = false) {
@@ -54,6 +61,12 @@ export async function withStoreLock(key, fn, { home = codexHome() } = {}) {
   return withRecordLock("locks", key, fn, { home });
 }
 
+// Whether a live process holds the lock now. A hint only: it takes nothing,
+// and a lock it cannot inspect counts as free.
+export async function storeLockHeld(key, { home = codexHome() } = {}) {
+  try { const owner = await readRecord("locks", key, { home }); return !!owner && isAlive(owner.pid); } catch { return false; }
+}
+
 async function withRecordLock(bucket, key, fn, { home }) {
   await directory(bucket, home, true);
   const file = storePath(bucket, key, home), token = randomUUID(), temp = `${file}.${token}.tmp`;
@@ -90,13 +103,14 @@ async function withRecordLock(bucket, key, fn, { home }) {
 }
 
 // Metadata-only enumeration for quota accounting; never hydrate historical payloads.
+// `skipUnreadable` leaves out what cannot be listed safely instead of failing.
 export async function recordStats(bucket, options = {}) {
   let dir;
-  try { dir = await directory(bucket, options.home ?? codexHome()); } catch (e) { if (e.code === "ENOENT") return []; throw e; }
+  try { dir = await directory(bucket, options.home ?? codexHome()); } catch (e) { if (e.code === "ENOENT" || options.skipUnreadable) return []; throw e; }
   const result = [];
   for (const file of (await readdir(dir)).filter(x => x.endsWith(".json"))) {
     const id = file.slice(0, -5); const target = storePath(bucket, id, options.home);
-    await owned(target); result.push({ id, bytes: (await lstat(target)).size });
+    try { await owned(target); result.push({ id, bytes: (await lstat(target)).size }); } catch (e) { if (!options.skipUnreadable) throw e; }
   }
   return result;
 }

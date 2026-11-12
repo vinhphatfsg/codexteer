@@ -1,0 +1,613 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tempPrefix } from "../test-support/temp.mjs";
+import { desktopCloudService } from "../test-support/desktop-cloud-service.mjs";
+import { DesktopCloudClient, connectDesktopCloud } from "../src/desktop-cloud-api.mjs";
+import { observeThread } from "../src/observe.mjs";
+import { getManagedThread, registerManagedThread } from "../src/project-index.mjs";
+import { registerSupervisor } from "../src/supervision.mjs";
+import { syncProject } from "../src/project-sync.mjs";
+import { waitProject } from "../src/project-wait.mjs";
+import { controlProject } from "../src/project-control.mjs";
+import { tellWork } from "../src/work-tell.mjs";
+import { sendDesktopCloudInput, createDesktopCloudTask, reconcileDesktopCloudCreation } from "../src/desktop-cloud.mjs";
+import { startWork } from "../src/work-start.mjs";
+import { resolveCloudModelSelection } from "../src/desktop-cloud-models.mjs";
+
+const UNOBSERVED = "running_turn_unobserved", APPROVAL = "item/commandExecution/requestApproval", FLAG = `pendingRequest:${APPROVAL}`;
+const uuid = n => `aaaaaaaa-aaaa-4aaa-8aaa-${String(n).padStart(12, "0")}`, ID = `durable_${uuid(901)}`;
+let serial = 0;
+const user = text => ({ id: `item-${++serial}`, type: "userMessage", clientId: null, content: [{ type: "text", text }] });
+const agent = text => ({ id: `item-${++serial}`, type: "agentMessage", text });
+const question = text => ({ id: `item-${++serial}`, type: "agentMessage", text, questions: [{ id: "choice", question: text }] });
+const command = (status = "inProgress") => ({ id: `item-${++serial}`, type: "commandExecution", command: "make test", cwd: "/workspace", status, exitCode: null, aggregatedOutput: "" });
+
+// One Desktop Cloud task behind the real client, reader and project commands.
+// The service shows a running turn's items only when it ends, as the service does;
+// `live: false` is the switch left off.
+function task(n, { live = true } = {}) {
+  const id = `durable_${uuid(n)}`, service = desktopCloudService(uuid(n), { environment: `fixture~asenvcfg_${n}`, liveTurn: true });
+  const connect = async () => new DesktopCloudClient(service.rpc, live ? { openLive: service.openLive, timeoutMs: 100, drainMs: 5 } : {});
+  return { ...service, id, connect, environment: `fixture~asenvcfg_${n}`, session: uuid(n + 500),
+    resumes: () => service.state.live.resumes.length,
+    start(text = "order") { const opening = user(text); const started = service.append([opening], { status: "inProgress" }); service.state.status = "active"; return { turn: started.id, opening }; },
+    endedButActive() { service.append([user("order"), agent("report")]); service.state.status = "active"; } };
+}
+
+async function project(t, tasks) {
+  const home = await mkdtemp(tempPrefix("ct-dc-live-")); t.after(() => rm(home, { recursive: true, force: true }));
+  const storage = { home }, byId = new Map(tasks.map(x => [x.id, x]));
+  for (const x of tasks) {
+    await registerManagedThread(x.id, { projectId: "P", connection: "desktop-cloud", environmentConfigId: x.environment }, storage);
+    await registerSupervisor(x.id, x.session, { ...storage, connection: "desktop-cloud" });
+  }
+  const read = (id, options) => observeThread(id, options, { connect: byId.get(id).connect });
+  const dependencies = { storage, read, pollMs: 5, processIdentity: async () => "same-start" };
+  const send = (id, wire, options) => sendDesktopCloudInput(id, wire, options, { ...storage, connect: byId.get(id).connect });
+  return { storage, read, dependencies, send, sync: (options = {}, overrides = {}) => syncProject("P", options, { ...dependencies, ...overrides }), wait: () => waitProject("P", { timeoutMs: 0 }, dependencies),
+    tell: (id, body, options = {}) => tellWork(id, body, options, { storage, read, send }) };
+}
+
+async function member(t, options) {
+  const x = task(901, options), p = await project(t, [x]);
+  return { ...x, ...p, row: async () => (await p.sync()).works[0] };
+}
+
+const eventIds = row => row.events.map(event => event.event_id);
+const liveCalls = x => x.state.live.connections.map(connection => ({ calls: connection.calls.map(call => call.method), closed: connection.closed }));
+
+test("read and status show what a running turn has done so far, one resume per read", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  const first = await f.read(ID, {});
+  assert.equal(f.resumes(), 0, "no turn runs, so the task is not resumed");
+  const { turn, opening } = f.start("second order");
+  const note = agent("Reading the schema."), asked = question("Which database should the service use?"), running = command();
+  f.progress(note, asked, running);
+
+  const read = await f.read(ID, { since: first.cursor });
+  assert.deepEqual(read.events.map(event => [event.id, event.change]), [[turn, "added"], [opening.id, "added"], [note.id, "added"], [asked.id, "added"], [running.id, "added"]]);
+  assert.deepEqual(read.events.find(event => event.id === asked.id).questions, asked.questions);
+  assert.equal(read.live_turn_id, turn); assert.equal(read.attention_coverage, undefined, "the running turn was read");
+  assert.equal(read.execution, "active"); assert.deepEqual(read.running_commands.map(event => event.id), [running.id]);
+  assert.equal(f.resumes(), 1);
+
+  const status = await f.read(ID, { since: read.cursor });
+  assert.deepEqual(status.events, []); assert.equal(status.changed, false); assert.equal(status.live_turn_id, turn); assert.equal(status.attention_coverage, undefined);
+  assert.equal(f.resumes(), 2);
+  assert.deepEqual(liveCalls(f), [{ calls: ["thread/resume"], closed: true }, { calls: ["thread/resume"], closed: true }], "each live read resumes on its own connection, sends nothing else and closes it");
+});
+
+test("project wait returns a question asked mid-turn while the turn runs, once, and not again when the turn ends", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  assert.equal((await f.wait()).reason, "initial_sync");
+  const { turn } = f.start("second order");
+  let resumes = f.resumes();
+  assert.equal((await f.wait()).timed_out, true, "a turn that starts is not a change");
+  assert.equal(f.resumes() - resumes, 1, "one resume per member per poll, although the poll reads it twice");
+
+  const asked = question("Which database should the service use?");
+  f.progress(agent("Reading the schema."), asked);
+  resumes = f.resumes();
+  const returned = await f.wait();
+  assert.equal(returned.reason, "work_changed"); assert.equal(returned.attention_unobserved, undefined);
+  const row = returned.sync.works[0];
+  assert.equal(row.group, "対応が必要"); assert.equal(row.attention, "human"); assert.equal(row.execution, "active"); assert.equal(row.attention_coverage, undefined);
+  const summary = row.events.find(event => event.event_id === asked.id);
+  assert.equal(summary.text, "Which database should the service use?");
+  assert.equal(f.resumes() - resumes, 1);
+
+  assert.equal((await f.wait()).timed_out, true, "the question is not returned twice while the turn runs");
+  const final = agent("Used the default database.");
+  f.complete([final]);
+  resumes = f.resumes();
+  const ended = await f.wait(), endedRow = ended.sync.works[0];
+  assert.equal(ended.reason, "work_changed");
+  assert.deepEqual(eventIds(endedRow), [asked.id, turn, final.id], "the unresolved question it keeps, then the turn end and its new item");
+  assert.equal(endedRow.events[0].token, summary.token, "the question is the one already returned, not delivered again");
+  assert.equal(f.resumes(), resumes, "an ended turn is not resumed");
+  assert.equal((await f.wait()).timed_out, true);
+});
+
+test("a member with no running turn is never resumed", async t => {
+  const idle = task(911), ended = task(912), failed = task(913), unknown = task(914), behind = task(915), stopped = task(916);
+  idle.append([user("order"), agent("report")]);
+  ended.endedButActive();
+  failed.append([user("order"), agent("report")], { status: "failed" }); failed.state.status = "systemError";
+  unknown.append([user("order"), agent("report")], { status: "mystery" }); unknown.state.status = "active";
+  behind.append([user("first")], { status: "inProgress" }); behind.endedButActive();
+  stopped.append([user("order"), agent("report")]);
+  const all = [idle, ended, failed, unknown, behind, stopped], p = await project(t, all);
+  await p.sync();
+  await controlProject("P", "stop", { work: stopped.id }, p.storage);
+  await p.sync(); await p.wait(); await p.wait();
+  for (const x of all) await p.read(x.id, {});
+  assert.equal((await p.tell(idle.id, "Continue the same delegation.", { newTurn: true })).delivery_status, "accepted");
+  assert.deepEqual(all.map(x => [x.resumes(), x.state.live.wakes]), all.map(() => [0, 0]));
+});
+
+test("a failed or timed-out live read leaves the member readable and marked, and delivers nothing twice", async t => {
+  for (const failure of ["error", "timeout"]) {
+    const f = await member(t);
+    f.append([user("first order"), agent("first report")]);
+    await f.sync();
+    f.start();
+    const asked = question("Proceed with the migration?");
+    f.progress(asked);
+    const seen = await f.row();
+    assert.equal(seen.complete, true); assert.equal(seen.attention_coverage, undefined); assert.equal(eventIds(seen).includes(asked.id), true);
+
+    f.state.live.failure = failure;
+    const later = agent("Migrating.");
+    f.progress(later);
+    const resumes = f.resumes(), blind = await f.row();
+    assert.equal(blind.complete, true, failure); assert.equal(blind.history_gap, false); assert.equal(blind.error, null);
+    assert.equal(blind.attention_coverage, UNOBSERVED, "the member falls back to the history view");
+    assert.deepEqual(eventIds(blind), [asked.id], `${failure}: nothing new is delivered and the unresolved question stays`);
+    assert.equal(blind.group, "対応が必要");
+    assert.equal(f.resumes() - resumes, 1, "a failed live read is not retried in the same sync");
+    const read = await f.read(ID, {});
+    assert.equal(read.attention_coverage, UNOBSERVED); assert.equal(read.live_turn_id, undefined);
+
+    f.state.live.failure = null;
+    const recovered = await f.row();
+    assert.equal(recovered.attention_coverage, undefined);
+    assert.deepEqual(eventIds(recovered), [asked.id, later.id], "the item missed meanwhile arrives once; the question is the unresolved one kept");
+    f.complete([agent("done")]);
+    const done = await f.row();
+    assert.equal(eventIds(done).includes(later.id), false, `${failure}: the completed history does not repeat what the live view delivered`);
+  }
+});
+
+test("a server request replayed to the reader is reported as human attention and never answered", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  assert.equal((await f.wait()).reason, "initial_sync");
+  f.start(); f.progress(command());
+  f.state.live.requests = [APPROVAL];
+  const returned = await f.wait();
+  assert.equal(returned.reason, "work_changed");
+  const row = returned.sync.works[0];
+  assert.equal(row.group, "対応が必要"); assert.equal(row.attention, "human");
+  assert.deepEqual(row.reason.evidence.map(entry => entry.attention_flags).filter(Boolean), [[FLAG]]);
+  const read = await f.read(ID, {});
+  assert.deepEqual(read.attention, [FLAG]); assert.deepEqual(read.pending_requests, [APPROVAL]);
+  assert.equal((await f.wait()).timed_out, true, "a request still pending is not returned twice");
+
+  f.state.live.failure = "error";
+  assert.equal((await f.wait()).timed_out, true, "a failed live read neither clears the request nor returns it again");
+  const blind = await f.read(ID, { since: read.cursor });
+  assert.deepEqual(blind.attention, [FLAG]); assert.equal(blind.attention_coverage, UNOBSERVED);
+  await assert.rejects(f.tell(ID, "Continue."), { code: "WORK_TELL_HUMAN_REQUIRED" });
+  assert.equal(f.state.calls.some(call => call.method === "turn/steer"), false);
+
+  f.state.live.failure = null; f.state.live.requests = [];
+  const answered = await f.row();
+  assert.equal(answered.attention, "none"); assert.equal(answered.group, "動作中");
+  for (const connection of liveCalls(f)) assert.deepEqual(connection, { calls: ["thread/resume"], closed: true });
+});
+
+test("a turn that ends between the history read and the resume is read from the history", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  const first = await f.read(ID, {});
+  const { turn, opening } = f.start();
+  const note = agent("Working."), final = agent("Finished.");
+  f.progress(note);
+  f.state.live.beforeResume = () => { f.complete([final]); f.state.live.beforeResume = null; };
+  const raced = await f.read(ID, { since: first.cursor });
+  assert.deepEqual(raced.events.map(event => event.id), [turn, opening.id], "the snapshot of an ended turn is not used");
+  assert.equal(raced.attention_coverage, UNOBSERVED); assert.equal(raced.live_turn_id, undefined);
+  assert.equal(f.state.live.wakes, 1, "the residual race: a resume that arrives after the turn ended");
+  const resumes = f.resumes(), next = await f.read(ID, { since: raced.cursor });
+  assert.deepEqual(next.events.map(event => [event.id, event.change]), [[turn, "updated"], [note.id, "added"], [final.id, "added"]]);
+  assert.equal(f.resumes(), resumes);
+  assert.equal(raced.live_fallback, "unavailable");
+  const again = f.start("third order");
+  f.progress(agent("More work."));
+  const live = await f.read(ID, { since: next.cursor });
+  assert.equal(live.live_turn_id, again.turn, "a view that arrived too late does not refuse the task's later turns");
+  assert.equal(live.live_fallback, undefined); assert.equal(f.resumes(), resumes + 1);
+});
+
+test("a live view whose item ids differ from the history fails closed to the history view", async t => {
+  const opening = await member(t);
+  opening.append([user("first order"), agent("first report")]);
+  const first = await opening.read(ID, {});
+  opening.start(); opening.progress(agent("Working."));
+  opening.state.live.itemId = id => `live-${id}`;
+  const refused = await opening.read(ID, { since: first.cursor });
+  assert.equal(refused.events.length, 2, "the opening message has another id in the live view, so the snapshot is not used");
+  assert.equal(refused.attention_coverage, UNOBSERVED); assert.equal(refused.live_fallback, "view_mismatch");
+  assert.deepEqual(refused.live_mismatch, { turn_id: opening.state.turns.at(-1).id, absent: 1 });
+
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  const base = await f.read(ID, {});
+  const { opening: message } = f.start(), note = agent("Working.");
+  f.progress(note);
+  f.state.live.itemId = id => id === message.id ? id : `live-${id}`;
+  const live = await f.read(ID, { since: base.cursor });
+  assert.deepEqual(live.events.map(event => event.id).slice(2), [`live-${note.id}`]);
+  f.complete([agent("Done.")]);
+  const done = await f.read(ID, { since: live.cursor });
+  assert.deepEqual(done.live_mismatch, { turn_id: f.state.turns.at(-1).id, unlisted: 1 });
+  assert.equal(done.events.some(event => event.id === note.id), true, "history items are delivered, never skipped");
+  f.start("third order"); f.progress(agent("More work."));
+  const resumes = f.resumes(), after = await f.read(ID, { since: done.cursor });
+  assert.equal(f.resumes(), resumes, "after a mismatch the task is read from the history only");
+  assert.equal(after.attention_coverage, UNOBSERVED);
+});
+
+const FALLBACK = (id, reason) => [{ thread_id: id, attention_coverage: UNOBSERVED, live_fallback: reason }];
+const itemIds = (rows, turns) => rows.flatMap(eventIds).filter(id => !turns.includes(id));
+
+test("the member row says why a member went back to the history view after a mismatch", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  await f.sync();
+  const { opening } = f.start(), note = agent("Working.");
+  f.progress(note);
+  f.state.live.itemId = id => id === opening.id ? id : `live-${id}`;
+  assert.equal((await f.row()).live_fallback, undefined);
+  f.complete([agent("Done.")]);
+  const ended = await f.sync(), done = ended.works[0];
+  assert.equal(done.live_fallback, "mismatch"); assert.equal(done.complete, true); assert.equal(ended.attention_unobserved, undefined);
+  f.state.live.itemId = id => id;
+  f.start("third order"); f.progress(agent("More work."));
+  const resumes = f.resumes(), later = await f.sync({ byteBudget: 4096 }, { read: async (id, options) => ({ ...(await f.read(id, options)), title: "題".repeat(1200) }) });
+  assert.equal(later.works[0].details_omitted, true); assert.equal(later.works[0].live_fallback, "mismatch", "the compact row keeps the reason");
+  assert.deepEqual(later.attention_unobserved, FALLBACK(ID, "mismatch"));
+  const waited = await f.wait();
+  assert.equal(waited.timed_out, true); assert.deepEqual(waited.attention_unobserved, FALLBACK(ID, "mismatch"));
+  assert.equal(f.resumes(), resumes, "the task is read from the history only");
+  const status = await f.read(ID, {});
+  assert.equal(status.live_fallback, undefined, "a read without a cursor does not know the refusal");
+});
+
+test("a live view that lacks an item the history lists refuses live reads of the task, once and visibly", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  assert.equal((await f.wait()).reason, "initial_sync");
+  const { turn } = f.start(), note = agent("Working.");
+  f.progress(note);
+  assert.deepEqual(eventIds(await f.row()).slice(2), [note.id], "the live view delivers the item");
+  f.state.live.itemId = id => `live-${id}`;
+  let resumes = f.resumes();
+  const returned = await f.wait(), row = returned.sync.works[0];
+  assert.equal(returned.reason, "work_changed", "the orchestrator is told once that the member is no longer read live");
+  assert.equal(row.live_fallback, "view_mismatch"); assert.equal(row.attention_coverage, UNOBSERVED); assert.equal(row.complete, true);
+  assert.deepEqual(returned.attention_unobserved, FALLBACK(ID, "view_mismatch"));
+  assert.equal(eventIds(row).some(id => id.startsWith("live-")), false, "nothing of the refused view is delivered");
+  assert.equal(f.resumes() - resumes, 1);
+
+  resumes = f.resumes();
+  f.state.live.itemId = id => id;
+  for (let n = 0; n < 3; n++) {
+    const quiet = await f.wait();
+    assert.equal(quiet.timed_out, true); assert.deepEqual(quiet.attention_unobserved, FALLBACK(ID, "view_mismatch"));
+  }
+  assert.equal((await f.row()).live_fallback, "view_mismatch");
+  assert.equal(f.resumes(), resumes, "later polls and syncs do not resume the task");
+
+  const final = agent("Done.");
+  f.complete([final]);
+  const ended = await f.wait(), endedRow = ended.sync.works[0];
+  assert.deepEqual(eventIds(endedRow), [turn, final.id], "what the live view delivered before the refusal is not delivered again");
+  assert.equal(endedRow.live_fallback, "view_mismatch");
+  f.start("third order");
+  resumes = f.resumes();
+  assert.equal((await f.row()).attention_coverage, UNOBSERVED); assert.equal(f.resumes(), resumes);
+});
+
+test("a listed item whose content differs in the live view is read from the history, and the live read goes on", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  await f.sync();
+  const { turn, opening } = f.start(), note = agent("Working.");
+  f.progress(note);
+  f.state.live.item = item => item.id === opening.id ? { ...item, clientId: "client-1" } : item;
+  const rows = [await f.row()];
+  assert.equal(rows[0].attention_coverage, undefined); assert.equal(rows[0].live_fallback, undefined);
+  assert.deepEqual(eventIds(rows[0]), [turn, opening.id, note.id]);
+  const final = agent("Done.");
+  f.complete([final]);
+  rows.push(await f.row());
+  assert.deepEqual(itemIds(rows, [turn]), [opening.id, note.id, final.id], "nothing is delivered twice and nothing is skipped");
+  assert.equal(rows[1].live_fallback, undefined);
+});
+
+test("an item whose content differs between the live view and the ended history is delivered again as an update", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  const first = await f.read(ID, {});
+  const { turn } = f.start(), note = agent("Working.");
+  f.progress(note);
+  f.state.live.item = item => item.id === note.id ? { ...item, text: "Working, as the live view words it." } : item;
+  const live = await f.read(ID, { since: first.cursor });
+  assert.equal(live.events.find(event => event.id === note.id).change, "added");
+  f.complete([]);
+  const ended = await f.read(ID, { since: live.cursor });
+  assert.deepEqual(ended.events.map(event => [event.id, event.change]), [[turn, "updated"], [note.id, "updated"]]);
+  assert.equal(ended.events[1].text, "Working."); assert.equal(ended.live_mismatch, undefined); assert.equal(ended.live_fallback, undefined);
+});
+
+test("work tell that is first to meet a refused live view sends as on an unread turn, and its receipt says so", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  f.start(); f.progress(agent("Working."));
+  await f.sync();
+  f.state.live.itemId = id => `live-${id}`;
+  const resumes = f.resumes(), receipt = await f.tell(ID, "Also update the changelog.");
+  assert.equal(receipt.delivery_status, "accepted"); assert.equal(receipt.attention_coverage, UNOBSERVED);
+  assert.equal(f.resumes() - resumes, 1, "the refusal found by the first read holds for the check before sending");
+});
+
+test("past 256 live items the member is read from the history for the rest of the turn, and the row says so", async t => {
+  for (const before of [0, 200]) {
+    const f = await member(t);
+    f.append([user("first order"), agent("first report")]);
+    await f.sync();
+    const { turn, opening } = f.start(), early = Array.from({ length: before }, (_, n) => agent(`early ${n}`)), rows = [];
+    const row = async () => (await f.sync({ byteBudget: 1024 * 1024 })).works[0];
+    if (before) { f.progress(...early); rows.push(await row()); assert.equal(rows[0].live_fallback, undefined); assert.equal(eventIds(rows[0]).length, before + 2); }
+    const late = Array.from({ length: 257 - before }, (_, n) => agent(`late ${n}`));
+    f.progress(...late);
+    const full = await f.sync({ byteBudget: 1024 * 1024 });
+    rows.push(full.works[0]);
+    assert.equal(full.works[0].live_fallback, "ledger_full", `${before}`); assert.equal(full.works[0].attention_coverage, UNOBSERVED); assert.equal(full.works[0].complete, true);
+    assert.deepEqual(full.attention_unobserved, FALLBACK(ID, "ledger_full"));
+    assert.equal(eventIds(full.works[0]).some(id => late.some(item => item.id === id)), false, "an item past the limit waits for the history");
+    const final = agent("Done.");
+    f.complete([final]);
+    rows.push(await row());
+    assert.deepEqual(itemIds(rows, [turn]).sort(), [opening, ...early, ...late, final].map(item => item.id).sort(), `${before}: every item arrives exactly once`);
+    assert.equal(rows.at(-1).live_fallback, undefined);
+    f.start("third order"); f.progress(agent("More work."));
+    assert.equal((await f.row()).attention_coverage, undefined, "the next turn is read live again");
+  }
+});
+
+test("a turn that ends interrupted or failed without an item the live view showed delivers the rest once and refuses live reads", async t => {
+  for (const status of ["interrupted", "failed"]) {
+    const f = await member(t);
+    f.append([user("first order"), agent("first report")]);
+    await f.sync();
+    const first = f.start(), note = agent("Working."), unfinished = command();
+    f.progress(note, unfinished);
+    const rows = [await f.row()];
+    assert.deepEqual(eventIds(rows[0]), [first.turn, first.opening.id, note.id, unfinished.id]);
+    const running = f.state.turns.at(-1), last = agent("Stopped.");
+    running.items = running.items.filter(item => item.id !== unfinished.id);
+    f.complete([last], status);
+    const ended = await f.sync();
+    rows.push(ended.works[0]);
+    assert.equal(ended.works[0].live_fallback, "mismatch", status); assert.equal(ended.works[0].complete, true); assert.equal(ended.works[0].history_gap, false);
+    assert.deepEqual(eventIds(ended.works[0]).filter(id => id !== unfinished.id), [first.turn, last.id], `${status}: the turn end and the item the live view had not shown`);
+
+    const second = f.start("second order"), more = agent("More work.");
+    f.progress(more);
+    const resumes = f.resumes(), blind = await f.sync();
+    rows.push(blind.works[0]);
+    assert.equal(f.resumes(), resumes, "the task is read from the history only");
+    assert.deepEqual(blind.attention_unobserved, FALLBACK(ID, "mismatch"));
+    const done = agent("Done.");
+    f.complete([done]);
+    rows.push(await f.row());
+    const delivered = itemIds(rows, [first.turn, second.turn]).filter(id => id !== unfinished.id);
+    assert.deepEqual(delivered, [first.opening.id, note.id, last.id, second.opening.id, more.id, done.id], `${status}: nothing is delivered twice and nothing is skipped`);
+  }
+});
+
+const steers = x => x.state.calls.filter(call => call.method === "turn/steer").length;
+const basis = async f => { const row = await getManagedThread(ID, f.storage); return [row.sync_cursor, row.sync_revision]; };
+// A tell whose target changes after the send verified the task's state, right
+// before the check that precedes the send.
+const lateTell = (f, change) => tellWork(ID, "Also update the changelog.", {}, { storage: f.storage, read: f.read,
+  send: (id, wire, options) => f.send(id, wire, { ...options, beforeSend: async (...args) => { await change(); await options.beforeSend(...args); } }) });
+const WIDE = { byteBudget: 1024 * 1024 };
+
+test("work tell reads the running turn live at its first read and again right before sending", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  f.start(); f.progress(agent("Working."));
+  await f.sync();
+  let resumes = f.resumes();
+  const steered = await f.tell(ID, "Also update the changelog.");
+  assert.equal(steered.delivery_status, "accepted"); assert.equal(steered.attention_coverage, undefined);
+  assert.equal(f.resumes() - resumes, 2, "the freshness read and the check before sending each take their own live view");
+
+  f.progress(agent("Updating the changelog."));
+  await f.sync();
+  f.progress(agent("Still going."));
+  resumes = f.resumes();
+  await assert.rejects(f.tell(ID, "Also run the linter."), { code: "WORK_TELL_STALE_SYNC" }, "new progress after the sync makes it stale, as on local threads");
+  assert.equal(f.resumes() - resumes, 1, "a tell refused at its first read does not reach the second");
+
+  await f.sync();
+  f.progress(question("Should the linter be strict?"));
+  resumes = f.resumes();
+  await assert.rejects(f.tell(ID, "Also run the linter."), { code: "WORK_TELL_HUMAN_REQUIRED" });
+  assert.equal(f.resumes() - resumes, 1);
+  await f.sync();
+  resumes = f.resumes();
+  await assert.rejects(f.tell(ID, "Also run the linter."), { code: "WORK_TELL_HUMAN_REQUIRED" }, "a question in the reviewed sync");
+  assert.equal(f.resumes(), resumes, "a tell refused by its sync basis reads nothing");
+  assert.equal(steers(f), 1);
+});
+
+test("work tell does not steer over a question, a pending request or progress that appears after its first read", async t => {
+  const late = { question: [f => f.progress(question("Should the linter be strict?")), "WORK_TELL_HUMAN_REQUIRED"],
+    request: [f => { f.state.live.requests = [APPROVAL]; }, "WORK_TELL_HUMAN_REQUIRED"],
+    progress: [f => f.progress(agent("Still going.")), "WORK_TELL_STALE_SYNC"] };
+  for (const [name, [change, code]] of Object.entries(late)) {
+    const f = await member(t);
+    f.append([user("first order"), agent("first report")]);
+    await f.sync();
+    const { turn, opening } = f.start(), note = agent("Working.");
+    f.progress(note);
+    const rows = [await f.row()], reviewed = await basis(f), resumes = f.resumes();
+    let changed = [];
+    const error = await lateTell(f, () => { changed = change(f) ?? []; }).catch(error => error);
+    assert.equal(error.code, code, name); assert.equal(error.delivery_status, "not_sent", name);
+    assert.equal(steers(f), 0, `${name}: nothing is steered`);
+    assert.equal(f.resumes() - resumes, 2, `${name}: the check before sending resumed the task itself`);
+    assert.deepEqual(await basis(f), reviewed, `${name}: the refused tell leaves the member's cursor as the sync saved it`);
+
+    rows.push(await f.row());
+    assert.equal(rows[1].attention, name === "progress" ? "none" : "human", name);
+    f.state.live.requests = [];
+    f.complete([agent("Done.")]);
+    rows.push(await f.row());
+    const ids = itemIds(rows, [turn]), count = id => ids.filter(other => other === id).length;
+    // An unanswered question stays on the member's later rows, so it is counted on the row that first shows it.
+    assert.equal(eventIds(rows[1]).filter(id => id === changed[0]?.id).length, name === "request" ? 0 : 1, `${name}: what appeared late reaches the next sync once`);
+    assert.deepEqual([opening.id, note.id, ...(name === "progress" ? [changed[0].id] : [])].map(count).filter(n => n !== 1), [], `${name}: nothing is delivered twice or skipped`);
+    const before = f.resumes(), next = await f.tell(ID, "Continue the same delegation.", { newTurn: true }).catch(error => error);
+    assert.equal(f.resumes(), before, `${name}: a tell to a task with no running turn resumes nothing`);
+    assert.equal(name === "question" ? next.code : next.delivery_status, name === "question" ? "WORK_TELL_HUMAN_REQUIRED" : "accepted", `${name}: the next sync is a usable basis`);
+  }
+});
+
+test("work tell does not steer a turn that ends after its first read", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  f.start(); f.progress(agent("Working."));
+  await f.sync();
+  const reviewed = await basis(f), resumes = f.resumes();
+  await assert.rejects(lateTell(f, () => f.complete([agent("Finished.")])), { code: "STALE_OBSERVATION", delivery_status: "not_sent" }, "the send's own check of its basis sees the turn end");
+  assert.equal(steers(f), 0); assert.equal(f.resumes() - resumes, 1, "an ended turn is not resumed");
+  assert.deepEqual(await basis(f), reviewed);
+});
+
+test("work tell that cannot take its second live view sends as on an unread turn, and its receipt says so", async t => {
+  const blind = { error: f => { f.state.live.failure = "error"; }, timeout: f => { f.state.live.failure = "timeout"; },
+    view: f => { f.state.live.itemId = id => `live-${id}`; },
+    ledger: f => { f.progress(...Array.from({ length: 257 }, (_, n) => agent(`late ${n}`))); },
+    ended: f => { f.state.live.beforeResume = () => { f.complete([agent("Finished.")]); f.state.live.beforeResume = null; }; } };
+  for (const [name, change] of Object.entries(blind)) {
+    const f = await member(t);
+    f.append([user("first order"), agent("first report")]);
+    await f.sync(WIDE);
+    const { turn } = f.start();
+    f.progress(agent("Working."));
+    const rows = [(await f.sync(WIDE)).works[0]], reviewed = await basis(f), resumes = f.resumes();
+    assert.equal(rows[0].attention_coverage, undefined, name);
+    const receipt = await lateTell(f, () => change(f));
+    assert.equal(receipt.delivery_status, "accepted", name);
+    assert.equal(receipt.attention_coverage, UNOBSERVED, `${name}: the turn was not read right before the send`);
+    assert.equal(steers(f), 1, name); assert.equal(f.resumes() - resumes, 2, name);
+    assert.deepEqual(await basis(f), reviewed, `${name}: the tell leaves the member's cursor as the sync saved it`);
+
+    f.state.live.failure = null; f.state.live.itemId = id => id;
+    rows.push((await f.sync(WIDE)).works[0]);
+    if (name !== "ended") f.complete([agent("Done.")]);
+    rows.push((await f.sync(WIDE)).works[0]);
+    assert.deepEqual(itemIds(rows, [turn]).sort(), f.state.turns.at(-1).items.map(item => item.id).sort(), `${name}: every item arrives exactly once`);
+    const before = f.resumes();
+    assert.equal((await f.tell(ID, "Continue the same delegation.", { newTurn: true })).delivery_status, "accepted", `${name}: the next sync is a usable basis`);
+    assert.equal(f.resumes(), before, `${name}: a new turn on a task with no running turn resumes nothing`);
+  }
+});
+
+test("work start reads the new task's history only, and the first sync reads its running turn once", async t => {
+  const home = await mkdtemp(tempPrefix("ct-dc-live-start-")), root = await mkdtemp(tempPrefix("ct-dc-live-root-"));
+  t.after(() => Promise.all([rm(home, { recursive: true, force: true }), rm(root, { recursive: true, force: true })]));
+  await writeFile(`${root}/CODEXTEER.md`, "policy\n");
+  const x = task(941), storage = { home }, environment = { id: x.environment, name: "Fixture" };
+  const transport = { ...storage, connect: x.connect, environments: async () => ({ environments: [environment] }) };
+  const read = (id, options) => observeThread(id, options, { connect: x.connect });
+  const started = await startWork({ project: "P", title: "live", order: "Report a focused result.", root, environment: "Fixture", connection: "desktop-cloud" }, { storage,
+    resolveEnvironment: async () => environment, resolveModelSelection: options => resolveCloudModelSelection(options, transport),
+    create: ({ environmentConfigId, prompt, title, attemptId, modelSelection }) => createDesktopCloudTask(environmentConfigId, prompt, { title, attemptId, modelSelection }, transport),
+    reconcile: record => reconcileDesktopCloudCreation(record, transport), read });
+  assert.equal(started.thread_id, x.id); assert.equal(x.resumes(), 0, "the creation check does not resume the task");
+  const note = agent("Reading the order.");
+  x.progress(note);
+  const sync = await syncProject("P", {}, { storage, read });
+  assert.equal(sync.complete, true); assert.equal(sync.works[0].error, null); assert.equal(sync.works[0].attention_coverage, undefined);
+  const ids = eventIds(sync.works[0]);
+  assert.equal(ids.filter(id => id === note.id).length, 1); assert.equal(new Set(ids).size, ids.length, "nothing is delivered twice");
+  assert.equal(x.resumes(), 1);
+});
+
+test("one sync and one wait poll resume each running member once", async t => {
+  const running = [task(921), task(922), task(923)], idle = task(924);
+  for (const x of running) { x.start(); x.progress(agent("Working.")); }
+  idle.append([user("order"), agent("report")]);
+  const p = await project(t, [...running, idle]);
+  await p.sync();
+  assert.deepEqual([...running, idle].map(x => x.resumes()), [1, 1, 1, 0]);
+  await p.wait(); await p.wait();
+  assert.deepEqual([...running, idle].map(x => x.resumes()), [3, 3, 3, 0]);
+});
+
+test("with the switch off, a running turn stays unobserved and is never resumed", async t => {
+  const f = await member(t, { live: false });
+  f.start(); f.progress(question("Which database?"));
+  const row = await f.row();
+  assert.equal(row.attention_coverage, UNOBSERVED); assert.equal(f.resumes(), 0);
+  assert.equal((await f.read(ID, {})).attention_coverage, UNOBSERVED);
+});
+
+test("a cursor that carries a live ledger is read with the switch off, and the ended turn repeats nothing", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  const first = await f.read(ID, {});
+  const { turn } = f.start(), note = agent("Working."), final = agent("Done.");
+  f.progress(note);
+  const live = await f.read(ID, { since: first.cursor });
+  assert.equal(live.events.some(event => event.id === note.id), true);
+  const off = since => observeThread(ID, { since }, { connect: async () => new DesktopCloudClient(f.rpc) });
+  const blind = await off(live.cursor);
+  assert.deepEqual(blind.events, []); assert.equal(blind.attention_coverage, UNOBSERVED); assert.equal(blind.live_fallback, undefined);
+  f.complete([final]);
+  assert.deepEqual((await off(blind.cursor)).events.map(event => event.id), [turn, final.id]);
+});
+
+// The wire under connectDesktopCloud: a scripted socket that serves one task
+// with a running turn and replays an approval request to a resuming client.
+function wire() {
+  const UUID = uuid(931), frames = [];
+  const turn = { id: "turn-1", status: "inProgress", startedAt: 1, items: [{ id: "item-a", type: "userMessage", content: [{ type: "text", text: "order" }] }], itemsView: "full" };
+  const asked = { id: "item-b", type: "agentMessage", text: "Which database?", questions: [{ id: "choice", question: "Which database?" }] };
+  class Socket extends EventEmitter {
+    constructor() { super(); this.readyState = 0; this.sent = []; frames.push(this.sent); setImmediate(() => { this.readyState = 1; this.emit("open"); }); }
+    reply(message) { setImmediate(() => this.emit("message", Buffer.from(JSON.stringify(message)), false)); }
+    send(data, done) {
+      const message = JSON.parse(data); this.sent.push(message); done?.();
+      if (message.id === undefined) return;
+      const thread = { id: UUID, name: "worker", status: { type: "active", activeFlags: [] }, environments: [] };
+      if (message.method === "initialize") this.reply({ id: message.id, result: {} });
+      else if (message.method === "thread/read") this.reply({ id: message.id, result: { thread } });
+      else if (message.method === "thread/turns/list") this.reply({ id: message.id, result: { data: [turn], nextCursor: null } });
+      else if (message.method === "thread/resume") {
+        this.reply({ id: message.id, result: { thread: { ...thread, turns: [{ ...turn, items: [...turn.items, asked] }] }, resumeKind: "attached" } });
+        this.reply({ id: "approval-1", method: APPROVAL, params: { threadId: UUID } });
+      } else this.reply({ id: message.id, error: { code: -32601, message: "unsupported" } });
+    }
+    close() { this.readyState = 3; this.emit("close"); }
+    terminate() { this.readyState = 3; this.emit("close"); }
+  }
+  const connect = env => () => connectDesktopCloud({}, { credentials: async () => ({ token: "token", accountId: "account" }), Socket, env });
+  return { id: `durable_${UUID}`, frames, connect };
+}
+
+test("on the wire, the reader resumes on its own connection and answers no server request", async t => {
+  const on = wire();
+  const read = await observeThread(on.id, {}, { connect: on.connect({ CODEXTEER_DESKTOP_CLOUD_LIVE_TURN: "on" }) });
+  assert.deepEqual(read.events.map(event => event.id), ["turn-1", "item-a", "item-b"]);
+  assert.deepEqual(read.attention, [FLAG]); assert.deepEqual(read.pending_requests, [APPROVAL]);
+  const methods = on.frames.map(sent => sent.map(message => message.method));
+  assert.deepEqual(methods[1], ["initialize", "initialized", "thread/resume"], "the live connection initializes and resumes, nothing more");
+  assert.equal(methods[0].includes("thread/resume"), false, "the read connection is never subscribed");
+  assert.deepEqual(on.frames.flat().filter(message => message.method === undefined), [], "no response frame, so the approval request is never answered");
+
+  const off = wire();
+  const blind = await observeThread(off.id, {}, { connect: off.connect({}) });
+  assert.equal(blind.attention_coverage, UNOBSERVED); assert.equal(off.frames.length, 1, "with the switch off no live connection is opened");
+  assert.equal(off.frames.flat().some(message => message.method === "thread/resume"), false);
+});

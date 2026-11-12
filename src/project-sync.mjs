@@ -1,18 +1,19 @@
 import { parseCursor } from "./cursor.mjs";
-import { withHistoryReservation, assertHistoryBatch } from "./project-history.mjs";
+import { withHistoryReservation, assertHistoryBatch, readHistoryRecord, listHistoryRecords, lockDeadline, untilFree } from "./project-history.mjs";
 import { validateSyncPage } from "./sync-page.mjs";
 export { validateSyncPage } from "./sync-page.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { listManagedThreads, updateManagedThreadCursor, managedMembershipDigest } from "./project-index.mjs";
 import { getSupervisor } from "./supervision.mjs";
 import { normalizeTaskId } from "./task-id.mjs";
-import { readRecord, writeRecord, listRecords, withStoreLock } from "./store.mjs";
+import { readRecord, writeRecord, withStoreLock } from "./store.mjs";
+import { publicRpcDetail } from "./rpc-error.mjs";
+import { attentionCoverage, unobservedAttention, turnEvidence, turnRuns, statusExecution, turnExecution } from "./attention-coverage.mjs";
 
 const hash = value => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
 const bytes = value => Buffer.byteLength(JSON.stringify(value));
 const failure = (message, code = "PROJECT_SYNC_INVALID") => Object.assign(new Error(message), { code });
 const gapCodes = new Set(["STALE_CURSOR", "INVALID_CURSOR", "CURSOR_UPGRADE_REQUIRED", "OBSERVATION_CHANGED", "WORK_INITIAL_HISTORY_GAP"]);
-const terminal = new Set(["completed", "failed", "cancelled"]), active = new Set(["active", "inProgress", "in_progress", "pending", "queued", "running"]);
 
 // A command/tool outcome is scoped to that item, not to the delegated work.
 const failedTurn = event => event.type === "turn" && event.status === "failed";
@@ -45,7 +46,9 @@ export function changedSinceBaseline(state, entry, knownFlags = entry.signal.att
       || (event.questions?.length && !["answered", "resolved"].includes(event.status)))
     || (executionTurn(after.turn_id) && endedTurn.has(after.turn_status) && (after.turn_id !== before.turn_id || after.turn_status !== before.turn_status))
     || (["failed", "systemError"].includes(after.status) && after.status !== before.status)
-    || !Array.isArray(after.attention) || after.attention.some(flag => !knownFlags.includes(flag));
+    || !Array.isArray(after.attention) || after.attention.some(flag => !knownFlags.includes(flag))
+    // From this read on the member's running turns are not read live.
+    || !!state.observations?.some(page => page.live_mismatch);
 }
 
 // A partial ordinary sync is not a review. Without any baseline, no review has
@@ -62,8 +65,11 @@ function classify(observation, complete, connection) {
   const events = observation?.events ?? [], questions = events.some(event => Array.isArray(event.questions) && event.questions.length);
   const failed = failedWork(observation);
   const human = questions || (Array.isArray(flags) && flags.length > 0);
-  const execution = active.has(status) ? "active" : ["idle", "notLoaded"].includes(status) ? "idle" : terminal.has(status) ? "terminal" : "unknown";
-  const idleCompleted = status === "idle" && observation.latest_turn_status === "completed"
+  // On Desktop Cloud the turns decide when they disagree with the thread
+  // status. Unproven turns leave the status in charge, and settlement then
+  // refuses to call the member quiet.
+  const execution = turnExecution(observation, connection), byTurns = execution !== statusExecution(status);
+  const idleCompleted = (status === "idle" || (byTurns && execution === "idle")) && observation.latest_turn_status === "completed"
     && typeof observation.latest_turn_id === "string" && !!observation.latest_turn_id && observation.active_turn_count === 0;
   const attentionKnown = Array.isArray(flags);
   const attention = human ? "human" : failed ? "failure" : !complete || connection === "cloud" || !attentionKnown ? "unknown"
@@ -71,9 +77,15 @@ function classify(observation, complete, connection) {
   const observationState = complete ? "current" : "incomplete";
   const group = observationState !== "current" ? "未確認" : ["human", "failure"].includes(attention) ? "対応が必要" : attention === "review" ? "検収待ち" : execution === "unknown" || attention === "unknown" ? "未確認" : "動作中";
   return { execution, attention, observation: observationState, group, reason: { backend_status: status, attention_flags: flags ?? null, question_event: questions, failure_event: failed,
+    ...(byTurns ? { execution_basis: "turn_status", latest_turn_status: observation.latest_turn_status ?? null, active_turn_count: observation.active_turn_count } : {}),
     ...(attention === "review" && idleCompleted ? { review_basis: "idle_after_completed_turn", latest_turn_id: observation.latest_turn_id,
       latest_turn_status: observation.latest_turn_status, active_turn_count: observation.active_turn_count } : {}) } };
 }
+
+// Unresolved attention replaces a row's reason. Where the turns decided the
+// execution, the raw thread status and that evidence stay in the new reason.
+const turnBasis = reason => reason?.execution_basis ? { backend_status: reason.backend_status, execution_basis: reason.execution_basis,
+  latest_turn_status: reason.latest_turn_status, active_turn_count: reason.active_turn_count } : {};
 
 function summarizeEvent(event, threadId, store) {
   const token = randomUUID(), text = event.text ?? event.output ?? null;
@@ -85,7 +97,7 @@ function summarizeEvent(event, threadId, store) {
 
 export async function projectEvent(token, storage = {}) {
   if (typeof token !== "string" || !/^[0-9a-f-]{36}$/i.test(token)) throw failure("A project event token is required.");
-  const record = await readRecord("project-sync-events", token, storage);
+  const record = await readHistoryRecord("project-sync-events", token, null, storage);
   if (!record) throw failure("Project sync event was not found or was removed by project prune.", "PROJECT_EVENT_NOT_FOUND");
   return record;
 }
@@ -104,7 +116,8 @@ function outputSize(result) {
 function compactWork(work) {
   return { thread_id: work.thread_id, group: work.group, execution: work.execution, attention: work.attention,
     observation: work.observation, complete: work.complete, history_gap: work.history_gap, retry_after_ms: work.retry_after_ms,
-    error: work.error, attention_repeated: work.attention_repeated, resolution_unconfirmed: work.resolution_unconfirmed,
+    error: work.error, ...(work.error_detail ? { error_detail: publicRpcDetail(work.error_detail, { message: false }) } : {}), attention_repeated: work.attention_repeated, resolution_unconfirmed: work.resolution_unconfirmed,
+    ...(work.attention_coverage ? { attention_coverage: work.attention_coverage } : {}), ...(work.live_fallback ? { live_fallback: work.live_fallback } : {}),
     detail_token: work.detail_token, details_omitted: true,
     // The operator's reason is unbounded; a compact row must always fit.
     ...(work.settled ? { settled: { basis: work.settled.basis, settled_at: work.settled.settled_at } } : {}) };
@@ -112,12 +125,14 @@ function compactWork(work) {
 
 // Split inside a work as well as between works. Tokens always refer to the full
 // durable record; compact envelopes never silently truncate that record.
-function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0) {
+// `connection` is the --connection the command line was called with. A page
+// repeats it in continuation_command, so the next call runs as written.
+function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0, connection) {
   if (!Number.isInteger(offset) || offset < 0 || offset > saved.works.length || !Number.isInteger(eventOffset) || eventOffset < 0
     || (offset === saved.works.length ? eventOffset !== 0 : eventOffset > saved.works[offset].events.length)) throw failure("Invalid continuation offset.");
   const result = { project_id: saved.project_id, sync_token: token, wait_sync_token: saved.wait_sync_token ?? null, membership_digest: saved.membership_digest,
     membership_count: saved.works.length, complete: saved.complete, works: [], omitted_works: 0, omitted_events: 0,
-    continuation_token: null, continuation_offset: offset, continuation_event_offset: eventOffset,
+    continuation_token: null, continuation_command: null, continuation_offset: offset, continuation_event_offset: eventOffset,
     created_at: saved.created_at, output_bytes: 0, byte_budget: byteBudget };
   let wi = offset, ei = eventOffset;
   const finish = () => {
@@ -125,6 +140,7 @@ function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0) {
     result.omitted_events = saved.works.slice(wi).reduce((n, w, i) => n + w.events.length - (i === 0 ? ei : 0), 0);
     result.continuation_token = wi < saved.works.length ? token : null;
     result.next_offset = wi; result.next_event_offset = ei;
+    result.continuation_command = result.continuation_token ? `codexteer ${connection ? `--connection ${connection} ` : ""}project sync --continue ${token} --offset ${wi} --event-offset ${ei} --json` : null;
     return outputSize(result);
   };
   if (bytes(finish()) > byteBudget) throw failure("The fixed sync envelope exceeds the byte budget.", "PROJECT_SYNC_BUDGET_TOO_SMALL");
@@ -158,12 +174,27 @@ function pageResult(saved, token, byteBudget, offset = 0, eventOffset = 0) {
   return finish();
 }
 
+// Outside the paged envelope, on every page of a result: the members of the
+// whole result whose running turn could not be observed. Their number is not
+// bounded by the byte budget, which the envelope alone must meet.
+const withUnobserved = (page, works) => {
+  const unobserved = unobservedAttention(works);
+  return unobserved.length ? Object.assign(page, { attention_unobserved: unobserved }) : page;
+};
+
+// A command-line continuation names its position. One that defaulted to the
+// start returned the first page again, so repeating the token never advanced.
+export function continuationPosition(offset, eventOffset) {
+  if (offset === undefined || eventOffset === undefined) throw failure("project sync --continue requires both --offset and --event-offset. Pass the next_offset and next_event_offset of the page before it (its continuation_command is the whole call), or --offset 0 --event-offset 0 to read the snapshot from its first page.", "PROJECT_SYNC_OFFSET_REQUIRED");
+  return { offset: Number(offset), eventOffset: Number(eventOffset) };
+}
+
 export async function continueProjectSync(token, options = {}, storage = {}) {
   const byteBudget = validateBudget(options.byteBudget ?? 16000);
   if (typeof token !== "string" || !/^[0-9a-f-]{36}$/i.test(token)) throw failure("Invalid sync token.");
-  const saved = await readRecord("project-sync-results", token, storage);
+  const saved = await readHistoryRecord("project-sync-results", token, null, storage);
   if (!saved) throw failure("Project sync continuation was not found or was removed by project prune.", "PROJECT_SYNC_CONTINUATION_NOT_FOUND");
-  return pageResult(saved, token, byteBudget, options.offset ?? 0, options.eventOffset ?? 0);
+  return withUnobserved(pageResult(saved, token, byteBudget, options.offset ?? 0, options.eventOffset ?? 0, options.connection), saved.works);
 }
 
 // Attention is a reducer over the entire delta, not a property of its last page.
@@ -226,16 +257,29 @@ const settledRow = work => ({ title: work.title, execution: work.execution, atte
   cursor: work.cursor, sync_revision: work.sync_revision, turn_identity: work.turn_identity, history_notes: work.history_notes,
   complete: work.complete, history_gap: work.history_gap });
 const settledMarker = ({ row, ...marker }) => marker;
+// Nobody answers a stopped member, so the attention a settled row keeps is not
+// work that needs action: its row leaves the group of members still read.
+const SETTLED_GROUP = "監視終了";
+
+// A row is reserved before its cursor's outcome is known, so the error code a
+// refused cursor records has a fixed largest size.
+const CURSOR_ERROR_BYTES = 64;
+const cursorError = error => typeof error.code === "string" && /^[A-Z0-9_]+$/.test(error.code) && error.code.length <= CURSOR_ERROR_BYTES ? error.code : "OBSERVATION_FAILED";
 
 // Stop is irreversible, so a stopped member read completely and found quiet
-// needs no further reads. An unreadable one settles only on the operator's word.
-function settlement(decision, work, state, unresolvedAttention, settledAt) {
+// needs no further reads. Nobody answers a stopped member, so a question or
+// failure it ended on never resolves: the row that settles it shows that
+// attention and the head keeps it. An unreadable one settles only on the
+// operator's word.
+function settlement(decision, work, state, settledAt) {
   if (!decision.stopped) return null;
-  // A coarse idle or notLoaded status with a running or unprovable turn is not
-  // quiet, nor is work whose approval and question flags are unknown.
-  const quiet = (work.execution === "terminal" || (work.execution === "idle" && state.latest?.active_turn_count === 0))
+  // An idle member is quiet only when its turns prove that none runs: a missing
+  // count, an unknown status or a count that disagrees with the latest turn is
+  // not proof. A terminal member is not quiet while a turn is shown running.
+  // Work whose approval and question flags are unknown is not quiet either.
+  const quiet = (work.execution === "terminal" ? !turnRuns(state.latest) : work.execution === "idle" && turnEvidence(state.latest) === "none")
     && Array.isArray(state.latest?.attention) && state.latest.attention.length === 0;
-  if (work.complete) return quiet && !unresolvedAttention ? { basis: "observed", settled_at: settledAt, row: settledRow(work) } : null;
+  if (work.complete) return quiet ? { basis: "observed", settled_at: settledAt, row: settledRow(work) } : null;
   return decision.excludeReason && state.unreadable ? { basis: "excluded", reason: decision.excludeReason, error: state.error, settled_at: settledAt, row: settledRow(work) } : null;
 }
 
@@ -244,7 +288,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   const byteBudget = validateBudget(options.byteBudget ?? 16000), pageLimit = options.pageLimit ?? 1000, maxPagesPerWork = options.maxPagesPerWork ?? 100;
   if (!Number.isInteger(maxPagesPerWork) || maxPagesPerWork < 1 || !Number.isInteger(pageLimit) || pageLimit < 1 || pageLimit > 1000) throw failure("Invalid sync byte/page budget.");
   // Reject an oversized fixed envelope before reading or committing state.
-  pageResult({ project_id: projectId, membership_digest: "0".repeat(64), complete: false, works: [], created_at: new Date().toISOString() }, "0".repeat(36), byteBudget);
+  pageResult({ project_id: projectId, membership_digest: "0".repeat(64), complete: false, works: [], created_at: new Date().toISOString() }, "0".repeat(36), byteBudget, 0, 0, options.connection);
   const storage = dependencies.storage ?? {}, read = dependencies.read;
   if (typeof read !== "function") throw failure("Project sync reader is unavailable.");
   const members = await listManagedThreads(projectId, storage), membershipDigest = managedMembershipDigest(members);
@@ -276,7 +320,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   }
   // A successful start observed these events but has not presented them yet.
   // Keep them until membership publication commits the first sync cursor.
-  const starts = [...states.values()].some(state => !state.member.sync_cursor) ? await listRecords("work-starts", storage) : [];
+  const starts = [...states.values()].some(state => !state.member.sync_cursor) ? await listHistoryRecords("work-starts", projectId, storage) : [];
   for (const state of states.values()) if (!state.member.sync_cursor) {
     const start = starts.find(record => record.thread_id === state.member.thread_id && Array.isArray(record.initial_events) && record.sync_cursor);
     if (start) {
@@ -284,9 +328,11 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       state.events.push(...start.initial_events); state.observations.push({ events: start.initial_events }); state.cursor = start.sync_cursor; state.seen.add(start.sync_cursor);
     }
   }
+  // This sync's reads of a running Desktop Cloud member share one live view.
+  const liveTurn = new Map();
   const readPage = async state => {
     try {
-      const page = validateSyncPage(await read(state.member.thread_id, { connection: state.member.connection, since: state.cursor, limit: pageLimit, fullEvents: true }), state.member.thread_id, state.cursor, state.seen);
+      const page = validateSyncPage(await read(state.member.thread_id, { connection: state.member.connection, since: state.cursor, limit: pageLimit, fullEvents: true, liveTurn }), state.member.thread_id, state.cursor, state.seen);
       if (page.omitted_older_events > 0 || (!state.cursor && page.omitted_older_events !== 0)) throw failure("Initial history boundary is unproven.", "WORK_INITIAL_HISTORY_GAP");
       assertHistoryBatch(state.events, page.events);
       if (state.member.environment_config_id && page.environment_config_id !== state.member.environment_config_id) throw failure("The task environment differs from its managed route.", "PROJECT_ROUTE_MISMATCH");
@@ -294,6 +340,8 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       state.pages++; state.cursor = page.cursor; state.events.push(...(page.events ?? [])); state.latest = page; state.complete = !page.has_more; return page.has_more;
     } catch (error) {
       state.complete = false; state.error = error.code ?? "OBSERVATION_FAILED"; state.history_gap = gapCodes.has(error.code);
+      // What the backend said when it rejected the read, bounded where it was received.
+      state.errorDetail = publicRpcDetail(error);
       // Web Cloud maps its throttling to CONNECTION_FAILED and keeps the cause.
       if ([error.code, error.cause_code].includes("CLOUD_RATE_LIMITED") || error.http_status === 429) state.retry_after_ms = error.retry_after_ms ?? 15000;
       // A backend that asks for a retry, or a turn that started during the read,
@@ -337,11 +385,12 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     if (state.historyNotes?.length) historical[state.member.thread_id] = [...new Map([...historical[state.member.thread_id] ?? [], ...state.historyNotes].map(entry => [JSON.stringify(entry), entry])).values()];
     if (currentAttention) {
       unresolved[state.member.thread_id] = currentAttention;
-      axes.attention = currentAttention.attention; axes.reason = currentAttention.reason; axes.group = currentAttention.attention === "unknown" ? "未確認" : "対応が必要";
+      axes.attention = currentAttention.attention; axes.reason = { ...currentAttention.reason, ...turnBasis(axes.reason) }; axes.group = currentAttention.attention === "unknown" ? "未確認" : "対応が必要";
     }
     const repeatedEvents = currentAttention?.events.filter(e => !eventSummaries.some(s => s.token === e.token)) ?? [];
-    works.push({ thread_id: state.member.thread_id, title: state.latest?.title ?? null, ...axes, history_gap: state.history_gap,
-      retry_after_ms: state.retry_after_ms, complete: state.complete, cursor: state.complete ? state.cursor : null, events: [...repeatedEvents, ...eventSummaries], error: state.error,
+    const coverage = attentionCoverage(state.latest, state.member.connection);
+    works.push({ thread_id: state.member.thread_id, title: state.latest?.title ?? null, ...axes, ...(coverage ? { attention_coverage: coverage } : {}), ...(state.latest?.live_fallback ? { live_fallback: state.latest.live_fallback } : {}), history_gap: state.history_gap,
+      retry_after_ms: state.retry_after_ms, complete: state.complete, cursor: state.complete ? state.cursor : null, events: [...repeatedEvents, ...eventSummaries], error: state.error, ...(state.errorDetail ? { error_detail: state.errorDetail } : {}),
       turn_identity: state.latest?.latest_turn_id ?? state.latest?.current_turn_id ?? state.latest?.turn_id ?? state.latest?.active_turn_id ?? null,
       history_notes: historical[state.member.thread_id] ?? [],
       resolution_unconfirmed: !!currentAttention, attention_repeated: !!priorAttention && !!currentAttention });
@@ -355,12 +404,12 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     const attention = previous.unresolved_attention?.[member.thread_id];
     if (attention) unresolved[member.thread_id] = attention;
     carried[member.thread_id] = entry;
-    works.push({ thread_id: member.thread_id, ...entry.row, observation: "settled", events: attention?.events ?? [], settled: settledMarker(entry),
+    works.push({ thread_id: member.thread_id, ...entry.row, group: SETTLED_GROUP, observation: "settled", events: attention?.events ?? [], settled: settledMarker(entry),
       resolution_unconfirmed: !!attention, attention_repeated: !!attention });
   }
   const observedComplete = () => observed.every(w => w.settled || w.complete);
-  works.sort((a, b) => (a.group === "対応が必要" ? -1 : 0) - (b.group === "対応が必要" ? -1 : 0)
-    || (a.observation === "settled") - (b.observation === "settled") || a.thread_id.localeCompare(b.thread_id));
+  works.sort((a, b) => (a.observation === "settled") - (b.observation === "settled")
+    || (a.group === "対応が必要" ? -1 : 0) - (b.group === "対応が必要" ? -1 : 0) || a.thread_id.localeCompare(b.thread_id));
   const syncToken = randomUUID(), createdAt = new Date().toISOString();
   const head = { schema: 1, project_id: projectId, sync_token: syncToken, membership_digest: membershipDigest,
     complete: observedComplete(), complete_work_ids: works.filter(w => w.complete).map(w => w.thread_id),
@@ -369,20 +418,53 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     ...(previous?.wait_baseline ? { wait_baseline: previous.wait_baseline } : {}),
     ...(previous?.wait_reported_failures ? { wait_reported_failures: previous.wait_reported_failures } : {}) };
   // A probe that sees only ordinary progress must not publish, consume events,
-  // or replace the orchestrator's reviewed baseline.
-  if (dependencies.waitProbe && !dependencies.waitProbe({ previous, members, membershipDigest, states })) return null;
+  // or replace the orchestrator's reviewed baseline. One that returns names
+  // the failing members its publication reports.
+  const waitReport = dependencies.waitProbe?.({ previous, members, membershipDigest, states });
+  if (dependencies.waitProbe && !waitReport) return null;
   head.wait_sync_token = previous?.wait_sync_token ?? null;
   for (const work of observed) work.detail_token = randomUUID();
+  const eventRecord = record => ["project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }];
+  const detailRecord = (work, row = work) => eventRecord({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...row } } });
+  const resultRecord = (rows, fields) => ["project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, ...fields, works: rows, created_at: createdAt }];
+  // The row a refused cursor leaves: incomplete, with the attention an
+  // incomplete read cannot resolve.
+  const refusedRow = (work, state, code) => {
+    const prior = previous?.unresolved_attention?.[work.thread_id];
+    const retained = reduceAttention({ ...state, complete: false }, prior, state.eventSummaries);
+    return { retained, row: { ...work, complete: false, cursor: null, error: code, observation: "incomplete",
+      ...(retained ? { attention: retained.attention, reason: { ...retained.reason, ...turnBasis(work.reason) }, group: retained.attention === "unknown" ? "未確認" : "対応が必要",
+        resolution_unconfirmed: true, attention_repeated: !!prior,
+        events: [...new Map([...retained.events, ...work.events].map(e => [e.token, e])).values()] } : {}) } };
+  };
+  // The result and detail records are final only after the cursors, which follow
+  // the first write. Each fully read member's row is reserved as the larger of
+  // its two outcomes, advanced (settled when it can be) or refused, and
+  // `complete` as false, so the reservation is never below what is written.
+  const reserved = new Map(observed.map(work => {
+    const state = states.get(work.thread_id);
+    const rows = state.complete ? [{ ...work, sync_revision: (state.member.sync_revision ?? 0) + 1 }, refusedRow(work, state, "X".repeat(CURSOR_ERROR_BYTES)).row] : [work];
+    return [work, rows.map(row => {
+      const entry = settlement(plan.get(work.thread_id), row, state, createdAt);
+      return entry ? { ...row, settled: settledMarker(entry) } : row;
+    }).reduce((a, b) => bytes(a) >= bytes(b) ? a : b)];
+  }));
+  const records = [...eventRecords.map(eventRecord), ...observed.map(work => detailRecord(work, reserved.get(work))),
+    resultRecord(works.map(work => reserved.get(work) ?? work), { wait_sync_token: dependencies.waitProbe ? syncToken : head.wait_sync_token, complete: false })];
   // The existing project head lock protects only publication, never network I/O.
   // A stale reader must not replace a newer attention head, even after a CAS miss.
-  let conflict = null;
+  // A prune or a work start save of this project holds these locks for a short
+  // time: both paths wait for them, against one deadline.
+  let conflict = null, pruned, unsaved = false;
+  const deadline = lockDeadline(storage);
   try {
-    await withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => withHistoryReservation({ eventRecords, works, head, previous }, async (historyWrite) => {
+    await untilFree(projectId, deadline, entered => withStoreLock(`project-sync-${hash(projectId).slice(0, 40)}`, async () => withHistoryReservation({ projectId, records, publishing: true }, async (historyWrite, report) => {
+      entered(); pruned = report;
       const current = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage);
       if (hash(current ?? null) !== hash(previous ?? null)) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");
       // Persist attention evidence before advancing any cursor. A crash during
       // publication leaves an incomplete head that the next sync can recover.
-      for (const record of eventRecords) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
+      for (const record of eventRecords) await historyWrite(...eventRecord(record), storage);
       await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), { ...head, complete: false, complete_work_ids: [], publication_pending: true }, storage);
       // CAS uses the snapshot revision even if an empty read returns the same cursor.
       for (const state of states.values()) if (state.complete) {
@@ -391,23 +473,20 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
           const updated = await updateManagedThreadCursor(state.member.thread_id, state.member.sync_cursor, state.cursor, storage, state.member.sync_revision ?? 0);
           work.sync_revision = updated.sync_revision;
         } catch (error) {
-          work.complete = false; work.cursor = null; work.error = error.code; work.observation = "incomplete";
-          state.complete = false;
-          const retained = reduceAttention(state, previous?.unresolved_attention?.[work.thread_id], state.eventSummaries);
-          if (retained) {
-            unresolved[work.thread_id] = retained; work.attention = retained.attention; work.reason = retained.reason;
-            work.group = retained.attention === "unknown" ? "未確認" : "対応が必要"; work.resolution_unconfirmed = true;
-            work.attention_repeated = !!previous?.unresolved_attention?.[work.thread_id];
-            work.events = [...new Map([...retained.events, ...work.events].map(e => [e.token, e])).values()];
-          }
+          const { retained, row } = refusedRow(work, state, cursorError(error));
+          Object.assign(work, row); state.complete = false;
+          if (retained) unresolved[work.thread_id] = retained;
         }
       }
       // Settle only on what this publication commits. The pending head above
       // must not skip a member whose last delta was never presented.
-      const settlements = new Map(observed.map(work => [work, settlement(plan.get(work.thread_id), work, states.get(work.thread_id), unresolved[work.thread_id], createdAt)]));
+      const settlements = new Map(observed.map(work => [work, settlement(plan.get(work.thread_id), work, states.get(work.thread_id), createdAt)]));
       const reviewed = !!dependencies.waitProbe || observed.every(work => work.complete || settlements.get(work));
+      // The signal carries no question, so outside a review unresolved attention
+      // is left to the next one: a later partial sync would see nothing owed.
       for (const [work, entry] of settlements) {
-        if (!entry || (entry.basis === "observed" && !reviewed && owedToWait(previous?.wait_baseline, states.get(work.thread_id)))) continue;
+        if (!entry || (entry.basis === "observed" && !reviewed && previous?.wait_baseline
+          && (unresolved[work.thread_id] || owedToWait(previous.wait_baseline, states.get(work.thread_id))))) continue;
         head.settled = { ...head.settled, [work.thread_id]: entry }; work.settled = settledMarker(entry);
       }
       head.complete = observedComplete();
@@ -425,7 +504,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
         for (const [id, state] of states) {
           if (state.complete) entries[id] = { cursor: state.cursor, signal: projectWaitSignal(state.latest), sync_token: syncToken };
           else {
-            if (dependencies.waitProbe) failures[id] = works.find(work => work.thread_id === id).error;
+            if (waitReport?.has(id)) failures[id] = works.find(work => work.thread_id === id).error;
             if (baseline?.works?.[id]) entries[id] = { sync_token: baseline.sync_token, ...baseline.works[id] };
           }
         }
@@ -441,28 +520,37 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       failures = Object.fromEntries(Object.entries(unsettled(failures)).filter(([id]) => plan.has(id)));
       if (Object.keys(failures).length) head.wait_reported_failures = failures; else delete head.wait_reported_failures;
       // Save detail records before publishing a head that work tell may consume.
-      const detailStart = eventRecords.length;
-      for (const work of observed) {
-        eventRecords.push({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...work } } });
-      }
-      await historyWrite("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, storage);
-      for (const record of eventRecords.slice(detailStart)) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
+      await historyWrite(...resultRecord(works, { wait_sync_token: head.wait_sync_token, complete: head.complete }), storage);
+      for (const work of observed) await historyWrite(...detailRecord(work), storage);
       await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), head, storage);
-    }, storage), storage);
+    }, storage), storage), storage);
   } catch (error) {
     if (!["SYNC_CURSOR_CONFLICT", "PROJECT_SYNC_CONFLICT", "RECORD_BUSY"].includes(error.code)) throw error;
     conflict = error.code; head.complete = false;
     for (const work of observed) { work.complete = false; work.cursor = null; work.error ??= error.code === "SYNC_CURSOR_CONFLICT" ? "SYNC_CURSOR_CONFLICT" : "PROJECT_SYNC_CONFLICT"; work.observation = "incomplete"; }
-    for (const work of observed) eventRecords.push({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...work } } });
-    await withHistoryReservation({ eventRecords, works, head, previous }, async (historyWrite) => {
-      await historyWrite("project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, complete: false, works, created_at: createdAt }, storage);
-      for (const record of eventRecords) await historyWrite("project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }, storage);
-    }, storage);
+    const records = [resultRecord(works, { complete: false }), ...eventRecords.map(eventRecord), ...observed.map(work => detailRecord(work))];
+    let writing = false;
+    try {
+      await untilFree(projectId, deadline, entered => withHistoryReservation({ projectId, records, pruned }, async (historyWrite, report) => {
+        entered(); writing = true; pruned = report;
+        for (const record of records) await historyWrite(...record, storage);
+      }, storage), storage);
+    } catch (busy) {
+      if (writing || busy.code !== "RECORD_BUSY") throw busy;
+      // The history lock stayed busy, so this result has no record: it names
+      // no token of its own, and the next sync or wait reads the same again.
+      unsaved = true;
+      const unwritten = new Set(eventRecords.map(record => record.token));
+      for (const work of observed) { delete work.detail_token; work.events = work.events.filter(event => !unwritten.has(event.token)); }
+    }
   }
-  const page = pageResult({ project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, syncToken, byteBudget);
+  const page = withUnobserved(pageResult({ project_id: projectId, membership_digest: membershipDigest, wait_sync_token: head.wait_sync_token, complete: head.complete, works, created_at: createdAt }, unsaved ? null : syncToken, byteBudget, 0, 0, options.connection), works);
   // Outside the paged envelope, whose byte count is already final. Only this
   // marker tells a result that was never published from one where every read failed.
   if (conflict) page.publication_conflict = conflict;
+  if (unsaved) page.history_unsaved = true;
+  // Tokens of results older than the latest sync and the latest wait result no longer resolve.
+  if (pruned) page.history_pruned = pruned;
   if (!exclusion) return page;
   const id = exclusion.member.thread_id, row = works.find(w => w.thread_id === id);
   page.exclude_unreadable = { thread_id: id, ...(exclusion.action === "carry" ? { outcome: "already_settled" }

@@ -23,7 +23,7 @@ async function fixture(t) {
   const initial = readSnapshot(current).cursor;
   await registerManagedThread(THREAD, { projectId: "project-tell", connection: "shared", syncCursor: initial, policySha256: policyHash(policy) }, { home });
   await registerSupervisor(THREAD, SESSION, { home, owner: "fixture", connection: "shared" });
-  await writeRecord("work-starts", "fixture", { schema: 1, thread_id: THREAD, root, created_at: new Date().toISOString() }, { home });
+  await writeRecord("work-starts", "fixture", { schema: 1, project_id: "project-tell", thread_id: THREAD, root, created_at: new Date().toISOString() }, { home });
   const read = async (_id, options) => readSnapshot(current, { since: options.since, limit: options.limit });
   await syncProject("project-tell", {}, { storage: { home }, read });
   return { home, root, read, get current() { return current; }, set current(value) { current = value; } };
@@ -104,7 +104,7 @@ test("the receipt reports other members that are unread, waiting for a human, or
   assert.deepEqual((await tellWork(THREAD, "member added", {}, { storage: added, read: added.read, send: accept(added) })).other_work, { incomplete: [OTHER], human_attention: [], membership_changed: true });
 });
 
-test("settled members are not reported as unread; an excluded member's open question still is", async t => {
+test("settled members are reported neither as unread nor as waiting for a human", async t => {
   const idle = { id: OTHER, name: "other", status: { type: "idle" }, turns: [{ id: "turn-other", status: "completed", items: [] }] };
   const quiet = await pair(t, readSnapshot(idle).cursor); quiet.other = idle;
   await registerSupervisor(OTHER, SESSION.replace(/1212$/, "3434"), { home: quiet.home, owner: "fixture", connection: "shared" }); await controlSupervisor(OTHER, "stop", quiet);
@@ -116,9 +116,10 @@ test("settled members are not reported as unread; an excluded member's open ques
   const unreadable = (id, options) => id === OTHER ? Promise.reject(Object.assign(new Error("too large"), { code: "PAYLOAD_TOO_LARGE" })) : asking.readAll(id, options);
   const excluded = await syncProject("project-tell", { excludeUnreadable: OTHER, reason: "history exceeds the receive limit" }, { storage: asking, read: unreadable });
   assert.equal(excluded.exclude_unreadable.outcome, "excluded"); assert.equal(excluded.works.find(work => work.thread_id === OTHER).complete, false);
-  assert.deepEqual((await tellWork(THREAD, "excluded settled", {}, { storage: asking, read: asking.readAll, send: accept(asking) })).other_work, { incomplete: [], human_attention: [OTHER], membership_changed: false });
+  assert.deepEqual((await tellWork(THREAD, "excluded settled", {}, { storage: asking, read: asking.readAll, send: accept(asking) })).other_work, { incomplete: [], human_attention: [], membership_changed: false });
+  assert.equal((await readRecord("project-sync-heads", createHash("sha256").update("project-tell").digest("hex").slice(0, 40), asking)).unresolved_attention[OTHER].attention, "human", "the question itself stays on the settled row");
   await asking.sync(unreadable);
-  assert.deepEqual((await tellWork(THREAD, "excluded carried", {}, { storage: asking, read: asking.readAll, send: accept(asking) })).other_work, { incomplete: [], human_attention: [OTHER], membership_changed: false });
+  assert.deepEqual((await tellWork(THREAD, "excluded carried", {}, { storage: asking, read: asking.readAll, send: accept(asking) })).other_work, { incomplete: [], human_attention: [], membership_changed: false });
 });
 
 test("an older sync token stays a valid basis until the target is completely read again", async t => {

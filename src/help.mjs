@@ -3,6 +3,7 @@ import { topics as observation } from "./help-observation.mjs";
 import { topics as intervention } from "./help-intervention.mjs";
 import { topics as local } from "./help-local.mjs";
 import { topics as cloudRemote } from "./help-cloud-remote.mjs";
+import { topics as models } from "./help-models.mjs";
 import * as shared from "./help-errors.mjs";
 import { isCloudTask } from "./cloud-id.mjs";
 import { isDesktopCloudTask } from "./desktop-cloud-id.mjs";
@@ -11,7 +12,7 @@ import { VERSION } from "./version.mjs";
 
 export { VERSION };
 
-const byName = { ...supervision, ...observation, ...intervention, ...local, ...cloudRemote };
+const byName = { ...supervision, ...observation, ...intervention, ...local, ...cloudRemote, ...models };
 export const topics = Object.fromEntries([
   "overview",
   "details",
@@ -42,6 +43,7 @@ export const topics = Object.fromEntries([
   "debug-ui",
   "cloud",
   "desktop-cloud",
+  "models",
   "environments",
   "remote",
   "remote-control",
@@ -114,7 +116,7 @@ export function helpData(topic = "overview", { errors = false } = {}) {
 }
 
 export function renderHelp(data) {
-  const interactive = x => x.startsWith("supervise <") || /^orchestrate (?:--|resume )/.test(x);
+  const interactive = x => x.startsWith("supervise <") || /^orchestrate (?:--|resume )/.test(x) || x.endsWith("models select");
   const withJson = x => (interactive(x) ? x : x.includes(" -- ") ? x.replace(" -- ", " [--json] -- ") : `${x} [--json]`);
   const section = (label, lines) => (lines.length ? ["", `${label}:`, ...lines] : []);
   return [

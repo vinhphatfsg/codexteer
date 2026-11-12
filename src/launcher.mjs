@@ -4,6 +4,7 @@ import { constants } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { codexHome, discoverRuntime, verifyControlEndpoint } from "./runtime.mjs";
 import { RpcClient } from "./rpc.mjs";
+import { publicRpcDetail } from "./rpc-error.mjs";
 import { BUNDLED_CLI, BUNDLED_NODE } from "./wrapper.mjs";
 import { normalizeThreadId } from "./thread-id.mjs";
 import { readOnClient } from "./observe.mjs";
@@ -75,7 +76,7 @@ export async function appServerDoctor({ threadId: threadInput, versions = instal
   } catch (error) {
     remediation = error.message;
     remoteControlAuth = error.remote_control_auth;
-    failure = { code: error.code ?? "DIAGNOSTIC_FAILED", rpc_code: error.rpcCode ?? null, method: remoteControlAuth ? "remote-control-auth" : method, ...(error.capability ? { capability: error.capability } : {}) };
+    failure = { code: error.code ?? "DIAGNOSTIC_FAILED", rpc_code: error.rpcCode ?? null, ...publicRpcDetail(error), method: remoteControlAuth ? "remote-control-auth" : method, ...(error.capability ? { capability: error.capability } : {}) };
     const unavailable = ["CONNECTION_FAILED", "TIMEOUT", "RUNTIME_UNAVAILABLE", "RUNTIME_NOT_READY"].includes(error.code);
     if (method && !unavailable && !remoteControlAuth) {
       if (["CAPABILITY_UNVERIFIED", "RUNTIME_PROTOCOL_UNVERIFIED"].includes(error.code)) {
