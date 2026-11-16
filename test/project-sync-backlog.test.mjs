@@ -172,22 +172,21 @@ test("a wait after syncs read a backlog does not reopen a question a sync saw an
   assert.notEqual((await sync()).works.find(work => work.thread_id === id).attention, "human", "the answered question stays answered");
 });
 
-test("an orchestrator that syncs after each wait return reads a backlog through, without syncing on its own", async t => {
-  const f = await local(t);
-  const wait = () => waitProject("P", { timeoutMs: 0 }, { storage: f.storage, read: f.read, processIdentity: async () => "same", orchestratorIdentity: async () => null, parentPid: () => 1 });
-  assert.equal((await wait()).reason, "initial_sync");
-  const items = backlog("m", 40);
-  f.threads.get(id).turns.push({ id: "turn-1", status: "completed", items });
-  const reviewed = [];
-  for (let n = 0; n < 10; n++) {
-    const result = await wait();
-    if (result.reason === "timeout") break;
-    assert.equal(result.reason, "work_changed");
-    reviewed.push(...presented(result.sync.works));
-    const row = (await f.sync()).works[0];
-    reviewed.push(...presented([row]));
-    if (row.complete) break;
-  }
-  assert.equal((await f.sync()).works[0].complete, true);
-  assert.deepEqual([...new Set(reviewed)], items.map(item => item.id), "every event reached the orchestrator");
-});
+for (const [count, status] of [[17, "completed"], [33, "completed"], [40, "completed"], [47, "completed"], [40, "inProgress"]]) {
+  test(`an orchestrator that syncs only after wait returns reaches a complete row, ${count} MiB in a ${status} turn`, async t => {
+    const f = await local(t);
+    const wait = () => waitProject("P", { timeoutMs: 0 }, { storage: f.storage, read: f.read, processIdentity: async () => "same", orchestratorIdentity: async () => null, parentPid: () => 1 });
+    assert.equal((await wait()).reason, "initial_sync");
+    const items = backlog("m", count);
+    f.threads.get(id).turns.push({ id: "turn-1", status, items });
+    const reviewed = []; let last = null;
+    for (let n = 0; n < 12; n++) {
+      const result = await wait();
+      if (result.reason === "timeout") break;
+      last = result.sync.works[0]; reviewed.push(...presented([last]));
+      last = (await f.sync()).works[0]; reviewed.push(...presented([last]));
+    }
+    assert.equal(last?.complete, true, "the last row the orchestrator was shown is complete");
+    assert.deepEqual([...new Set(reviewed)], items.map(item => item.id), "every event reached the orchestrator");
+  });
+}

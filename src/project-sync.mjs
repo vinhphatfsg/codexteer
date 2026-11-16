@@ -345,10 +345,11 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
           // A wait probe reads from the last review. Past one batch it reads on
           // from the stored cursor instead, so a backlog is read and folded into
           // the head once, from where the syncs before it stopped.
-          if (!state.stored) { Object.assign(state, { cursor: state.member.sync_cursor, stored: true, events: [], observations: [], seen: new Set([state.member.sync_cursor]), pages: 0, latest: undefined }); return true; }
+          if (!state.stored) { Object.assign(state, { cursor: state.member.sync_cursor, stored: true, restarted: true, events: [], observations: [], seen: new Set([state.member.sync_cursor]), pages: 0, latest: undefined }); return true; }
           state.complete = false; state.backlog = true; state.error = "PROJECT_HISTORY_BACKLOG"; return false;
         }
-        if (page.events.length < 2) assertHistoryBatch(page.events);
+        // One event past the batch, or a reader that returned more than asked, cannot be read smaller.
+        if (page.events.length < 2 || page.events.length > limit) assertHistoryBatch(page.events);
         limit = Math.floor(page.events.length / 2);
       }
       if (state.member.environment_config_id && page.environment_config_id !== state.member.environment_config_id) throw failure("The task environment differs from its managed route.", "PROJECT_ROUTE_MISMATCH");

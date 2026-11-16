@@ -188,9 +188,10 @@ function probeReason({ previous, membershipDigest, states }, observedAttention, 
     if (!state.complete && !state.backlog) continue;
     // A member never read in full before is new to the orchestrator once it is.
     const entry = baseline.works[id];
-    // More than one batch since the review: each return reviews one batch,
-    // and the sync that follows it reads one more.
-    if (state.backlog || !entry || changedSinceBaseline(state, entry, observedAttention.flags[id] ?? entry.signal.attention ?? [])) return "work_changed";
+    // More than one batch since the review (a read that held, or one that read
+    // on from the stored cursor): each return reviews what it read, and the
+    // sync that follows it reads on.
+    if (state.backlog || state.restarted || !entry || changedSinceBaseline(state, entry, observedAttention.flags[id] ?? entry.signal.attention ?? [])) return "work_changed";
     observedAttention.flags[id] = projectWaitSignal(state.latest).attention; entries[id] = entryWriter(baseline, id);
   }
   return lasting ? "observation_failed" : null;
