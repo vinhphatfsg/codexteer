@@ -97,7 +97,8 @@ export async function sendDesktopCloudInput(target, text, { dryRun = false, newT
       const thread = await sendState(client, id), turns = turnObservation(thread.turns), evidence = turnEvidence(turns), active = thread.turns;
       const ended = async () => { const all = await turnStatuses(client, id); return !!all && turnEvidence(turnObservation(all)) === "none"; };
       const startable = !turnRuns(turns) && (thread.status?.type === "idle" || (thread.status?.type === "active" && evidence === "none" && await ended()));
-      if (newTurn ? !startable : evidence !== "running") throw failure("The task state does not match the requested send. Read it again; idle continuation requires --new-turn.", "STALE_OBSERVATION");
+      const observed = evidence === "running" ? "steer" : startable ? "new-turn" : null;
+      if (observed !== (newTurn ? "new-turn" : "steer")) throw Object.assign(failure("The task state does not match the requested send. Read it again; idle continuation requires --new-turn.", "STALE_OBSERVATION"), { observed_action: observed });
       const environments = thread.environments;
       if (!Array.isArray(environments) || environments.length !== 1 || typeof environments[0].environmentId !== "string" || !environments[0].environmentId.startsWith("ccarenv_") || typeof environments[0].environmentConfigId !== "string") throw failure("Cannot verify the task's Cloud environment.");
       const managed = await getManagedThread(id, storage);
