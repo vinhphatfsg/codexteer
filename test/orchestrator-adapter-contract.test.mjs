@@ -1,7 +1,7 @@
 import { listRecords, writeRecord } from "../src/store.mjs";
 import { historyBucket } from "../src/project-history.mjs";
 import { createFinding } from "../src/findings.mjs";
-import { sendTrackedMessage } from "../src/journal.mjs";
+import { sendTrackedMessage, listMessages } from "../src/journal.mjs";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -94,6 +94,9 @@ for (const mode of modes) {
     if (change === "own input") {
       const earlier = await tellWork(f.id, "earlier instruction", {}, { storage: f, read: f.read, send: (id, wire, options) => deliver(f, id, wire, options) });
       assert.equal(earlier.delivery_status, "accepted");
+      // The scripted server does not list what it accepts; list the earlier message as the service would, without its client id.
+      const { wire_text } = (await listMessages(f.id, { home: f.home, includeText: true })).find(entry => entry.id === earlier.message_id);
+      f.thread.turns[0].items.push({ id: "own-earlier", type: "userMessage", clientId: null, content: [{ type: "text", text: wire_text }] });
       f.server.calls.length = 0;
     }
     let mutated = false;
@@ -115,6 +118,7 @@ for (const mode of modes) {
     } else {
       assert.deepEqual([outcome.delivery_status, mutated, outcome.unseen_since_basis.latest_agent_message?.text ?? null],
         ["accepted", true, change === "updated" ? "after" : "late"], "the worker's change at the boundary is sent over and reported");
+      if (change === "own input") assert.ok(outcome.unseen_since_basis.events >= 2, "the earlier own message was in the delta it sent over");
     }
   });
 
