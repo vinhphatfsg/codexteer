@@ -720,3 +720,37 @@ test("a live view whose task reports another reviewer is delivered, and the task
   await f.read(ID, { since: ended.cursor });
   assert.equal(f.resumes(), 1, "the refusal holds for the task's later turns");
 });
+
+test("a steer into a running turn codexteer did not start does not make it codexteer's", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  f.start("order", { started: false }); f.progress(agent("Working."));
+  await f.sync();
+  const receipt = await f.tell(ID, "Also update the changelog.");
+  assert.equal(receipt.delivery_status, "accepted"); assert.equal(receipt.attention_coverage, UNOBSERVED);
+  assert.equal(steers(f), 1); assert.equal(f.state.reviewerReads, 0, "a steer does not read the reviewer");
+  assert.equal((await f.read(ID, {})).live_fallback, "not_codexteer_turn");
+  assert.equal(f.resumes(), 0);
+});
+
+test("a resumed view that cannot be used still stops resuming a task that reports another reviewer", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  const first = await f.read(ID, {});
+  f.start(); f.progress(agent("Working."), agent("More."));
+  f.state.reviewer = "user"; f.state.live.itemId = () => "same-id";
+  const read = await f.read(ID, { since: first.cursor });
+  assert.equal(read.live_fallback, "not_auto_review"); assert.equal(read.attention_coverage, UNOBSERVED); assert.equal(f.resumes(), 1);
+  f.state.live.itemId = id => id;
+  assert.equal((await f.read(ID, { since: read.cursor })).live_fallback, "not_auto_review");
+  assert.equal(f.resumes(), 1);
+});
+
+test("with the switch off, a new turn's send does not resume the task to read its reviewer", async t => {
+  const f = await member(t, { live: false });
+  f.append([user("first order"), agent("first report")]);
+  await f.sync();
+  const receipt = await f.tell(ID, "Continue the same delegation.", { newTurn: true });
+  assert.equal(receipt.delivery_status, "accepted"); assert.equal(f.state.reviewerReads, 0);
+  assert.deepEqual([...(await startedTurns(ID, f.storage))], [[receipt.turn_id, null]]);
+});

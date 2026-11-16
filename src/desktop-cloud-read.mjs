@@ -208,13 +208,13 @@ async function withLiveTurn(client, threadId, turns, s, old, result, { liveTurn:
     // leaves one out has not seen the whole turn, and the reads after it do not resume.
     let room = LIVE_ITEMS - delivered.size;
     const changed = fresh?.filter(({ event, hash }) => delivered.get(event.id) !== hash && (delivered.has(event.id) || room-- > 0)) ?? [];
+    // A task that no longer routes approvals to the auto reviewer is not
+    // resumed again, whatever this view is worth; a usable one is delivered.
+    if (view && !view.fallback && view.reviewer !== AUTO_REVIEW) refused = "reviewer";
     if (view?.fallback) stopped = view.fallback;
     else if (!fresh) stopped = "unavailable";
     else if (absent) { fields.live_mismatch = { turn_id: running.id, absent }; refused = "view"; }
     else {
-      // The task no longer routes approvals to the auto reviewer: this view is
-      // delivered, and no later read resumes the task.
-      if (view.reviewer !== AUTO_REVIEW) refused = "reviewer";
       const sent = changed.slice(0, Math.max(0, limit - events.length));
       events = [...events, ...sent.map(({ event }) => ({ ...trim(event), change: delivered.has(event.id) ? "updated" : "added" }))];
       for (const { event, hash } of sent) delivered.set(event.id, hash);

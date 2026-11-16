@@ -164,14 +164,15 @@ export class DesktopCloudClient {
   // reviewers. A client without them does not read running turns live.
   constructor(client, live = {}) {
     this.client = client;
-    if (live.openLive) this.liveTurn = (threadId, turnId) => liveTurn(threadId, turnId, live);
-  }
-  // The approvals reviewer the task's next turn starts under. Only a resume
-  // reports it, and an idle task has no request for the connection to hold.
-  async approvalsReviewer(threadId) {
-    const uuid = desktopCloudUuid(threadId), result = await this.client.request("thread/resume", { threadId: uuid, excludeTurns: true });
-    if (result?.thread?.id !== uuid) throw failure("Desktop Cloud returned another task.");
-    return typeof result.approvalsReviewer === "string" ? result.approvalsReviewer : null;
+    if (!live.openLive) return;
+    this.liveTurn = (threadId, turnId) => liveTurn(threadId, turnId, live);
+    // The approvals reviewer the task's next turn starts under, which only a
+    // resume reports. An idle task has no request for the connection to hold.
+    this.approvalsReviewer = async threadId => {
+      const uuid = desktopCloudUuid(threadId), result = await client.request("thread/resume", { threadId: uuid, excludeTurns: true });
+      if (result?.thread?.id !== uuid) throw failure("Desktop Cloud returned another task.");
+      return typeof result.approvalsReviewer === "string" ? result.approvalsReviewer : null;
+    };
   }
   close() { this.client.close(); }
   async history(threadId) {
