@@ -46,9 +46,11 @@ export async function listHistoryRecords(bucket, projectId, storage = {}) {
   return [...await Promise.all(own.map(row => readRecord(historyBucket(bucket, projectId), row.id, storage))), ...legacy.filter(record => record?.project_id === projectId)];
 }
 
+const batchBytes = values => values.reduce((sum, value) => sum + bytes(value), 0);
+export const fitsHistoryBatch = (...values) => batchBytes(values) <= HISTORY_BATCH_BYTES;
 export function assertHistoryBatch(...values) {
-  const required = values.reduce((sum, value) => sum + bytes(value), 0);
-  if (required > HISTORY_BATCH_BYTES) throw failure("PROJECT_HISTORY_BATCH_LIMIT", "The full observation exceeds the 16 MiB batch limit. No cursor was advanced.", { required_bytes: required, limit_bytes: HISTORY_BATCH_BYTES });
+  const required = batchBytes(values);
+  if (required > HISTORY_BATCH_BYTES) throw failure("PROJECT_HISTORY_BATCH_LIMIT", "One event exceeds the 16 MiB batch limit. No cursor was advanced.", { required_bytes: required, limit_bytes: HISTORY_BATCH_BYTES });
 }
 async function usage(projectId, storage) {
   const stats = await Promise.all(buckets.map(bucket => recordStats(historyBucket(bucket, projectId), storage)));

@@ -2,6 +2,15 @@
 
 公開日は日本時間です。
 
+## 0.25.2 — 未公開
+
+新しい履歴が16 MiBを超えた担当を、`project sync`がいつまでも完全に読めず、`work tell`がその担当へ指示できませんでした。
+
+- 1担当1回の全文観測は16 MiBまでで、超えるとcursorを進めずに失敗していました。次のsyncも同じcursorから読み、同じ所で失敗していました。
+- いまは収まる分だけを返し、その担当のcursorを返した分の後ろへ進めます。その回の行は`complete:false`・`error:PROJECT_HISTORY_BACKLOG`です。残りは次のsyncが読み、読み切った回の行が`complete:true`になります。1ページだけで16 MiBを超えるときは、ページを小さくして読み直します。
+- `project wait`は、この担当を読めない担当として報告しません。基準から16 MiBを超える担当があれば変化として返し、返した分だけ基準を進めます。waitが返るたびにsyncすれば、読み残しはなくなります。
+- 1件のイベントだけで16 MiBを超えるときは、従来どおり`PROJECT_HISTORY_BATCH_LIMIT`でcursorを進めません。
+
 ## 0.25.1 — 2026-11-13公開
 
 ローカルの`work start`と standalone `thread create` が、Desktop で権限モードを選んであっても `DESKTOP_PERMISSION_UNVERIFIED` で止まることがありました。
