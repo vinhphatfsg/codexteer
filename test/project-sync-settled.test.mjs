@@ -267,7 +267,7 @@ test("a cursor that moved during the read leaves a stopped work unsettled and is
     return f.read(id, options);
   } });
   assert.deepEqual(result.exclude_unreadable, { thread_id: A, outcome: "not_applied", error: "SYNC_CURSOR_CONFLICT" });
-  assert.equal(result.complete, false); assert.equal(row(result, A).settled, undefined); assert.equal((await f.head()).settled, undefined);
+  assert.equal(result.complete, false); assert.equal(row(result, A).settled, undefined); assert.equal((await f.head())?.settled, undefined);
   assert.equal(row(await f.sync(), A).settled.basis, "observed");
 });
 

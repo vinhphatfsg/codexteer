@@ -11,6 +11,11 @@
 - `project wait`は、この担当を読めない担当として報告しません。基準から16 MiBを超えて進んだ担当は変化として返します。そのときwaitは前のsyncが読み終えた所から読み、返した所まで基準とcursorを進めます。waitが返るたびにsyncすれば、読み残しはなくなります。
 - 1件のイベントだけで16 MiBを超えるときは、従来どおり`PROJECT_HISTORY_BATCH_LIMIT`でcursorを進めません。
 
+同じprojectで別の`project sync`か`project wait`が先に公開すると、遅れた`project sync`が、先に公開された側で回答済みになった質問を未解決に戻すことがありました。戻った質問はその後のsyncでも残り、その担当への`work tell`は`WORK_TELL_HUMAN_REQUIRED`で拒否され続けました。
+
+- 遅れたsyncは、担当一覧を読んだ後に別の公開がいずれかの担当のcursorを進めていれば、何も公開せず`publication_conflict:"SYNC_CURSOR_CONFLICT"`を返します。これまでは、その担当の行だけを`SYNC_CURSOR_CONFLICT`の不完全な行にして公開していました。waitでは従来の公開競合と同じく`reason:observation_failed`・`changed:false`で返ります。
+- 公開の途中で終了したsyncがcursorだけを進めていた場合も同じです。次のsyncは進んだcursorから読み、headは終了したsyncが読んだ分まで反映した状態から続きます。
+
 ## 0.25.1 — 2026-11-13公開
 
 ローカルの`work start`と standalone `thread create` が、Desktop で権限モードを選んであっても `DESKTOP_PERMISSION_UNVERIFIED` で止まることがありました。

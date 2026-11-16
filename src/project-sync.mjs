@@ -480,17 +480,19 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       entered(); pruned = report;
       const current = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage);
       if (hash(current ?? null) !== hash(previous ?? null)) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");
+      // The head says what the stored cursors passed. A cursor that moved after
+      // this run listed it (a publication between that listing and the head
+      // read, or one that died after its cursor update) makes these reads stale:
+      // they would reopen what that head resolved.
+      const stored = new Map((await listManagedThreads(projectId, storage)).map(member => [member.thread_id, member]));
+      for (const { member } of states.values()) {
+        const now = stored.get(member.thread_id);
+        if (now && ((now.sync_cursor ?? null) !== (member.sync_cursor ?? null) || (now.sync_revision ?? 0) !== (member.sync_revision ?? 0))) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");
+      }
       // Persist attention evidence before advancing any cursor. A crash during
       // publication leaves an incomplete head that the next sync can recover.
       for (const record of eventRecords) await historyWrite(...eventRecord(record), storage);
-      // What a backlog read resolves holds only once its cursor CAS succeeds; a
-      // crash before then, or a refused CAS, leaves the read to be done again.
-      const pendingAttention = { ...unresolved };
-      for (const state of states.values()) if (state.backlog) {
-        const kept = reduceAttention({ ...state, complete: false, backlog: false }, previous?.unresolved_attention?.[state.member.thread_id] ?? null, state.eventSummaries);
-        if (kept) pendingAttention[state.member.thread_id] = kept; else delete pendingAttention[state.member.thread_id];
-      }
-      await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), { ...head, unresolved_attention: pendingAttention, complete: false, complete_work_ids: [], publication_pending: true }, storage);
+      await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), { ...head, complete: false, complete_work_ids: [], publication_pending: true }, storage);
       // CAS uses the snapshot revision even if an empty read returns the same cursor.
       for (const state of states.values()) if (advances(state)) {
         const work = works.find(w => w.thread_id === state.member.thread_id);
