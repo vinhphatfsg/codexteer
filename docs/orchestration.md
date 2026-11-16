@@ -34,13 +34,13 @@ codexteer work start --project sample --root /path/to/checkout --title tests - -
 codexteer --connection desktop-cloud work start --project sample --environment example-config --root /path/to/checkout --title verify - --json < order.txt
 codexteer project sync --project sample --json
 codexteer work tell <THREAD> - --json < instruction.txt
-codexteer --connection desktop-cloud work tell <DURABLE-THREAD> - --json < instruction.txt
+codexteer work tell <DURABLE-THREAD> - --json < instruction.txt
 codexteer project control pause --project sample --work <THREAD> --json
 codexteer project control resume --project sample --work <THREAD> --json
 codexteer project control stop --project sample --all --json
 ```
 
-sharedの作成先はDesktopの実在project ID・完全一致名とrootsを照合します。managed projectの集合はwork startへ渡した指定文字列で保存するため、名前で起動した場合もsync・wait・guard・controlで同じ文字列を使い、照合で得たIDへ途中で置き換えません。sharedとDesktop Cloudを同じproject集合に入れる場合は同じ調整用IDを使い、各担当の接続はmembershipへ保存します。発注本文をシェルコードとして評価しません。
+sharedの作成先はDesktopの実在project ID・完全一致名とrootsを照合します。managed projectの集合はwork startへ渡した指定文字列で保存するため、名前で起動した場合もsync・wait・guard・controlで同じ文字列を使い、照合で得たIDへ途中で置き換えません。sharedとDesktop Cloudを同じproject集合に入れる場合は同じ調整用IDを使い、各担当の接続はmembershipへ保存します。`work tell`は`--connection shared`のままでも担当の記録した接続で送ります。発注本文をシェルコードとして評価しません。
 
 作成結果の担当IDとreceiptを記録します。`create_not_dispatched`は作成側が未作成・作成RPC未送信・指示未送信・担当IDなしを明示した段階です。原因を直して同じ発注・開始オプションを再実行すると同じattempt_idで作成をやり直せます。部分成功・unknown・観測不能では同じ担当を読み取り照合し、createを繰り返しません。membershipを先に登録してから監督を結び、stoppedを自動で置き換えません。初回観測で省略件数が0と確認できない場合は、sharedとDesktop Cloudの双方でhistory gapとして止まり、cursorを保存しません。完全な初回観測の公開イベント全文は未提示として保存し、次のsyncで返します。
 
@@ -86,7 +86,7 @@ codexteer project sync --project sample --exclude-unreadable <THREAD> --reason '
 
 停止していない担当は除外できません（`PROJECT_SYNC_EXCLUDE_NOT_STOPPED`）。読めない担当がまだ作業中なら不完全のまま扱い、原因を調べます。syncを完全にする目的で、検収前の担当をstopしないでください。stopは取り消せず、その担当へは二度と指示を送れません。
 
-tellの可否は対象の担当だけで決まります。最新のsyncで対象が完全に読めていること（`complete:true`、履歴欠落なし）を基点に送信直前まで再照合し、対象の新しいイベント、質問・承認待ち、attention不明、履歴欠落、不完全な観測では拒否します。他の担当が未読・不完全でも、対象への指示は妨げません。receiptの`other_work`は、未読の担当を`incomplete`、質問・承認待ちの担当を`human_attention`、sync後のmembership変更を`membership_changed`で返します。空でなければ、送信後もその担当への対応を続けます。`settled`の担当は読まれず回答もできないため、`incomplete`にも`human_attention`にも含めません。その担当の質問は`project sync`の「監視終了」の行に残ります。`--sync-token`で以前のsyncを基点にできるのは、その後に対象が完全に再読されていない間だけです。質問・承認待ちは常に最新のsyncで判定します。サーバーが観測版と送信を原子的に照合する保証はなく、最終観測の後に起きる競合は残ります。代理回答はせず、同じ意図やunknownを自動再送しません。検収待ちでもidleなら`--new-turn`が必要です。同じ委任の未完了作業がある場合だけ続け、受付後に新turnがactiveになれば動作中へ戻ります。検収待ちは成果の受入や全体の完了認定ではありません。
+tellの可否は対象の担当だけで決まります。最新のsyncで対象が完全に読めていること（`complete:true`、履歴欠落なし）を基点に送信直前まで再照合し、対象の新しいイベント、質問・承認待ち、attention不明、履歴欠落、不完全な観測では拒否します。他の担当が未読・不完全でも、対象への指示は妨げません。receiptの`other_work`は、未読の担当を`incomplete`、質問・承認待ちの担当を`human_attention`、sync後のmembership変更を`membership_changed`で返します。空でなければ、送信後もその担当への対応を続けます。`settled`の担当は読まれず回答もできないため、`incomplete`にも`human_attention`にも含めません。その担当の質問は`project sync`の「監視終了」の行に残ります。`--sync-token`で以前のsyncを基点にできるのは、その後に対象が完全に再読されていない間だけです。質問・承認待ちは常に最新のsyncで判定します。サーバーが観測版と送信を原子的に照合する保証はなく、最終観測の後に起きる競合は残ります。代理回答はせず、同じ意図やunknownを自動再送しません。`work tell`は、確認済みの行が実行中ならsteer、idle・terminalなら新しいturnを自動で選び、receiptの`delivery_action`と`delivery_action_source`で返します。送信直前の読み取りでターンが終わった・始まったと分かり、何も送らずに拒否された場合は、もう一方で1回だけ、同じ照合を通して送り直します（`retried_from`）。`--new-turn`は新しいturnだけを送る明示指定です。idleの担当への指示は同じ委任の未完了作業がある場合だけ続け、受付後に新turnがactiveになれば動作中へ戻ります。検収待ちは成果の受入や全体の完了認定ではありません。
 
 実行中のDesktop Cloudターンでは、質問・承認待ちを観測できません。tellはその場合も送信の可否を変えず、receiptに`attention_coverage:"running_turn_unobserved"`を付けます。対象が質問で止まっていないかは、Codexの画面で確認します。`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=on`では、tellは最初の確認と送信の直前に、それぞれそのターンを読みます。どちらかで質問かサーバー要求が見えれば`WORK_TELL_HUMAN_REQUIRED`で、sync後に新しい項目が出ていれば`WORK_TELL_STALE_SYNC`で送りません。送信の直前に読めなかったときは送り、receiptに`attention_coverage`を付けます（[Desktop Cloud](desktop-cloud.md)を参照）。
 
