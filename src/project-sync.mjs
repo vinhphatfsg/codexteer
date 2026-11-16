@@ -483,11 +483,12 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       // The head says what the stored cursors passed. A cursor that moved after
       // this run listed it (a publication between that listing and the head
       // read, or one that died after its cursor update) makes these reads stale:
-      // they would reopen what that head resolved.
+      // they would reopen what that head resolved. A revision bumped over an
+      // unchanged cursor does not; its CAS below is refused as before.
       const stored = new Map((await listManagedThreads(projectId, storage)).map(member => [member.thread_id, member]));
       for (const { member } of states.values()) {
         const now = stored.get(member.thread_id);
-        if (now && ((now.sync_cursor ?? null) !== (member.sync_cursor ?? null) || (now.sync_revision ?? 0) !== (member.sync_revision ?? 0))) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");
+        if (now && (now.sync_cursor ?? null) !== (member.sync_cursor ?? null)) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");
       }
       // Persist attention evidence before advancing any cursor. A crash during
       // publication leaves an incomplete head that the next sync can recover.
