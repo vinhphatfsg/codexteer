@@ -200,8 +200,10 @@ export async function continueProjectSync(token, options = {}, storage = {}) {
 // Attention is a reducer over the entire delta, not a property of its last page.
 // Current backend flags and durable question/failure evidence resolve separately.
 function reduceAttention(state, prior, summaries) {
-  // A read the cursor moves past is never read again, so its own events resolve.
-  const final = state.complete || state.backlog;
+  // A read the stored cursor moves past is never read again, so its own events
+  // resolve. A wait probe's backlog read can end before events a sync already
+  // folded into `prior`.
+  const final = state.complete || (state.backlog && state.stored);
   // Reclassify only persisted evidence that proves the old command-level false
   // positive. Opaque legacy evidence, real turn failures and questions survive.
   const priorEntries = (prior?.entries ?? (prior ? [["legacy", prior]] : [])).filter(([, entry]) => !commandOnlyFailure(entry)).map(([id, entry]) => [id, entry.attention === "failure" && !provenWorkFailure(entry)
@@ -478,7 +480,14 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       // Persist attention evidence before advancing any cursor. A crash during
       // publication leaves an incomplete head that the next sync can recover.
       for (const record of eventRecords) await historyWrite(...eventRecord(record), storage);
-      await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), { ...head, complete: false, complete_work_ids: [], publication_pending: true }, storage);
+      // What a backlog read resolves holds only once its cursor CAS succeeds; a
+      // crash before then, or a refused CAS, leaves the read to be done again.
+      const pendingAttention = { ...unresolved };
+      for (const state of states.values()) if (state.backlog) {
+        const kept = reduceAttention({ ...state, complete: false, backlog: false }, previous?.unresolved_attention?.[state.member.thread_id] ?? null, state.eventSummaries);
+        if (kept) pendingAttention[state.member.thread_id] = kept; else delete pendingAttention[state.member.thread_id];
+      }
+      await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), { ...head, unresolved_attention: pendingAttention, complete: false, complete_work_ids: [], publication_pending: true }, storage);
       // CAS uses the snapshot revision even if an empty read returns the same cursor.
       for (const state of states.values()) if (advances(state)) {
         const work = works.find(w => w.thread_id === state.member.thread_id);
