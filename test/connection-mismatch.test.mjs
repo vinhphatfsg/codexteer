@@ -154,7 +154,7 @@ test("work tell under the project's shared route reaches a Desktop Cloud member 
   const error = args => JSON.parse(run([...args, "--json"]).stdout).error;
   for (const route of [[], ["--connection", "shared"], ["--connection", "desktop-cloud"]]) {
     const refused = error([...route, "work", "tell", durable, "fixture"]);
-    assert.equal(refused.code, "WORK_TELL_SYNC_INCOMPLETE", route.join(" ") || "no route"); assert.match(refused.message, /No project sync/);
+    assert.equal(refused.code, "WORK_TELL_SYNC_INCOMPLETE", route.join(" ") || "no route"); assert.match(refused.message, /No project sync/); assert.equal(refused.reason, "no_sync");
   }
   for (const [selected, code] of [["cloud", "CLOUD_OPTIONS_INVALID"], ["desktop", "CLOUD_TARGET_CONFLICT"]]) assert(hint(error(["--connection", selected, "work", "tell", durable, "fixture"]), "desktop-cloud", selected, code), selected);
   assert(hint(error(["--connection", "desktop-cloud", "work", "tell", local, "fixture"]), "shared", "desktop-cloud"));
