@@ -5,8 +5,9 @@
 // window's events, so the v1 delta logic runs unchanged on it. Turns before the
 // window were final and fully delivered when the window moved past them. They
 // are not read again: this relies on the service appending turns and never
-// changing a final turn. The window turn and every newer turn are read and
-// checked against the cursor on every read.
+// changing a final turn. The window turn and every newer turn are listed and
+// checked against the cursor on every read; the same assumption lets the reads
+// of one sync page a final turn's items once (see turnItems).
 import { assertReadOptions, digest, fetchThread, mutableStatus, prefixHash, project, snapshotRead, threadSnapshot, trimEvent } from "./observe.mjs";
 import { encodeCursor, invalidCursor, parseCursor } from "./cursor.mjs";
 import { hostFields } from "./target.mjs";
@@ -20,10 +21,30 @@ const LIVE_ITEMS = 256, REQUEST = "pendingRequest:";
 const failure = message => Object.assign(new Error(message), { code: "DESKTOP_CLOUD_PROTOCOL_ERROR" });
 const startedAt = turn => Number.isSafeInteger(turn?.startedAt) && turn.startedAt >= 0 ? turn.startedAt : null;
 
+// Reads that share a scope (see liveView) keep the items of the final turns
+// they paged, so a sync whose pages each reach a long final turn pages it once.
+// A turn listed as running is paged on every read. A scope keeps at most BYTES
+// of items and drops the turn it paged first to make room.
+const kept = new WeakMap();
+async function turnItems(client, threadId, listed, room, scope) {
+  const cache = scope instanceof Map ? kept.get(scope) ?? kept.set(scope, { turns: new Map(), bytes: 0 }).get(scope) : null;
+  const key = `${threadId}\n${listed.id}`, final = FINAL.has(listed.status), hit = final ? cache?.turns.get(key) : undefined;
+  if (hit) {
+    if (hit.bytes > room) throw failure("Cloud history exceeded its memory budget.");
+    return { turn: { ...listed, items: hit.items, itemsView: "full" }, bytes: hit.bytes };
+  }
+  const read = await loadTurn(client, threadId, listed, room);
+  if (cache && final) {
+    for (const [old, { bytes }] of cache.turns) { if (cache.bytes + read.bytes <= BYTES) break; cache.turns.delete(old); cache.bytes -= bytes; }
+    cache.turns.set(key, { items: read.turn.items, bytes: read.bytes }); cache.bytes += read.bytes;
+  }
+  return read;
+}
+
 // List turns newest first, one per request, each with its items, until `stop`
 // returns true for a turn. Returns the turns listed, oldest first, and whether
 // the list ended.
-async function newestTurns(client, threadId, stop) {
+async function newestTurns(client, threadId, stop, scope) {
   const turns = [], ids = new Set(), positions = new Set();
   let position = null, bytes = 0, newer = null;
   for (let page = 0; page < PAGES; page++) {
@@ -33,7 +54,7 @@ async function newestTurns(client, threadId, stop) {
     for (const [index, listed] of result.data.entries()) {
       if (typeof listed?.id !== "string" || !listed.id || ids.has(listed.id) || typeof listed.status !== "string") throw failure("Invalid Cloud turn page.");
       if (startedAt(listed) !== null && newer !== null && startedAt(listed) > newer) throw failure("Cloud turns were not listed newest first.");
-      const { turn, bytes: size } = await loadTurn(client, threadId, listed, BYTES - bytes);
+      const { turn, bytes: size } = await turnItems(client, threadId, listed, BYTES - bytes, scope);
       bytes += size; newer = startedAt(turn) ?? newer; ids.add(turn.id); turns.push(turn);
       if (stop(turn)) return { turns: turns.reverse(), ended: next === null && index === result.data.length - 1 };
     }
@@ -45,12 +66,12 @@ async function newestTurns(client, threadId, stop) {
 
 // The window a v3 cursor names. A turn that started before the window turn
 // proves the window turn is gone, so a missing turn costs no older history.
-async function windowTurns(client, threadId, claim) {
+async function windowTurns(client, threadId, claim, scope) {
   const { turns } = await newestTurns(client, threadId, turn => {
     if (turn.id === claim.window) return true;
     if (claim.window_started_at !== null && startedAt(turn) !== null && startedAt(turn) < claim.window_started_at) throw invalidCursor();
     return false;
-  });
+  }, scope);
   if (claim.window !== null && turns[0]?.id !== claim.window) throw invalidCursor();
   return turns;
 }
@@ -122,10 +143,10 @@ export async function readCloudTail(client, thread, options = {}) {
   // A cursor from an earlier version covers the whole history: read it in full
   // once, and continue from the v3 cursor this read returns.
   if (old?.v === 1) turns = (await fetchThread(client, thread.id, thread)).turns;
-  else if (old) turns = await windowTurns(client, thread.id, old);
+  else if (old) turns = await windowTurns(client, thread.id, old, options.liveTurn);
   else {
     let events = 0;
-    ({ turns, ended } = await newestTurns(client, thread.id, turn => (events += 1 + turn.items.filter(item => project(item, turn.id)).length) >= limit));
+    ({ turns, ended } = await newestTurns(client, thread.id, turn => (events += 1 + turn.items.filter(item => project(item, turn.id)).length) >= limit, options.liveTurn));
   }
   const view = { ...thread, turns }, s = threadSnapshot(view), result = snapshotRead(view, s, old, options);
   const cursor = rebase(turns, s, result.cursor), live = await withLiveTurn(client, thread.id, turns, s, old, result, options);

@@ -305,6 +305,58 @@ test("a turn's items are read in pages of 100 at every boundary, by the tail and
   assert.deepEqual([f.state.served.turns, f.state.served.pages], [7, 1 + 1 + 1 + 1 + 2 + 2 + 3]);
 });
 
+// How many times the reads since this call paged `turn` from its start, and how many of its item pages they took.
+function paging(f, turn) {
+  const from = f.state.calls.length;
+  return () => { const pages = f.state.calls.slice(from).filter(call => call.method === "thread/items/list" && call.params.turnId === turn.id); return [pages.filter(call => !call.params.cursor).length, pages.length]; };
+}
+const long = (size, text = "") => [user("long order"), ...Array.from({ length: size - 2 }, (_, n) => command(`step ${n} ${text}`)), agent("long report")];
+
+test("the reads of one sync page a long final turn once; reads in another scope page it again", async t => {
+  const f = await member(t, 3);
+  const before = await f.read(ID, {});
+  await syncProject("P", {}, f.deps);
+  const turn = f.append(long(450)), synced = paging(f, turn);
+  const sync = await syncProject("P", { pageLimit: 100 }, f.deps);
+  assert.equal(sync.complete, true); assert.equal(sync.works[0].error, null); assert.equal(sync.works[0].reason.latest_turn_id, turn.id);
+  assert.deepEqual(synced(), [1, 5], "five reads reach the turn; its 450 items are paged once");
+
+  const pass = async scope => {
+    const events = []; let page = { cursor: before.cursor, has_more: true };
+    while (page.has_more) { page = await f.read(ID, { since: page.cursor, limit: 100, ...(scope ? { liveTurn: scope } : {}) }); events.push(...page.events.map(event => event.id)); }
+    return events;
+  };
+  const shared = paging(f, turn), once = await pass(new Map());
+  assert.deepEqual(once, [turn.id, ...turn.items.map(item => item.id)]); assert.deepEqual(shared(), [1, 5]);
+  const again = paging(f, turn);
+  assert.deepEqual(await pass(new Map()), once); assert.deepEqual(again(), [1, 5], "a new scope, as a new process has, pages the turn again");
+  const alone = paging(f, turn);
+  assert.deepEqual(await pass(), once); assert.deepEqual(alone(), [5, 25], "reads that share nothing page it on every read");
+});
+
+test("a running turn is paged on every read of a sync and of every poll, and once more when it ends", async t => {
+  const f = await member(t, 3);
+  await syncProject("P", {}, f.deps);
+  const turn = f.append(long(250), { status: "inProgress" }); f.state.status = "active";
+  const polls = [];
+  for (const end of [false, false, true, false]) {
+    if (end) f.complete([agent("done")]);
+    const count = paging(f, turn), poll = await syncProject("P", { pageLimit: 100 }, f.deps);
+    assert.equal(poll.complete, true); assert.equal(poll.works[0].error, null); polls.push(count()[0]);
+  }
+  assert.deepEqual(polls, [3 + 1, 1 + 1, 1, 0], "every read of a poll pages the running turn, its head check included; the poll that sees it end pages it once, and none after");
+});
+
+test("a scope keeps at most 32 MiB of final turns and pages again a turn it dropped", async () => {
+  const OTHER = "aaaaaaaa-aaaa-4aaa-8aaa-0000000000c3", a = cloud(), b = desktopCloudService(OTHER, { environment: ENV });
+  const rpc = { close() {}, request: (method, params) => (params?.threadId === OTHER ? b : a).rpc.request(method, params) };
+  const read = (id, options) => observeThread(id, options, { connect: async () => new DesktopCloudClient(rpc) });
+  const first = a.append(long(200, "x".repeat(100 * 1024))), second = b.append(long(200, "y".repeat(100 * 1024)));
+  const scope = new Map(), pagedFirst = paging(a, first), pagedSecond = paging(b, second);
+  for (const [id, turn] of [[ID, first], [ID, first], [`durable_${OTHER}`, second], [ID, first]]) assert.equal((await read(id, { limit: 1000, liveTurn: scope })).latest_turn_id, turn.id);
+  assert.deepEqual([pagedFirst()[0], pagedSecond()[0]], [2, 1], "a repeated read reuses the first turn; the second task's turn pushes it out, so it is paged again");
+});
+
 test("an item page of another turn, too long, with a bad row or a repeated or stalled cursor is rejected", async () => {
   for (const fault of ["turn", "length", "row", "cursor", "empty"]) {
     const f = cloud();
