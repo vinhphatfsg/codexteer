@@ -88,17 +88,18 @@ test("work tell reaches a member once syncs read its backlog, after a question a
   assert.equal(sent, 1);
 });
 
-test("a wait probe that reads from an older baseline never moves the stored cursor back", async t => {
+test("a wait probe more than one batch behind reads on from where the syncs stopped", async t => {
   const f = await local(t, [id, other]);
   await f.sync();
-  f.threads.get(id).turns.push({ id: "turn-1", status: "completed", items: backlog("m", 40) });
-  await f.sync(); await f.sync();
-  const advanced = (await getManagedThread(id, f.storage)).sync_cursor;
+  const items = backlog("m", 40);
+  f.threads.get(id).turns.push({ id: "turn-1", status: "completed", items });
+  const rows = [(await f.sync()).works.find(work => work.thread_id === id), (await f.sync()).works.find(work => work.thread_id === id)];
   f.threads.get(other).turns.push({ id: "turn-1", status: "completed", items: [message("done", 10)] });
   const waited = await waitProject("P", { timeoutMs: 0 }, { storage: f.storage, read: f.read, processIdentity: async () => "same", orchestratorIdentity: async () => null, parentPid: () => 1 });
   assert.equal(waited.reason, "work_changed");
-  assert.equal(waited.sync.works.find(work => work.thread_id === id).complete, false);
-  assert.equal((await getManagedThread(id, f.storage)).sync_cursor, advanced);
+  rows.push(waited.sync.works.find(work => work.thread_id === id));
+  rows.push(...(await drain(f, id)).rows);
+  assert.deepEqual(presented(rows), items.map(item => item.id), "the wait presents the next batch, and nothing twice");
 });
 
 test("a Desktop Cloud backlog larger than one batch is published across syncs and resumes in a new reader", async t => {
@@ -143,7 +144,7 @@ test("wait still returns turn ends of a member more than one batch past its base
   assert.equal(row.complete, true); assert.ok(row.events.some(event => event.event_id === "after"));
 });
 
-test("a wait that reads a backlog from behind the stored cursor keeps a later question a sync already found", async t => {
+test("a wait after syncs read a backlog keeps a later question a sync found", async t => {
   const f = await local(t, [id, other]); let broken = false;
   const read = async (thread, options) => { if (broken && thread === other) throw Object.assign(new Error("rejected"), { code: "RPC_REJECTED" }); return f.read(thread, options); };
   const wait = () => waitProject("P", { timeoutMs: 0 }, { storage: f.storage, read, processIdentity: async () => "same", orchestratorIdentity: async () => null, parentPid: () => 1 });
@@ -153,11 +154,11 @@ test("a wait that reads a backlog from behind the stored cursor keeps a later qu
     { id: "answer", type: "userMessage", content: [{ type: "text", text: "This one." }] }, ...backlog("m", 20), { ...message("second", 10), questions: ["And now?"] }] });
   const sync = () => syncProject("P", {}, { storage: f.storage, read });
   await drain({ ...f, sync }, id);
-  assert.equal((await wait()).reason, "work_changed");
+  await wait();
   assert.equal((await sync()).works.find(work => work.thread_id === id).attention, "human", "the open question stays in the head");
 });
 
-test("a wait that reads a backlog from behind the stored cursor does not reopen a question a sync saw answered", async t => {
+test("a wait after syncs read a backlog does not reopen a question a sync saw answered", async t => {
   const f = await local(t, [id, other]); let broken = false;
   const read = async (thread, options) => { if (broken && thread === other) throw Object.assign(new Error("rejected"), { code: "RPC_REJECTED" }); return f.read(thread, options); };
   const wait = () => waitProject("P", { timeoutMs: 0 }, { storage: f.storage, read, processIdentity: async () => "same", orchestratorIdentity: async () => null, parentPid: () => 1 });
@@ -167,7 +168,7 @@ test("a wait that reads a backlog from behind the stored cursor does not reopen 
     ...backlog("m", 20), { id: "answer", type: "userMessage", content: [{ type: "text", text: "This one." }] }] });
   const sync = () => syncProject("P", {}, { storage: f.storage, read });
   await drain({ ...f, sync }, id);
-  assert.equal((await wait()).reason, "work_changed");
+  await wait();
   assert.notEqual((await sync()).works.find(work => work.thread_id === id).attention, "human", "the answered question stays answered");
 });
 

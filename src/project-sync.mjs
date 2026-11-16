@@ -341,7 +341,13 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
         if (fitsHistoryBatch(state.events, page.events)) break;
         // One batch is published at a time: the cursor moves past what was read,
         // and the next sync reads on from there.
-        if (state.events.length) { state.complete = false; state.backlog = true; state.error = "PROJECT_HISTORY_BACKLOG"; return false; }
+        if (state.events.length) {
+          // A wait probe reads from the last review. Past one batch it reads on
+          // from the stored cursor instead, so a backlog is read and folded into
+          // the head once, from where the syncs before it stopped.
+          if (!state.stored) { Object.assign(state, { cursor: state.member.sync_cursor, stored: true, events: [], observations: [], seen: new Set([state.member.sync_cursor]), pages: 0, latest: undefined }); return true; }
+          state.complete = false; state.backlog = true; state.error = "PROJECT_HISTORY_BACKLOG"; return false;
+        }
         if (page.events.length < 2) assertHistoryBatch(page.events);
         limit = Math.floor(page.events.length / 2);
       }
@@ -391,9 +397,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     state.events = [...new Map(state.events.map(e => [JSON.stringify([e.turn_id ?? null, e.id]), e])).values()];
     const eventSummaries = state.events.map(event => summarizeEvent(event, state.member.thread_id, eventRecords));
     state.eventSummaries = eventSummaries;
-    // A wait probe's backlog read from behind the stored cursor covers events a
-    // sync already folded into the head, or will: it leaves the attention as is.
-    const currentAttention = state.backlog && !state.stored ? priorAttention : reduceAttention(state, priorAttention, eventSummaries);
+    const currentAttention = reduceAttention(state, priorAttention, eventSummaries);
     if (state.historyNotes?.length) historical[state.member.thread_id] = [...new Map([...historical[state.member.thread_id] ?? [], ...state.historyNotes].map(entry => [JSON.stringify(entry), entry])).values()];
     if (currentAttention) {
       unresolved[state.member.thread_id] = currentAttention;
@@ -439,9 +443,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   const eventRecord = record => ["project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }];
   const detailRecord = (work, row = work) => eventRecord({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...row } } });
   const resultRecord = (rows, fields) => ["project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, ...fields, works: rows, created_at: createdAt }];
-  // A wait probe may start behind the stored cursor, at the last review: a
-  // backlog it reads from there must not move the stored cursor back.
-  const advances = state => state.complete || (state.backlog && state.stored);
+  const advances = state => state.complete || state.backlog;
   // The row a refused cursor leaves: incomplete, with the attention an
   // incomplete read cannot resolve.
   const refusedRow = (work, state, code) => {
@@ -483,7 +485,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       // What a backlog read resolves holds only once its cursor CAS succeeds; a
       // crash before then, or a refused CAS, leaves the read to be done again.
       const pendingAttention = { ...unresolved };
-      for (const state of states.values()) if (state.backlog && state.stored) {
+      for (const state of states.values()) if (state.backlog) {
         const kept = reduceAttention({ ...state, complete: false, backlog: false }, previous?.unresolved_attention?.[state.member.thread_id] ?? null, state.eventSummaries);
         if (kept) pendingAttention[state.member.thread_id] = kept; else delete pendingAttention[state.member.thread_id];
       }
