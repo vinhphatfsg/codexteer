@@ -53,8 +53,9 @@ export async function desktopCloudEnvironments(options = {}, { get = desktopClou
   return { environments: [...rows.values()], source: "desktop-cloud-configurations", execution_environment: "cloud", connection_mode: "desktop-cloud" };
 }
 // Whether reads resume a running task to see its turn so far. Off unless the
-// environment turns it on: a replayed approval request and a turn that ends
-// just before the resume have not been observed on the service.
+// environment turns it on: the service replays a pending approval request to
+// the resuming connection and interrupts the turn when that connection closes
+// without answering it, and nothing shows the approval before the resume.
 export const LIVE_TURN_SWITCH = "CODEXTEER_DESKTOP_CLOUD_LIVE_TURN";
 export const liveTurnEnabled = (env = process.env) => env[LIVE_TURN_SWITCH] === "on";
 const LIVE_TIMEOUT_MS = 10000, LIVE_DRAIN_MS = 500;

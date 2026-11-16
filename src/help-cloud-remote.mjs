@@ -186,7 +186,7 @@ export const topics = {
       ATTEMPT_WEB_ONLY,
       "実行中のターンで読めるのは開始時の指示だけ。ターンが終わると、その間の発言・コマンド・質問がまとめて現れる。",
       "ターンの実行中は質問・承認待ち・自動レビューの拒否・進捗を観測できず、attentionは[]のままになる。status・read・project syncの担当行・work tellのreceiptはその間attention_coverage:running_turn_unobservedを返す。ターンが実行中でないと確認できないときも返す。Codexの画面で確認する。",
-      "CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=onでは、実行中のターンが1つだけで最新のとき、読み取りが別の接続でthread/resumeし、そのターンのここまでを読む。既定はoff。承認待ちで止まったターンのresumeは未検証。",
+      "CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=onでは、実行中のターンが1つだけで最新のとき、読み取りが別の接続でthread/resumeし、そのターンのここまでを読む。既定はoff。承認待ちのターンをresumeすると、応答しない読み取りの接続が閉じたときにサービスがそのターンを中断する（interrupted）。承認待ちはresumeする前には分からない。",
       "承認の往復と差分専用APIは未検証。",
       "通常のCloud実行環境へのプロジェクト登録は未対応。",
       "詳細はdocs/desktop-cloud.md。",
