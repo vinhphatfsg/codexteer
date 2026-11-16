@@ -158,4 +158,5 @@ test("work tell under the project's shared route reaches a Desktop Cloud member 
   }
   for (const [selected, code] of [["cloud", "CLOUD_OPTIONS_INVALID"], ["desktop", "CLOUD_TARGET_CONFLICT"]]) assert(hint(error(["--connection", selected, "work", "tell", durable, "fixture"]), "desktop-cloud", selected, code), selected);
   assert(hint(error(["--connection", "desktop-cloud", "work", "tell", local, "fixture"]), "shared", "desktop-cloud"));
+  assert(hint(error(["--connection", "shared", "work", "tell", cloud, "fixture"]), "cloud", "shared"), "the legacy Web Cloud route is not reached through shared");
 });

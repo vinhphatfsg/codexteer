@@ -59,8 +59,8 @@ export const cloudInvocation = argv => !!selectedCloudInvocation(argv);
 export async function mainCloud(argv) {
   rejectRepeatedBinding(argv);
   const args = [...argv], json = flag(args, "--json"), selected = selectedCloudInvocation(argv) || "cloud", given = option(args, "--connection", selected);
-  // A member's record keeps its own route, so the project's host route reaches a Cloud member.
-  const connection = given === "shared" && workTellInvocation(argv) ? selected : given;
+  // A member's record keeps its own route, so the project's host route reaches a Desktop Cloud member.
+  const connection = given === "shared" && selected === "desktop-cloud" && workTellInvocation(argv) ? selected : given;
   const desktopCloud = connection === "desktop-cloud";
   const targetId = desktopCloud ? desktopCloudId : value => {
     try { return cloudTaskId(value); }

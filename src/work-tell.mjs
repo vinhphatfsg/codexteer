@@ -2,9 +2,9 @@ import { readOnClient, readSnapshot, observationAttention } from "./observe.mjs"
 import { createHash } from "node:crypto";
 import { getManagedThread, listManagedThreads, managedMembershipDigest } from "./project-index.mjs";
 import { getSupervisor } from "./supervision.mjs";
-import { createFinding } from "./findings.mjs";
+import { createFinding, assertFindingSend } from "./findings.mjs";
 import { sendWorkTellMessage, reconcileMessages } from "./journal.mjs";
-import { readRecord, withStoreLock } from "./store.mjs";
+import { readRecord, listRecords, withStoreLock } from "./store.mjs";
 import { readHistoryRecord, listHistoryRecords } from "./project-history.mjs";
 import { validateSyncPage } from "./sync-page.mjs";
 import { readRepositoryPolicy } from "./work-start.mjs";
@@ -105,7 +105,12 @@ export async function tellWork(threadInput, body, options = {}, dependencies = {
     const other = await otherWork(member.thread_id, member, basis.head, storage);
     const supervisor = await getSupervisor(member.thread_id, storage);
     if (!supervisor) throw fail("The managed task has no supervisor binding.", "MANAGED_SUPERVISOR_REQUIRED");
-    const key = `work-tell-${sha(JSON.stringify([member.thread_id, body.trim(), !!options.newTurn])).slice(0, 40)}`;
+    // One instruction has one key whichever action delivers it. A finding that an
+    // earlier version keyed by --new-turn still blocks the same instruction.
+    const instructionKey = newTurn => `work-tell-${sha(JSON.stringify([member.thread_id, body.trim(), newTurn])).slice(0, 40)}`;
+    const earlier = (await listRecords("findings", storage)).find(record => record?.thread_id === member.thread_id && record.key === instructionKey(true));
+    if (earlier) await assertFindingSend(member.thread_id, earlier.id, storage);
+    const key = instructionKey(false);
     const finding = await (dependencies.createFinding ?? createFinding)(member.thread_id, { key, title: `work tell: ${body.trim().slice(0, 120)}`,
       condition: `Deliver the reviewed instruction with sha256 ${sha(body)} exactly once and track its response.`, basedOn: fresh.cursor, ...storage });
     // The last read before the send decides what the receipt says was observed.
@@ -127,7 +132,7 @@ export async function tellWork(threadInput, body, options = {}, dependencies = {
         // A turn that started or ended between the reviewed sync and the transport's
         // own read: nothing was dispatched, so the other action goes once through the
         // same journal, supervisor and guard. An unknown delivery is never re-sent.
-        if (choice.source !== "auto" || error.delivery_status !== "not_sent" || error.observed_action !== otherAction[choice.action]) throw error;
+        if (choice.source !== "auto" || error.delivery_status !== "not_sent" || error.journal_update_required || error.observed_action !== otherAction[choice.action]) throw error;
         retriedFrom = { delivery_action: choice.action, code: error.code, message_id: error.message_id };
         choice.action = error.observed_action; receipt = await deliver(choice.action);
       }

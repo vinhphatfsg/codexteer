@@ -43,6 +43,14 @@ test("a stale-sync refusal prints the delta it refused on, bounded, in JSON and 
   const text = printed(error, false);
   assert.equal(text.filter(line => line.startsWith("event: ")).length, 20); assert.ok(text.includes(`events_omitted: ${error.events.length - 20}`));
   assert.ok(text.includes('turn_identity: "turn-one"'));
+  const pasted = Object.assign(new Error("changed"), { code: "WORK_TELL_STALE_SYNC", events: [{ id: "user-image", type: "userMessage", text: "see image", attachments: [{ url: `data:image/png;base64,${"A".repeat(50000)}` }], questions: ["Q".repeat(5000)] }] });
+  const clipped = printed(pasted, true).events[0];
+  assert.ok(clipped.attachments[0].url.length <= 2000 + "\n[truncated]".length && clipped.questions[0].length <= 2000 + "\n[truncated]".length, "every string in an event is clipped");
+});
+
+test("an error from another command prints none of work tell's fields", () => {
+  const other = printed(Object.assign(new Error("other"), { code: "PROJECT_CONTROL_INVALID", reason: "internal", events: [{ id: "x" }], policy: { checked: true } }), true);
+  assert.deepEqual([other.reason, other.events, other.policy], [undefined, undefined, undefined]);
 });
 
 test("competing bases, an incomplete basis and an unknown delivery print what the caller needs next", async t => {

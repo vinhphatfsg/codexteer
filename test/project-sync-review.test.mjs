@@ -89,6 +89,26 @@ for (const connection of ["shared", "desktop-cloud"]) test(`${connection}: a tur
   assert.deepEqual(mutations(f), ["turn/start"], "neither the steer nor the new turn was dispatched");
 });
 
+const startTurn = f => { f.thread.turns.push({ id: "someone-else", status: "inProgress", items: [{ id: "other-input", type: "userMessage", content: [{ type: "text", text: "Another request." }] }] }); f.thread.status = { type: "active", activeFlags: [] }; };
+
+for (const connection of ["shared", "desktop-cloud"]) test(`${connection}: a turn someone else starts between the check and the send is not steered`, async t => {
+  const f = await fixture(t, connection);
+  assert.equal((await syncProject("review", {}, f)).works[0].execution, "idle");
+  const error = await tellWork(f.thread.id, "Continue the verification.", {}, changedBeforeSend(f, () => startTurn(f))).then(() => assert.fail("sent"), error => error);
+  assert.deepEqual([error.retried_from?.delivery_action, error.delivery_action, error.code, error.delivery_status], ["new-turn", "steer", "STALE_OBSERVATION", "not_sent"]);
+  assert.deepEqual(mutations(f), [], "the other request's turn was neither steered nor joined by a new turn");
+});
+
+test("shared: a thread status that still said active when the reviewed turn had ended is retried as a new turn and delivered", async t => {
+  const f = await fixture(t, "shared");
+  f.thread.status = { type: "active", activeFlags: [] };
+  const row = (await syncProject("review", {}, f)).works[0];
+  assert.equal(row.execution, "active", "the row follows the thread status, so the tell chooses a steer");
+  const receipt = await tellWork(f.thread.id, "Address the remaining verification.", {}, changedBeforeSend(f, () => { f.thread.status = { type: "idle", activeFlags: [] }; }));
+  assert.deepEqual([receipt.delivery_status, receipt.delivery_action, receipt.retried_from?.delivery_action, receipt.retried_from?.code], ["accepted", "new-turn", "steer", "TASK_IDLE"]);
+  assert.deepEqual(mutations(f), ["turn/start"]);
+});
+
 test("initial idle, pending start, unknown/missing turn evidence, unknown attention and contradictory running turns are not review", async t => {
   for (const kind of ["initial", "pending", "missing", "unknown-status", "flags", "active-conflict", "notLoaded", "incomplete"]) {
     const f = await fixture(t);

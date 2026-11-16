@@ -9,7 +9,7 @@ import { registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
 import { syncProject } from "../src/project-sync.mjs";
 import { tellWork } from "../src/work-tell.mjs";
 import { getMessage, listMessages, sendWorkTellMessage } from "../src/journal.mjs";
-import { getFinding } from "../src/findings.mjs";
+import { getFinding, createFinding } from "../src/findings.mjs";
 import { readRecord, writeRecord } from "../src/store.mjs";
 
 const THREAD = "11111111-1111-4111-8111-121212121212", OTHER = "11111111-1111-4111-8111-343434343434", SESSION = "22222222-2222-4222-8222-121212121212";
@@ -275,4 +275,24 @@ test("the second attempt keeps every protective refusal: no retry after unknown 
     const error = await tellWork(THREAD, `race then ${name}`, {}, { storage: f, read: f.read, sendTracked, send: refusesFirst(f, calls, "new-turn") }).then(() => assert.fail(name), error => error);
     assert.deepEqual([error.code, error.delivery_status ?? "not_sent", error.retried_from?.delivery_action, calls.length], [code, "not_sent", "steer", reached], name);
   }
+
+  const unsaved = await fixture(t), unsavedCalls = [];
+  const lostEntry = async (...args) => { try { return await sendWorkTellMessage(...args); } catch (error) { throw Object.assign(error, { journal_update_required: true }); } };
+  await assert.rejects(tellWork(THREAD, "entry not saved", {}, { storage: unsaved, read: unsaved.read, sendTracked: lostEntry, send: refusesFirst(unsaved, unsavedCalls, "new-turn") }), error => error.code === "TASK_IDLE" && !error.retried_from);
+  assert.equal(unsavedCalls.length, 1, "a first attempt whose not_sent entry was not saved is not followed by another");
+});
+
+test("an instruction is delivered once whether it was sent as a steer, an automatic new turn or an explicit one", async t => {
+  for (const [first, second] of [[{ newTurn: true }, {}], [{}, { newTurn: true }]]) {
+    const f = await fixture(t); await reviewIdle(f);
+    assert.equal((await tellWork(THREAD, "continue", first, { storage: f, read: f.read, send: accept(f) })).delivery_status, "accepted");
+    await reviewIdle(f);
+    await assert.rejects(tellWork(THREAD, "continue", second, { storage: f, read: f.read, send: async () => assert.fail("dispatch") }), { code: "DUPLICATE_INTERVENTION" }, JSON.stringify(first));
+  }
+  // A finding an earlier version created for an explicit --new-turn of the same text.
+  const f = await fixture(t); await reviewIdle(f);
+  const legacy = await createFinding(THREAD, { key: `work-tell-${createHash("sha256").update(JSON.stringify([THREAD, "continue", true])).digest("hex").slice(0, 40)}`, title: "earlier", condition: "earlier", home: f.home });
+  await writeRecord("messages", "33333333-3333-4333-8333-000000000001", { schema: 1, id: "33333333-3333-4333-8333-000000000001", thread_id: THREAD, created_at: new Date().toISOString(),
+    metadata: { finding_id: legacy.id, finding_revision: 1 }, delivery_status: "accepted", sent: true }, f);
+  await assert.rejects(tellWork(THREAD, "continue", {}, { storage: f, read: f.read, send: async () => assert.fail("dispatch") }), { code: "DUPLICATE_INTERVENTION" });
 });

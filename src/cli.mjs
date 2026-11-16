@@ -45,14 +45,17 @@ function success(command, data, json) {
   return data;
 }
 
-// What a refused delivery was checked against: the delta, the basis and the
-// chosen action. Events keep the read's own clipping, newest last, at most 20.
+// What a refused work tell was checked against: the delta, the basis and the
+// chosen action. At most the newest 20 events, every string in them clipped.
 const REFUSAL_EVENTS = 20, REFUSAL_EVENT_CHARS = 2000;
+const clipStrings = value => typeof value === "string" ? (value.length > REFUSAL_EVENT_CHARS ? `${value.slice(0, REFUSAL_EVENT_CHARS)}\n[truncated]` : value)
+  : Array.isArray(value) ? value.map(clipStrings) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clipStrings(item)])) : value;
 function refusalDetail(error) {
+  if (!(typeof error.code === "string" && error.code.startsWith("WORK_TELL_")) && error.delivery_action_source === undefined) return { observed_action: error.observed_action };
   const events = Array.isArray(error.events) ? error.events : null;
   return { reason: error.reason, target_error: error.target_error, sync_token: error.sync_token, sync_tokens: error.sync_tokens, current_sync_token: error.current_sync_token,
     turn_identity: error.turn_identity, sync_turn_identity: error.sync_turn_identity, attention: error.attention,
-    ...(events ? { events: events.slice(-REFUSAL_EVENTS).map(event => trimEvent(event, REFUSAL_EVENT_CHARS, false)), events_omitted: Math.max(0, events.length - REFUSAL_EVENTS) } : {}),
+    ...(events ? { events: events.slice(-REFUSAL_EVENTS).map(event => clipStrings(trimEvent(event, REFUSAL_EVENT_CHARS, false))), events_omitted: Math.max(0, events.length - REFUSAL_EVENTS) } : {}),
     delivery_action: error.delivery_action, delivery_action_source: error.delivery_action_source, retried_from: error.retried_from, observed_action: error.observed_action,
     finding_id: error.finding_id, policy: error.policy, reconciliation: error.reconciliation };
 }

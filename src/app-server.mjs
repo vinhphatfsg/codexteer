@@ -101,7 +101,7 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
   await beforeSend?.(thread, client);
   await subscribe(threadId);
   const resumed = await readSendState(client, threadId);
-  if (resumed.status?.type !== "idle" || resumed.turns.some(turn => turn.status === "inProgress")) throw Object.assign(new Error("Task became active while resuming. Nothing was sent."), { code: "TASK_BUSY", observed_action: sendableAction(resumed) });
+  if (resumed.status?.type !== "idle" || resumed.turns.some(turn => turn.status === "inProgress")) throw Object.assign(new Error("Task became active while resuming. Nothing was sent."), { code: "TASK_BUSY", observed_action: activeTurn(resumed) ? "steer" : null });
   const clientUserMessageId = clientMessageId;
   await beforeSend?.(resumed, client);
   // Existing threads own their permission settings. Omit overrides so a host
@@ -156,7 +156,9 @@ export async function sendAppServerMessage(threadInput, message, { dryRun = fals
   } catch (error) {
     throw new SendFailure(error.uncertain
       ? "Delivery is unknown because App Server did not confirm receipt. Check the target task before retrying."
-      : error.message, { code: error.code ?? "NOT_SENT", uncertain: error.uncertain, threadId, rpcCode: error.rpcCode, rpcMessage: error.rpcMessage, rpcReason: error.rpcReason, capability: error.capability, operation: error.operation, remoteControlAuth: error.remote_control_auth, observedAction: error.observed_action });
+      : error.message, { code: error.code ?? "NOT_SENT", uncertain: error.uncertain, threadId, rpcCode: error.rpcCode, rpcMessage: error.rpcMessage, rpcReason: error.rpcReason, capability: error.capability, operation: error.operation, remoteControlAuth: error.remote_control_auth,
+      // The control transport cannot start a turn, so it never names one as allowed.
+      observedAction: remote && remoteTransport() !== "paired" && error.observed_action === "new-turn" ? null : error.observed_action });
   } finally {
     // Cleanup failure must never turn an acknowledged send into a retryable
     // error. Keep its acceptance receipt and leave any stale lock fail-closed.
