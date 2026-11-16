@@ -166,7 +166,7 @@ export const topics = {
       "history_scope=tail-turnsはDesktop Cloudの方式で、cursorが指すターンから最新までのターンだけを新しい順に1ターンずつ取得する。そのターンが完了済みで最新のまま状態も同じなら、IDと状態だけを確認する。完了したターンは変わらない前提で、cursorのターンより前は読み直さない。",
       "Desktop Cloudの--sinceなしのreadは--limit件に達した所で止まり、最古のターンまで読まなければomitted_older_events:null。",
       "Desktop Cloudでは、前の版が保存したv1 cursorを一度だけ全取得で読み、v3 cursorを返す。--full-historyでは全取得とv1 cursorのまま。",
-      "Desktop Cloudの応答は1回16 MiBまで。最新ターン1つがこれを超えるタスクはPAYLOAD_TOO_LARGEで読めない。",
+      "Desktop Cloudの応答は1回16 MiBまで。ターンの項目は1ターンずつ100件ごとに分けて取得するので、項目の多いターンも読める。1項目がこれを超えるとPAYLOAD_TOO_LARGE、1回の読み取りが32 MiBを超えるとDESKTOP_CLOUD_PROTOCOL_ERRORで読めない。",
       "リモートのnative経路ではhistory_scope=desktop-native-public-historyになる。",
       "v1 cursor（全取得）とv2 cursor（高速方式）は混在できない。",
       "v2・v3 cursorに--full-historyを付けるとOPTIONS_INVALID。--full-historyを外して続けるか、--sinceなしで全取得を始める。",

@@ -69,7 +69,8 @@ test("Cloud history does not require backwards bookmarks and shares aggregate cu
   const calls = []; let pages = 0;
   const rpc = { close() {}, async request(method, params) { calls.push({ method, params });
     if (method === "thread/read") return { thread: { ...metadata(), id: uuid } };
-    if (method === "thread/turns/list") return { data: [{ id: `turn-${++pages}`, status: "completed", itemsView: "full", items: [{ type: "agentMessage", id: `item-${pages}`, text: "ok" }] }], nextCursor: pages === 1 ? "next" : null, backwardsCursor: null };
+    if (method === "thread/turns/list") return { data: [{ id: `turn-${++pages}`, status: "completed", itemsView: "notLoaded", items: [] }], nextCursor: pages === 1 ? "next" : null, backwardsCursor: null };
+    if (method === "thread/items/list") return { data: [{ turnId: params.turnId, item: { type: "agentMessage", id: params.turnId.replace("turn", "item"), text: "ok" } }], nextCursor: null, backwardsCursor: null };
   } };
   const c = new DesktopCloudClient(rpc), snapshot = readSnapshot(await fetchThread(c, id));
   assert.equal(snapshot.events.filter(event => event.type === "agentMessage").length, 2); assert(calls.every(call => !call.params.threadId || call.params.threadId === uuid)); assert.equal(snapshot.has_more, false);

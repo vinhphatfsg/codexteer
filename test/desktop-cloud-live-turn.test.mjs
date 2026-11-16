@@ -572,7 +572,7 @@ test("a cursor that carries a live ledger is read with the switch off, and the e
 // with a running turn and replays an approval request to a resuming client.
 function wire() {
   const UUID = uuid(931), frames = [];
-  const turn = { id: "turn-1", status: "inProgress", startedAt: 1, items: [{ id: "item-a", type: "userMessage", content: [{ type: "text", text: "order" }] }], itemsView: "full" };
+  const turn = { id: "turn-1", status: "inProgress", startedAt: 1, items: [{ id: "item-a", type: "userMessage", content: [{ type: "text", text: "order" }] }] };
   const asked = { id: "item-b", type: "agentMessage", text: "Which database?", questions: [{ id: "choice", question: "Which database?" }] };
   class Socket extends EventEmitter {
     constructor() { super(); this.readyState = 0; this.sent = []; frames.push(this.sent); setImmediate(() => { this.readyState = 1; this.emit("open"); }); }
@@ -583,7 +583,8 @@ function wire() {
       const thread = { id: UUID, name: "worker", status: { type: "active", activeFlags: [] }, environments: [] };
       if (message.method === "initialize") this.reply({ id: message.id, result: {} });
       else if (message.method === "thread/read") this.reply({ id: message.id, result: { thread } });
-      else if (message.method === "thread/turns/list") this.reply({ id: message.id, result: { data: [turn], nextCursor: null } });
+      else if (message.method === "thread/turns/list") this.reply({ id: message.id, result: { data: [{ ...turn, items: [], itemsView: "notLoaded" }], nextCursor: null } });
+      else if (message.method === "thread/items/list") this.reply({ id: message.id, result: { data: turn.items.map(item => ({ turnId: turn.id, item })), nextCursor: null } });
       else if (message.method === "thread/resume") {
         this.reply({ id: message.id, result: { thread: { ...thread, turns: [{ ...turn, items: [...turn.items, asked] }] }, resumeKind: "attached" } });
         this.reply({ id: "approval-1", method: APPROVAL, params: { threadId: UUID } });

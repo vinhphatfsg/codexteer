@@ -119,6 +119,28 @@ async function resumeView(threadId, { openLive, timeoutMs = LIVE_TIMEOUT_MS, dra
   } finally { abandoned = true; clearTimeout(timer); connection?.close(); }
 }
 
+const PAGE_ITEMS = 100, ITEM_PAGES = 1000;
+// Fill a turn listed without its items from its item pages, because one turn's
+// items can exceed what one response carries. Listed after the turn, the items
+// are at least as new as its status. Returns the turn as the full items view
+// lists it and the bytes its pages took, which may not exceed `room`.
+export async function loadTurn(client, threadId, turn, room) {
+  const items = [], positions = new Set();
+  let position = null, bytes = 0;
+  for (let page = 0; page < ITEM_PAGES; page++) {
+    const result = await client.request("thread/items/list", { threadId, turnId: turn.id, sortDirection: "asc", limit: PAGE_ITEMS, ...(position ? { cursor: position } : {}) });
+    const next = result?.nextCursor ?? null;
+    if (!Array.isArray(result?.data) || result.data.length > PAGE_ITEMS || result.data.some(row => row?.turnId !== turn.id || !row.item || typeof row.item !== "object")
+      || (next !== null && (typeof next !== "string" || !next || positions.has(next) || !result.data.length))) throw failure("Invalid Cloud item page.");
+    bytes += Buffer.byteLength(JSON.stringify(result.data));
+    if (bytes > room) throw failure("Cloud history exceeded its memory budget.");
+    items.push(...result.data.map(row => row.item));
+    if (next === null) return { turn: { ...turn, items, itemsView: "full" }, bytes };
+    positions.add(next); position = next;
+  }
+  throw failure("Cloud history exceeded its pagination limit.");
+}
+
 export class DesktopCloudClient {
   // `live.openLive` opens the connection a live read resumes the task on; a
   // client without it does not read running turns live.
@@ -130,10 +152,10 @@ export class DesktopCloudClient {
   async history(threadId) {
     const turns = [], seen = new Set(); let cursor, bytes = 0;
     for (let page = 0; page < 100; page++) {
-      const data = await this.client.request("thread/turns/list", { threadId, itemsView: "full", sortDirection: "asc", limit: 100, ...(cursor ? { cursor } : {}) });
-      if (!Array.isArray(data?.data) || data.data.some(turn => typeof turn.id !== "string" || !Array.isArray(turn.items) || turn.itemsView !== "full") || new Set([...turns, ...data.data].map(turn => turn.id)).size !== turns.length + data.data.length) throw failure("Invalid complete Cloud history.");
-      bytes += Buffer.byteLength(JSON.stringify(data.data)); if (bytes > 32 * 1024 * 1024) throw failure("Complete Cloud history exceeded its memory budget.");
-      turns.push(...data.data); cursor = data.nextCursor;
+      const data = await this.client.request("thread/turns/list", { threadId, itemsView: "notLoaded", sortDirection: "asc", limit: 100, ...(cursor ? { cursor } : {}) });
+      if (!Array.isArray(data?.data) || data.data.some(turn => typeof turn?.id !== "string" || !turn.id) || new Set([...turns, ...data.data].map(turn => turn.id)).size !== turns.length + data.data.length) throw failure("Invalid complete Cloud history.");
+      for (const listed of data.data) { const { turn, bytes: size } = await loadTurn(this.client, threadId, listed, 32 * 1024 * 1024 - bytes); bytes += size; turns.push(turn); }
+      cursor = data.nextCursor;
       if (cursor == null) return turns;
       if (typeof cursor !== "string" || !cursor || seen.has(cursor) || page === 99) throw failure("Cloud history exceeded its pagination limit.");
       seen.add(cursor);

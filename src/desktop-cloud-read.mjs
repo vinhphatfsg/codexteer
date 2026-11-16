@@ -11,6 +11,7 @@ import { assertReadOptions, digest, fetchThread, mutableStatus, prefixHash, proj
 import { encodeCursor, invalidCursor, parseCursor } from "./cursor.mjs";
 import { hostFields } from "./target.mjs";
 import { turnEvidence } from "./attention-coverage.mjs";
+import { loadTurn } from "./desktop-cloud-api.mjs";
 
 const FINAL = new Set(["completed", "failed", "interrupted", "cancelled"]), RUNNING = new Set(["inProgress", "in_progress", "running", "pending", "queued"]);
 const PAGES = 1000, BYTES = 32 * 1024 * 1024;
@@ -19,21 +20,21 @@ const LIVE_ITEMS = 256, REQUEST = "pendingRequest:";
 const failure = message => Object.assign(new Error(message), { code: "DESKTOP_CLOUD_PROTOCOL_ERROR" });
 const startedAt = turn => Number.isSafeInteger(turn?.startedAt) && turn.startedAt >= 0 ? turn.startedAt : null;
 
-// List turns newest first, one per request, until `stop` returns true for a
-// turn. Returns the turns listed, oldest first, and whether the list ended.
+// List turns newest first, one per request, each with its items, until `stop`
+// returns true for a turn. Returns the turns listed, oldest first, and whether
+// the list ended.
 async function newestTurns(client, threadId, stop) {
   const turns = [], ids = new Set(), positions = new Set();
   let position = null, bytes = 0, newer = null;
   for (let page = 0; page < PAGES; page++) {
-    const result = await client.request("thread/turns/list", { threadId, itemsView: "full", sortDirection: "desc", limit: 1, ...(position ? { cursor: position } : {}) });
+    const result = await client.request("thread/turns/list", { threadId, itemsView: "notLoaded", sortDirection: "desc", limit: 1, ...(position ? { cursor: position } : {}) });
     const next = result?.nextCursor ?? null;
     if (!Array.isArray(result?.data) || (next !== null && (typeof next !== "string" || !next || positions.has(next) || !result.data.length))) throw failure("Invalid Cloud turn page.");
-    bytes += Buffer.byteLength(JSON.stringify(result.data));
-    if (bytes > BYTES) throw failure("Cloud history exceeded its memory budget.");
-    for (const [index, turn] of result.data.entries()) {
-      if (typeof turn?.id !== "string" || !turn.id || ids.has(turn.id) || typeof turn.status !== "string" || !Array.isArray(turn.items) || turn.itemsView !== "full") throw failure("Invalid Cloud turn page.");
-      if (startedAt(turn) !== null && newer !== null && startedAt(turn) > newer) throw failure("Cloud turns were not listed newest first.");
-      newer = startedAt(turn) ?? newer; ids.add(turn.id); turns.push(turn);
+    for (const [index, listed] of result.data.entries()) {
+      if (typeof listed?.id !== "string" || !listed.id || ids.has(listed.id) || typeof listed.status !== "string") throw failure("Invalid Cloud turn page.");
+      if (startedAt(listed) !== null && newer !== null && startedAt(listed) > newer) throw failure("Cloud turns were not listed newest first.");
+      const { turn, bytes: size } = await loadTurn(client, threadId, listed, BYTES - bytes);
+      bytes += size; newer = startedAt(turn) ?? newer; ids.add(turn.id); turns.push(turn);
       if (stop(turn)) return { turns: turns.reverse(), ended: next === null && index === result.data.length - 1 };
     }
     if (next === null) return { turns: turns.reverse(), ended: true };

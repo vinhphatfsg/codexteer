@@ -286,12 +286,43 @@ test("a turn larger than one response may carry is read in pages, so read, sync 
   assert.equal(sent.delivery_status, "accepted"); assert.equal(f.state.turns.at(-1).status, "inProgress");
 });
 
-test("a newest turn larger than the receive limit on its own still fails with the receive limit error", async t => {
+test("an item larger than the receive limit on its own still fails with the receive limit error", async t => {
   const f = await member(t, 3, { receiveLimit: 64 * 1024 });
   await syncProject("P", {}, f.deps);
   f.append([user("large"), command("x".repeat(80 * 1024))]);
   const sync = await syncProject("P", {}, f.deps);
   assert.equal(sync.complete, false); assert.equal(sync.works[0].error, "PAYLOAD_TOO_LARGE");
+});
+
+test("a turn's items are read in pages of 100 at every boundary, by the tail and the whole history alike", async () => {
+  const f = cloud();
+  for (const size of [0, 1, 99, 100, 101, 200, 250]) f.append(Array.from({ length: size }, () => agent("step")));
+  const history = (await fetchThread(await f.connect(), ID)).turns;
+  assert.deepEqual(history.map(turn => turn.items), f.state.turns.map(turn => turn.items));
+  f.resetServed();
+  const tail = await f.read(ID, { limit: 1000 });
+  assert.deepEqual(tail.events.map(event => event.id), f.state.turns.flatMap(turn => [turn.id, ...turn.items.map(item => item.id)]));
+  assert.deepEqual([f.state.served.turns, f.state.served.pages], [7, 1 + 1 + 1 + 1 + 2 + 2 + 3]);
+});
+
+test("an item page of another turn, too long, with a bad row or a repeated or stalled cursor is rejected", async () => {
+  for (const fault of ["turn", "length", "row", "cursor", "empty"]) {
+    const f = cloud();
+    f.append(work(0)); f.append(Array.from({ length: 150 }, () => agent("step")));
+    const request = f.rpc.request;
+    f.rpc.request = async (method, params) => {
+      const page = await request(method, params);
+      if (method !== "thread/items/list" || params.turnId !== "turn-1") return page;
+      if (fault === "turn") page.data[0].turnId = "turn-0";
+      if (fault === "length") page.data.push(...page.data.slice(0, 1));
+      if (fault === "row") page.data[0].item = null;
+      if (fault === "cursor" && params.cursor) page.nextCursor = params.cursor;
+      if (fault === "empty" && page.nextCursor) page.data = [];
+      return page;
+    };
+    await assert.rejects(f.read(ID, { limit: 1000 }), { code: "DESKTOP_CLOUD_PROTOCOL_ERROR" }, `tail ${fault}`);
+    await assert.rejects(f.fullRead(ID, { limit: 1000 }), { code: "DESKTOP_CLOUD_PROTOCOL_ERROR" }, `history ${fault}`);
+  }
 });
 
 // The full reader is the reference: from the same history and the same reads,
