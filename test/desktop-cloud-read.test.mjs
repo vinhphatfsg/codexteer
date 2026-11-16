@@ -271,6 +271,21 @@ test("--full-history keeps the full read and its v1 cursor; a tail cursor cannot
   await assert.rejects(f.read(ID, { since: tail.cursor, fullHistory: true }), { code: "OPTIONS_INVALID" });
 });
 
+test("a turn larger than one response may carry is read in pages, so read, sync and tell reach its task", async t => {
+  const f = await member(t, 3, { receiveLimit: 64 * 1024 });
+  assert.equal((await syncProject("P", {}, f.deps)).complete, true);
+  const long = f.append([user("long order"), ...Array.from({ length: 450 }, (_, n) => command(`step ${n} ${"x".repeat(300)}`)), agent("long report")]);
+  const sync = await syncProject("P", {}, f.deps);
+  assert.equal(sync.works[0].error, null); assert.equal(sync.complete, true);
+  assert.equal(sync.works[0].reason.latest_turn_id, long.id); assert.equal(sync.works[0].group, "検収待ち");
+  const tail = await f.read(ID, {});
+  assert.equal(tail.latest_turn_id, long.id); assert.equal(tail.events.at(-1).id, long.items.at(-1).id);
+  assert.deepEqual((await fetchThread(await f.connect(), ID)).turns.at(-1).items, long.items, "the whole history lists every item of the long turn");
+  const sent = await tellWork(ID, "Review the result.", { newTurn: true }, { storage: f.storage, read: f.read,
+    send: (id, body, options) => sendDesktopCloudInput(id, body, options, { ...f.storage, connect: f.connect }) });
+  assert.equal(sent.delivery_status, "accepted"); assert.equal(f.state.turns.at(-1).status, "inProgress");
+});
+
 test("a newest turn larger than the receive limit on its own still fails with the receive limit error", async t => {
   const f = await member(t, 3, { receiveLimit: 64 * 1024 });
   await syncProject("P", {}, f.deps);
