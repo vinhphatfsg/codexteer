@@ -263,7 +263,7 @@ test("a sync that loses the publication race settles nothing and the newer head 
 test("a cursor that moved during the read leaves a stopped work unsettled and is not grounds for exclusion", async t => {
   const f = await fixture(t); await f.stop(A); let moved = false;
   const result = await f.sync({ excludeUnreadable: A, reason: "stuck" }, { read: async (id, options) => {
-    if (id === A && !moved) { moved = true; await updateManagedThreadCursor(A, "c0", "c0", f.storage); }
+    if (id === A && !moved) { moved = true; f.works.get(A).events.push(message("report")); await updateManagedThreadCursor(A, "c0", "c1", f.storage); }
     return f.read(id, options);
   } });
   assert.deepEqual(result.exclude_unreadable, { thread_id: A, outcome: "not_applied", error: "SYNC_CURSOR_CONFLICT" });

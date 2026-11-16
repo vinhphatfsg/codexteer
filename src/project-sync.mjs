@@ -202,6 +202,9 @@ export async function continueProjectSync(token, options = {}, storage = {}) {
 function reduceAttention(state, prior, summaries) {
   // A read the cursor moves past is never read again, so its own events resolve.
   const final = state.complete || state.backlog;
+  // A wait read from a baseline behind the stored cursor that moves no cursor
+  // re-reads events the head already resolved; only a final read may fold them.
+  const reread = !final && state.stored === false;
   // Reclassify only persisted evidence that proves the old command-level false
   // positive. Opaque legacy evidence, real turn failures and questions survive.
   const priorEntries = (prior?.entries ?? (prior ? [["legacy", prior]] : [])).filter(([, entry]) => !commandOnlyFailure(entry)).map(([id, entry]) => [id, entry.attention === "failure" && !provenWorkFailure(entry)
@@ -211,7 +214,7 @@ function reduceAttention(state, prior, summaries) {
   for (const page of state.observations) {
     if (["failed", "systemError"].includes(page.status)) entries.set("backend:failure", { attention: "failure", reason: { backend_status: page.status }, events: [] });
     for (const flag of page.attention ?? []) entries.set(`flag:${flag}`, { attention: "human", reason: { attention_flags: [flag] }, events: [] });
-    for (const event of page.events) {
+    for (const event of reread ? [] : page.events) {
       if (["answered", "resolved"].includes(event.status)) { if (final) entries.delete(event.id); continue; }
       if (final && event.type === "userMessage" && event.change !== "updated") {
         for (const [id, entry] of entries) if (entry.reason?.question_event) entries.delete(id);
@@ -461,7 +464,8 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   // `complete` as false, so the reservation is never below what is written.
   const reserved = new Map(observed.map(work => {
     const state = states.get(work.thread_id);
-    const rows = advances(state) ? [{ ...work, sync_revision: (state.member.sync_revision ?? 0) + 1 }, refusedRow(work, state, "X".repeat(CURSOR_ERROR_BYTES)).row] : [work];
+    // The revision is read again under the lock, so reserve its longest form.
+    const rows = advances(state) ? [{ ...work, sync_revision: Number.MAX_SAFE_INTEGER }, refusedRow(work, state, "X".repeat(CURSOR_ERROR_BYTES)).row] : [work];
     return [work, rows.map(row => {
       const entry = settlement(plan.get(work.thread_id), row, state, createdAt);
       return entry ? { ...row, settled: settledMarker(entry) } : row;
@@ -484,7 +488,8 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       // this run listed it (a publication between that listing and the head
       // read, or one that died after its cursor update) makes these reads stale:
       // they would reopen what that head resolved. A revision bumped over an
-      // unchanged cursor does not; its CAS below is refused as before.
+      // unchanged cursor (a sync that read nothing new) does not, so the CAS
+      // below expects the revision listed here.
       const stored = new Map((await listManagedThreads(projectId, storage)).map(member => [member.thread_id, member]));
       for (const { member } of states.values()) {
         const now = stored.get(member.thread_id);
@@ -494,11 +499,11 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       // publication leaves an incomplete head that the next sync can recover.
       for (const record of eventRecords) await historyWrite(...eventRecord(record), storage);
       await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), { ...head, complete: false, complete_work_ids: [], publication_pending: true }, storage);
-      // CAS uses the snapshot revision even if an empty read returns the same cursor.
+      // CAS even if an empty read returns the same cursor.
       for (const state of states.values()) if (advances(state)) {
         const work = works.find(w => w.thread_id === state.member.thread_id);
         try {
-          const updated = await updateManagedThreadCursor(state.member.thread_id, state.member.sync_cursor, state.cursor, storage, state.member.sync_revision ?? 0);
+          const updated = await updateManagedThreadCursor(state.member.thread_id, state.member.sync_cursor, state.cursor, storage, stored.get(state.member.thread_id)?.sync_revision ?? 0);
           work.sync_revision = updated.sync_revision;
         } catch (error) {
           const { retained, row } = refusedRow(work, state, cursorError(error));

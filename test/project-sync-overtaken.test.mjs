@@ -11,14 +11,15 @@ import { readSnapshot } from "../src/observe.mjs";
 import { registerManagedThread, getManagedThread } from "../src/project-index.mjs";
 import { syncProject } from "../src/project-sync.mjs";
 import { tellWork } from "../src/work-tell.mjs";
+import { waitProject } from "../src/project-wait.mjs";
 import { registerSupervisor } from "../src/supervision.mjs";
 import { writeRecord } from "../src/store.mjs";
 
-const id = "11111111-1111-4111-8111-000000000001", policy = "Keep scope.\n";
+const id = "11111111-1111-4111-8111-000000000001", other = "22222222-2222-4222-8222-000000000002", policy = "Keep scope.\n";
 const question = { id: "question", type: "agentMessage", text: "Which?", questions: ["Which?"] };
 const answer = { id: "answer", type: "userMessage", content: [{ type: "text", text: "This one." }] };
 
-async function fixture(t) {
+async function fixture(t, { withOther = false } = {}) {
   const home = await mkdtemp(tempPrefix("ct-overtaken-")), root = await mkdtemp(tempPrefix("ct-overtaken-root-"));
   t.after(() => Promise.all([rm(home, { recursive: true, force: true }), rm(root, { recursive: true, force: true })]));
   const storage = { home }, thread = { id, status: { type: "idle", activeFlags: [] }, turns: [{ id: "turn-0", status: "completed", items: [{ id: "start", type: "agentMessage", text: "start" }] }] };
@@ -26,22 +27,32 @@ async function fixture(t) {
   await writeFile(`${root}/CODEXTEER.md`, policy);
   await registerSupervisor(id, "33333333-3333-4333-8333-000000000003", { ...storage, owner: "fixture", connection: "shared" });
   await writeRecord("work-starts", "fixture", { schema: 1, project_id: "P", thread_id: id, root, created_at: new Date().toISOString() }, storage);
-  const read = async (_thread, options) => readSnapshot(thread, options);
+  // A second member, readable until `broken`, keeps every later ordinary sync partial.
+  const second = { id: other, status: { type: "idle", activeFlags: [] }, turns: [{ id: "turn-0", status: "completed", items: [{ id: "start", type: "agentMessage", text: "start" }] }] };
+  if (withOther) await registerManagedThread(other, { projectId: "P", connection: "shared", syncCursor: readSnapshot(second).cursor }, storage);
+  const f = { storage, thread, second, broken: false, flagsUnknown: false };
+  const read = async (target, options) => {
+    if (target === other) { if (f.broken) throw Object.assign(new Error("rejected"), { code: "RPC_REJECTED" }); return readSnapshot(second, options); }
+    const page = readSnapshot(thread, options);
+    return f.flagsUnknown ? { ...page, attention: null } : page;
+  };
   let sent = 0;
   const tell = () => tellWork(id, "next", {}, { storage, read, send: async (_id, _wire, options) => {
     await options.beforeSend(thread); sent++; return { sent: true, delivery_status: "accepted", client_message_id: options.clientMessageId, turn_id: "turn-2" };
   } });
-  return { storage, thread, read, tell, sent: () => sent, sync: (dependencies = {}) => syncProject("P", {}, { storage, read, ...dependencies }) };
+  return Object.assign(f, { read, tell, sent: () => sent, sync: (dependencies = {}) => syncProject("P", {}, { storage, read, ...dependencies }),
+    wait: () => waitProject("P", { timeoutMs: 0 }, { storage, read, processIdentity: async () => "same", orchestratorIdentity: async () => null, parentPid: () => 1 }) });
 }
 
-// Holds the next read of a membership record, after it was read, until `release`.
+// Holds the next read of a membership record that a project sync or wait
+// publication makes (`listManagedThreads` in `syncProject`), after it was read, until `release`.
 function holdMembershipRead(t) {
   const readFile = fs.promises.readFile; let release, held;
   const reached = new Promise(resolve => { held = resolve; }), gate = new Promise(resolve => { release = resolve; });
   let armed = true;
   fs.promises.readFile = async (...args) => {
     const content = await readFile(...args);
-    if (armed && String(args[0]).includes("project-index")) { armed = false; held(); await gate; }
+    if (armed && String(args[0]).includes("project-index") && new Error().stack.includes("syncProject")) { armed = false; held(); await gate; }
     return content;
   };
   syncBuiltinESMExports();
@@ -60,6 +71,39 @@ test("a sync overtaken by another publication does not reopen a question that pu
   hold.release();
   assert.notEqual((await slow).works[0].attention, "human", "the slower sync does not reopen it");
   assert.notEqual((await f.sync()).works[0].attention, "human", "the answered question stays answered");
+  await f.tell();
+  assert.equal(f.sent(), 1);
+});
+
+test("a wait whose member was read again at the same cursor returns its change once and does not reopen a question a partial sync saw answered", async t => {
+  const f = await fixture(t, { withOther: true }), row = result => result.works.find(work => work.thread_id === id);
+  assert.equal((await f.wait()).reason, "initial_sync");
+  f.broken = true;
+  f.thread.turns.push({ id: "turn-1", status: "completed", items: [question, answer, { id: "done", type: "agentMessage", text: "done" }] });
+  assert.notEqual(row(await f.sync()).attention, "human", "a partial sync read the question with its answer");
+  const hold = holdMembershipRead(t), waiting = f.wait();
+  await hold.reached;
+  assert.equal(row(await f.sync()).complete, true, "a sync that reads nothing new publishes meanwhile");
+  hold.release();
+  assert.equal((await waiting).reason, "work_changed", "the wait returns the turn from its baseline");
+  assert.equal((await f.wait()).reason, "timeout", "the next wait does not return the same change again");
+  assert.notEqual(row(await f.sync()).attention, "human", "the answered question stays answered");
+  await f.tell();
+  assert.equal(f.sent(), 1);
+});
+
+test("a wait read from a baseline behind the stored cursor, with unknown flags, does not reopen a question a partial sync saw answered", async t => {
+  const f = await fixture(t, { withOther: true }), row = result => result.works.find(work => work.thread_id === id);
+  assert.equal((await f.wait()).reason, "initial_sync");
+  f.broken = true;
+  f.thread.turns.push({ id: "turn-1", status: "completed", items: [question, answer, { id: "done", type: "agentMessage", text: "done" }] });
+  assert.notEqual(row(await f.sync()).attention, "human", "a partial sync read the question with its answer");
+  f.broken = false; f.flagsUnknown = true;
+  f.second.turns.push({ id: "turn-1", status: "completed", items: [{ id: "report", type: "agentMessage", text: "report" }] });
+  const waited = await f.wait();
+  assert.equal(row(waited.sync).error, "PROJECT_WAIT_ATTENTION_UNKNOWN", "the wait could not establish the member's flags");
+  f.flagsUnknown = false;
+  assert.notEqual(row(await f.sync()).attention, "human", "the answered question stays answered");
   await f.tell();
   assert.equal(f.sent(), 1);
 });
