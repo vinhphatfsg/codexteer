@@ -200,10 +200,8 @@ export async function continueProjectSync(token, options = {}, storage = {}) {
 // Attention is a reducer over the entire delta, not a property of its last page.
 // Current backend flags and durable question/failure evidence resolve separately.
 function reduceAttention(state, prior, summaries) {
-  // A read the stored cursor moves past is never read again, so its own events
-  // resolve. A wait probe's backlog read can end before events a sync already
-  // folded into `prior`.
-  const final = state.complete || (state.backlog && state.stored);
+  // A read the cursor moves past is never read again, so its own events resolve.
+  const final = state.complete || state.backlog;
   // Reclassify only persisted evidence that proves the old command-level false
   // positive. Opaque legacy evidence, real turn failures and questions survive.
   const priorEntries = (prior?.entries ?? (prior ? [["legacy", prior]] : [])).filter(([, entry]) => !commandOnlyFailure(entry)).map(([id, entry]) => [id, entry.attention === "failure" && !provenWorkFailure(entry)
@@ -393,7 +391,9 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     state.events = [...new Map(state.events.map(e => [JSON.stringify([e.turn_id ?? null, e.id]), e])).values()];
     const eventSummaries = state.events.map(event => summarizeEvent(event, state.member.thread_id, eventRecords));
     state.eventSummaries = eventSummaries;
-    const currentAttention = reduceAttention(state, priorAttention, eventSummaries);
+    // A wait probe's backlog read from behind the stored cursor covers events a
+    // sync already folded into the head, or will: it leaves the attention as is.
+    const currentAttention = state.backlog && !state.stored ? priorAttention : reduceAttention(state, priorAttention, eventSummaries);
     if (state.historyNotes?.length) historical[state.member.thread_id] = [...new Map([...historical[state.member.thread_id] ?? [], ...state.historyNotes].map(entry => [JSON.stringify(entry), entry])).values()];
     if (currentAttention) {
       unresolved[state.member.thread_id] = currentAttention;
@@ -483,7 +483,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       // What a backlog read resolves holds only once its cursor CAS succeeds; a
       // crash before then, or a refused CAS, leaves the read to be done again.
       const pendingAttention = { ...unresolved };
-      for (const state of states.values()) if (state.backlog) {
+      for (const state of states.values()) if (state.backlog && state.stored) {
         const kept = reduceAttention({ ...state, complete: false, backlog: false }, previous?.unresolved_attention?.[state.member.thread_id] ?? null, state.eventSummaries);
         if (kept) pendingAttention[state.member.thread_id] = kept; else delete pendingAttention[state.member.thread_id];
       }

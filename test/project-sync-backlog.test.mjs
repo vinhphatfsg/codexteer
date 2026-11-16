@@ -157,6 +157,20 @@ test("a wait that reads a backlog from behind the stored cursor keeps a later qu
   assert.equal((await sync()).works.find(work => work.thread_id === id).attention, "human", "the open question stays in the head");
 });
 
+test("a wait that reads a backlog from behind the stored cursor does not reopen a question a sync saw answered", async t => {
+  const f = await local(t, [id, other]); let broken = false;
+  const read = async (thread, options) => { if (broken && thread === other) throw Object.assign(new Error("rejected"), { code: "RPC_REJECTED" }); return f.read(thread, options); };
+  const wait = () => waitProject("P", { timeoutMs: 0 }, { storage: f.storage, read, processIdentity: async () => "same", orchestratorIdentity: async () => null, parentPid: () => 1 });
+  assert.equal((await wait()).reason, "initial_sync");
+  broken = true;
+  f.threads.get(id).turns.push({ id: "turn-1", status: "inProgress", items: [{ ...message("first", 10), questions: ["Which?"] },
+    ...backlog("m", 20), { id: "answer", type: "userMessage", content: [{ type: "text", text: "This one." }] }] });
+  const sync = () => syncProject("P", {}, { storage: f.storage, read });
+  await drain({ ...f, sync }, id);
+  assert.equal((await wait()).reason, "work_changed");
+  assert.notEqual((await sync()).works.find(work => work.thread_id === id).attention, "human", "the answered question stays answered");
+});
+
 test("an orchestrator that syncs after each wait return reads a backlog through, without syncing on its own", async t => {
   const f = await local(t);
   const wait = () => waitProject("P", { timeoutMs: 0 }, { storage: f.storage, read: f.read, processIdentity: async () => "same", orchestratorIdentity: async () => null, parentPid: () => 1 });
