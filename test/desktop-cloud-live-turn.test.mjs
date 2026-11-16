@@ -26,7 +26,7 @@ const question = text => ({ id: `item-${++serial}`, type: "agentMessage", text, 
 const command = (status = "inProgress") => ({ id: `item-${++serial}`, type: "commandExecution", command: "make test", cwd: "/workspace", status, exitCode: null, aggregatedOutput: "" });
 
 // One Desktop Cloud task behind the real client, reader and project commands.
-// The service shows a running turn's items only when it ends, as the service does;
+// The service shows a running turn's items only at `catchUp` or when it ends;
 // `live: false` is the switch off. The reader learns the turns codexteer started
 // from the project's send receipts; `start` stands for such a send under the
 // task's reviewer unless `started` is false.
@@ -753,4 +753,48 @@ test("with the switch off, a new turn's send does not resume the task to read it
   const receipt = await f.tell(ID, "Continue the same delegation.", { newTurn: true });
   assert.equal(receipt.delivery_status, "accepted"); assert.equal(f.state.reviewerReads, 0);
   assert.deepEqual([...(await startedTurns(ID, f.storage))], [[receipt.turn_id, null]]);
+});
+
+test("the live ledger holds only items the history has not listed, so a history that catches up keeps a long turn read live", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  await f.sync();
+  const { turn, opening } = f.start(), rows = [], all = [];
+  const row = async () => (await f.sync({ byteBudget: 1024 * 1024 })).works[0];
+  for (let round = 0; round < 6; round++) {
+    all.push(...f.progress(...Array.from({ length: 300 }, (_, n) => agent(`round ${round} item ${n}`))));
+    rows.push(await row());
+    assert.equal(rows.at(-1).live_fallback, undefined, `after ${all.length} items the ledger holds only the 300 not yet listed`);
+    assert.equal(rows.at(-1).attention_coverage, undefined);
+    f.catchUp();
+    rows.push(await row());
+  }
+  const final = agent("Done.");
+  f.complete([final]);
+  rows.push(await row());
+  assert.deepEqual(itemIds(rows, [turn]).sort(), [opening, ...all, final].map(item => item.id).sort(), "every item arrives exactly once");
+});
+
+test("a full ledger reads live again once the history lists what it delivered", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  await f.sync();
+  const { turn, opening } = f.start(), rows = [];
+  const row = async () => (await f.sync({ byteBudget: 1024 * 1024 })).works[0];
+  const burst = f.progress(...Array.from({ length: 600 }, (_, n) => agent(`burst ${n}`)));
+  rows.push(await row());
+  assert.equal(rows.at(-1).live_fallback, "ledger_full");
+  rows.push(await row());
+  assert.equal(rows.at(-1).live_fallback, "ledger_full", "while the history lags, the ledger stays full");
+  f.catchUp();
+  rows.push(await row());
+  assert.equal(rows.at(-1).live_fallback, undefined, "the history listed what the ledger held");
+  const later = f.progress(agent("later"));
+  const resumes = f.resumes();
+  rows.push(await row());
+  assert.equal(f.resumes(), resumes + 1); assert.deepEqual(eventIds(rows.at(-1)), later.map(item => item.id));
+  const final = agent("Done.");
+  f.complete([final]);
+  rows.push(await row());
+  assert.deepEqual(itemIds(rows, [turn]).sort(), [opening, ...burst, ...later, final].map(item => item.id).sort(), "every item arrives exactly once");
 });

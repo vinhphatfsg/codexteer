@@ -13,7 +13,8 @@
 - それ以外の実行中ターンはresumeせず、従来どおり`attention_coverage`の印を付け、理由の`live_fallback`に`not_codexteer_turn`か`not_auto_review`を返します。
 - resumeの結果が自動レビュー以外を示したときは、その読み取りで読めた項目を返し、以後そのタスクはresumeしません。cursorに残り、`live_fallback:"not_auto_review"`を返します。
 - resumeした接続にサーバー要求が届いたときは、サービスがその要求を全て解決済みと通知するまで接続を閉じません。プロセスは延ばさないため、先にコマンドが終わると接続は閉じ、サービスはターンを中断します。
-- 実行中に読める項目を1ターン256から512に増やしました。512を超える項目を見た読み取りは古い順に512個までを返し、以後そのターンが終わるまでresumeしません（`live_fallback:"ledger_full"`）。これまでは、上限を超えた後も照会ごとにresumeしていました。512個のcursorは約40 KBです。
+- 実行中に読んだ項目のうち、履歴にまだ載っていないものを256から512まで持てるようにしました。履歴は実行中のターンの項目を遅れて載せ、載った項目はcursorから外れるため、上限は1ターンの項目数ではなく履歴の遅れの分です。512を超える項目を見た読み取りは古い順に512個までを返し、以後、履歴が項目を載せて512を下回るまでresumeしません（`live_fallback:"ledger_full"`）。これまでは、上限を超えた後も照会ごとにresumeしていました。512個のcursorは約40 KBです。
+- 0.25.0の説明は、Desktop Cloudの履歴が実行中のターンの項目を開始時の指示しか載せないとしていました。実際の履歴は、実行中のターンの項目を遅れて載せます。codexteerは載った項目を従来どおり返しており、説明だけを直しました。
 - `CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=off`で無効にできます。`on`は既定と同じで、どのターンでもresumeする0.25.xの動作はなくなりました。
 - Desktop Cloudの`doctor`の`running_turn_attention`は、有効なら`"codexteer_turns"`、無効なら`"unobserved"`です。
 - `not_auto_review`を持つcursorは0.25.x以前では読めず、`STALE_CURSOR`になります。

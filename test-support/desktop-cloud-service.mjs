@@ -9,7 +9,8 @@ import { RpcFailure } from "../src/rpc.mjs";
 // can bound the cost of a read; `served.ids` counts notLoaded turns.
 //
 // With `liveTurn`, the history shows a running turn with its opening message
-// only, as the service does, and `openLive` opens the separate connection a
+// only until `catchUp` lists what it has so far, as the service lists a running
+// turn late, and `openLive` opens the separate connection a
 // live read resumes the task on. `state.live` scripts that connection and
 // records every resume, and an idle resume as a wake of the task's environment.
 // `state.reviewer` is the task's approvals reviewer, which thread/start and
@@ -17,10 +18,10 @@ import { RpcFailure } from "../src/rpc.mjs";
 // on its own connection to learn it.
 export function desktopCloudService(uuid, { environment, receiveLimit = Infinity, liveTurn = false } = {}) {
   const state = { turns: [], flags: [], environment, status: "idle", lost: false, missing: false, calls: [], receiveLimit,
-    served: { requests: 0, turns: 0, bytes: 0, ids: 0 }, clock: 1_800_000_000, hideRunning: liveTurn, reviewer: "auto_review", reviewerReads: 0,
+    served: { requests: 0, turns: 0, bytes: 0, ids: 0 }, clock: 1_800_000_000, hideRunning: liveTurn, listedRunning: 1, reviewer: "auto_review", reviewerReads: 0,
     live: { resumes: [], wakes: 0, failure: null, requests: [], flags: [], beforeResume: null, itemId: id => id, item: item => item, connections: [] } };
   const turn = (fields = {}) => ({ id: `turn-${state.turns.length}`, status: "completed", startedAt: state.clock++, items: [], ...fields });
-  const listed = row => state.hideRunning && row.status === "inProgress" ? { ...row, items: row.items.slice(0, 1) } : row;
+  const listed = row => state.hideRunning && row.status === "inProgress" ? { ...row, items: row.items.slice(0, state.listedRunning) } : row;
   const rpc = { close() {}, async request(method, params) {
     state.calls.push({ method, params });
     if (method === "model/list") return { data: [{ model: "neutral-default", isDefault: true, defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "high" }] }] };
@@ -52,7 +53,7 @@ export function desktopCloudService(uuid, { environment, receiveLimit = Infinity
     }
     if (method === "turn/start") {
       const started = turn({ status: "inProgress", items: [{ id: randomUUID(), type: "userMessage", clientId: state.nullClientId ? null : params.clientUserMessageId, content: params.input }] });
-      state.turns.push(started); state.status = "active";
+      state.turns.push(started); state.listedRunning = 1; state.status = "active";
       if (state.lost) throw Object.assign(new Error("lost receipt"), { uncertain: true });
       return { turn: { id: started.id } };
     }
@@ -87,9 +88,11 @@ export function desktopCloudService(uuid, { environment, receiveLimit = Infinity
     const running = state.turns.at(-1);
     running.status = status; running.items.push(...items); state.status = "idle";
   };
-  const append = (items = [], fields = {}) => { const added = turn({ items, ...fields }); state.turns.push(added); return added; };
-  // Items the running turn produced since it started; the history shows them when it ends.
+  const append = (items = [], fields = {}) => { const added = turn({ items, ...fields }); state.listedRunning = 1; state.turns.push(added); return added; };
+  // Items the running turn produced since it started; the history shows them at
+  // the next `catchUp` or when the turn ends.
   const progress = (...items) => { state.turns.at(-1).items.push(...items); return items; };
+  const catchUp = () => { state.listedRunning = state.turns.at(-1).items.length; };
   const resetServed = () => Object.assign(state.served, { requests: 0, turns: 0, bytes: 0, ids: 0 });
-  return { rpc, state, complete, append, progress, resetServed, openLive };
+  return { rpc, state, complete, append, progress, catchUp, resetServed, openLive };
 }
