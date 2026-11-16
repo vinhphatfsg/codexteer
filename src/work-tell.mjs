@@ -14,6 +14,7 @@ const sha = value => createHash("sha256").update(value).digest("hex");
 const fail = (message, code, details = {}) => Object.assign(new Error(message), { code, ...details });
 const projectKey = projectId => sha(projectId).slice(0, 40);
 const syncTokenPattern = /^[0-9a-f-]{36}$/i;
+const otherAction = { steer: "new-turn", "new-turn": "steer" };
 const turnIdentity = observation => observation?.latest_turn_id ?? observation?.current_turn_id ?? observation?.turn_id ?? observation?.active_turn_id ?? null;
 
 async function policyStatus(threadId, member, storage, readPolicy) {
@@ -83,7 +84,9 @@ export async function tellWork(threadInput, body, options = {}, dependencies = {
   if (typeof read !== "function") throw fail("work tell reader is unavailable.", "WORK_TELL_INVALID");
   return withStoreLock(`work-tell-${sha(member.thread_id).slice(0, 40)}`, async () => {
     const basis = await syncBasis(member.thread_id, member, options.syncToken, storage);
-    if (options.newTurn && !["idle", "terminal"].includes(basis.work.execution)) throw fail("A new turn requires an idle or terminal task and the same unfinished delegation.", "WORK_TELL_NEW_TURN_INVALID");
+    const reviewed = ["idle", "terminal"].includes(basis.work.execution) ? "new-turn" : "steer";
+    if (options.newTurn && reviewed !== "new-turn") throw fail("A new turn requires an idle or terminal task and the same unfinished delegation.", "WORK_TELL_NEW_TURN_INVALID");
+    const choice = options.newTurn ? { action: "new-turn", source: "requested" } : { action: reviewed, source: "auto" };
     const fresh = await freshObservation(member.thread_id, member, basis, read, new Map());
     const policy = await policyStatus(member.thread_id, member, storage, dependencies.readPolicy ?? readRepositoryPolicy);
     const other = await otherWork(member.thread_id, member, basis.head, storage);
@@ -100,20 +103,32 @@ export async function tellWork(threadInput, body, options = {}, dependencies = {
         (id, options) => client ? readOnClient(client, id, options) : Promise.resolve(readSnapshot(thread, options)), new Map()));
       await syncBasis(member.thread_id, member, basis.sync_token, storage);
     };
+    const deliver = action => (dependencies.sendTracked ?? sendWorkTellMessage)(member.thread_id, body, { supervisor: supervisor.session_id, connection: member.connection,
+      basedOn: fresh.cursor, finding: finding.id, source: "codexteer", kind: "review", newTurn: action === "new-turn", guardBeforeSend }, { ...storage, ...(dependencies.send ? { send: dependencies.send } : {}) });
+    let retriedFrom;
+    const delivery = () => ({ delivery_action: choice.action, delivery_action_source: choice.source, ...(retriedFrom ? { retried_from: retriedFrom } : {}) });
     try {
-      const receipt = await (dependencies.sendTracked ?? sendWorkTellMessage)(member.thread_id, body, { supervisor: supervisor.session_id, connection: member.connection,
-        basedOn: fresh.cursor, finding: finding.id, source: "codexteer", kind: "review", newTurn: !!options.newTurn, guardBeforeSend }, { ...storage, ...(dependencies.send ? { send: dependencies.send } : {}) });
+      let receipt;
+      try { receipt = await deliver(choice.action); }
+      catch (error) {
+        // A turn that started or ended between the reviewed sync and the transport's
+        // own read: nothing was dispatched, so the other action goes once through the
+        // same journal, supervisor and guard. An unknown delivery is never re-sent.
+        if (choice.source !== "auto" || error.delivery_status !== "not_sent" || error.observed_action !== otherAction[choice.action]) throw error;
+        retriedFrom = { delivery_action: choice.action, code: error.code, message_id: error.message_id };
+        choice.action = error.observed_action; receipt = await deliver(choice.action);
+      }
       // The gate saw no question or approval, which a running Desktop Cloud turn
       // not read live would not have shown. The receipt says so; whether to send is unchanged.
       const coverage = attentionCoverage(sentOn, member.connection);
-      return { ...receipt, thread_id: member.thread_id, sync_token: basis.sync_token, finding_id: finding.id, source: "codexteer", kind: "review", policy, other_work: other,
+      return { ...delivery(), ...receipt, thread_id: member.thread_id, sync_token: basis.sync_token, finding_id: finding.id, source: "codexteer", kind: "review", policy, other_work: other,
         ...(coverage ? { attention_coverage: coverage } : {}) };
     } catch (error) {
       if (error.delivery_status === "unknown" && error.message_id) {
         try { error.reconciliation = await (dependencies.reconcile ?? ((id) => reconcileMessages(member.thread_id, id, {}, dependencies.connectionDependencies ?? {})))(error.message_id); }
         catch (reconcileError) { error.reconciliation = { status: "unavailable", error_code: reconcileError.code ?? "RECONCILE_FAILED" }; }
       }
-      error.policy = policy; error.sync_token = basis.sync_token; error.finding_id = finding.id; throw error;
+      Object.assign(error, { policy, sync_token: basis.sync_token, finding_id: finding.id, ...delivery() }); throw error;
     }
   }, storage);
 }

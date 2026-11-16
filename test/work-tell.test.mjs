@@ -8,7 +8,7 @@ import { registerManagedThread, getManagedThread } from "../src/project-index.mj
 import { registerSupervisor, controlSupervisor } from "../src/supervision.mjs";
 import { syncProject } from "../src/project-sync.mjs";
 import { tellWork } from "../src/work-tell.mjs";
-import { getMessage } from "../src/journal.mjs";
+import { getMessage, listMessages, sendWorkTellMessage } from "../src/journal.mjs";
 import { getFinding } from "../src/findings.mjs";
 import { readRecord, writeRecord } from "../src/store.mjs";
 
@@ -77,7 +77,6 @@ test("incomplete sync, stale token, and competing bases refuse delivery", async 
   await syncProject("project-tell", {}, { storage: f, read: async () => { throw Object.assign(new Error("rate"), { code: "CLOUD_RATE_LIMITED" }); } });
   await assert.rejects(tellWork(THREAD, "blocked", {}, { storage: f, read: f.read, send: async () => { dispatches++; } }), { code: "WORK_TELL_SYNC_INCOMPLETE" });
   assert.equal(dispatches, 0);
-
   const fresh = await fixture(t), oldToken = "33333333-3333-4333-8333-121212121212";
   await assert.rejects(tellWork(THREAD, "stale token", { syncToken: oldToken }, { storage: fresh, read: fresh.read }), { code: "WORK_TELL_SYNC_CONFLICT" });
   const projectKey = createHash("sha256").update("project-tell").digest("hex").slice(0, 40), head = await readRecord("project-sync-heads", projectKey, fresh);
@@ -212,4 +211,62 @@ test("work tell refuses human attention on any freshness page", async t => {
   await assert.rejects(tellWork(THREAD, "never answer approval", {}, { storage: f, read: async id => ({ thread_id: id,
     cursor: `fresh-${++calls}`, has_more: calls === 1, events: [], attention: calls === 1 ? ["waitingOnApproval"] : [], active_turn_id: "turn-one" }),
     send: async () => assert.fail("dispatch") }), { code: "WORK_TELL_HUMAN_REQUIRED" });
+});
+
+const idleTask = () => { const running = task([{ id: "agent-done", type: "agentMessage", text: "done" }]); return { ...running, status: { type: "idle" }, turns: [{ ...running.turns[0], status: "completed" }] }; };
+const reviewIdle = async f => { f.current = idleTask(); await syncProject("project-tell", {}, { storage: f, read: f.read }); };
+// A transport that refuses its first request as the wrong action, as when the turn
+// started or ended under it, and runs the second through the send's own guard.
+const refusesFirst = (f, calls, observed) => async (_id, _wire, options) => {
+  calls.push(options.newTurn ? "new-turn" : "steer");
+  if (calls.length === 1) throw Object.assign(new Error("state changed"), { code: "TASK_IDLE", observed_action: observed });
+  await options.beforeSend(f.current); return accepted(options);
+};
+const recording = (f, calls) => async (id, wire, options) => { calls.push(options.newTurn ? "new-turn" : "steer"); return accept(f)(id, wire, options); };
+
+test("work tell steers a running task and starts a new turn on an idle one without being told which", async t => {
+  const running = await fixture(t), calls = [];
+  const steered = await tellWork(THREAD, "steer the running turn", {}, { storage: running, read: running.read, send: recording(running, calls) });
+  assert.deepEqual([steered.delivery_action, steered.delivery_action_source, calls], ["steer", "auto", ["steer"]]);
+  const idle = await fixture(t); await reviewIdle(idle);
+  const started = await tellWork(THREAD, "continue the delegation", {}, { storage: idle, read: idle.read, send: recording(idle, calls) });
+  assert.deepEqual([started.delivery_action, started.delivery_action_source, calls], ["new-turn", "auto", ["steer", "new-turn"]]);
+  const explicit = await fixture(t); await reviewIdle(explicit);
+  const requested = await tellWork(THREAD, "explicit", { newTurn: true }, { storage: explicit, read: explicit.read, send: accept(explicit) });
+  assert.deepEqual([requested.delivery_action, requested.delivery_action_source], ["new-turn", "requested"]);
+  await assert.rejects(tellWork(THREAD, "explicit on a running task", { newTurn: true }, { storage: running, read: running.read, send: async () => assert.fail("dispatch") }), { code: "WORK_TELL_NEW_TURN_INVALID" });
+});
+
+test("a turn that ends between the check and the dispatch is delivered once with the other action, through a fresh journal entry", async t => {
+  const f = await fixture(t), calls = [];
+  const receipt = await tellWork(THREAD, "deliver across the race", {}, { storage: f, read: f.read, send: refusesFirst(f, calls, "new-turn") });
+  assert.deepEqual(calls, ["steer", "new-turn"]);
+  assert.deepEqual([receipt.delivery_status, receipt.delivery_action, receipt.delivery_action_source], ["accepted", "new-turn", "auto"]);
+  assert.deepEqual([receipt.retried_from.delivery_action, receipt.retried_from.code], ["steer", "TASK_IDLE"]);
+  const entries = (await listMessages(THREAD, { home: f.home })).filter(entry => entry.metadata?.finding_id === receipt.finding_id);
+  assert.deepEqual(entries.map(entry => [entry.id === receipt.retried_from.message_id, entry.delivery_status]).sort(), [[false, "accepted"], [true, "not_sent"]]);
+});
+
+test("the second attempt keeps every protective refusal: no retry after unknown or an explicit action, none past pause, stop, a question or new input", async t => {
+  const unknown = await fixture(t), unknownCalls = [];
+  await assert.rejects(tellWork(THREAD, "lost", {}, { storage: unknown, read: unknown.read, reconcile: async id => ({ message_id: id, status: "not_observed" }), send: async (_id, _wire, options) => {
+    await options.beforeSend(unknown.current); unknownCalls.push(options.newTurn); throw Object.assign(new Error("lost receipt"), { uncertain: true, observed_action: "new-turn" });
+  } }), error => error.delivery_status === "unknown" && !error.retried_from);
+  assert.equal(unknownCalls.length, 1, "an unknown delivery is never sent again");
+  await reviewIdle(unknown);
+  await assert.rejects(tellWork(THREAD, "lost", {}, { storage: unknown, read: unknown.read, send: async () => assert.fail("dispatch") }), { code: "DUPLICATE_INTERVENTION" }, "the instruction's key does not depend on the action chosen");
+
+  const explicit = await fixture(t), explicitCalls = []; await reviewIdle(explicit);
+  await assert.rejects(tellWork(THREAD, "explicit", { newTurn: true }, { storage: explicit, read: explicit.read, send: refusesFirst(explicit, explicitCalls, "steer") }), error => error.code === "TASK_IDLE" && error.delivery_action_source === "requested");
+  assert.deepEqual(explicitCalls, ["new-turn"]);
+
+  // Pause and stop refuse before the transport is reached again; the checks before dispatch refuse a question or new input.
+  for (const [name, between, code, reached] of [["pause", f => controlSupervisor(THREAD, "pause", f), "SUPERVISOR_PAUSED", 1], ["stop", f => controlSupervisor(THREAD, "stop", f), "SUPERVISOR_STOPPED", 1],
+    ["question", f => { f.current = task([], ["waitingOnUserInput"]); }, "WORK_TELL_HUMAN_REQUIRED", 2],
+    ["new input", f => { f.current = task([{ id: "user-new", type: "userMessage", content: [{ type: "text", text: "someone else" }] }]); }, "STALE_OBSERVATION", 2]]) {
+    const f = await fixture(t), calls = []; let first = true;
+    const sendTracked = async (...args) => { try { return await sendWorkTellMessage(...args); } catch (error) { if (first) { first = false; await between(f); } throw error; } };
+    const error = await tellWork(THREAD, `race then ${name}`, {}, { storage: f, read: f.read, sendTracked, send: refusesFirst(f, calls, "new-turn") }).then(() => assert.fail(name), error => error);
+    assert.deepEqual([error.code, error.delivery_status ?? "not_sent", error.retried_from?.delivery_action, calls.length], [code, "not_sent", "steer", reached], name);
+  }
 });

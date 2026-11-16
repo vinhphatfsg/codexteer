@@ -22,12 +22,17 @@ async function fixture(t, connection = "shared") {
   const raw = { close() {}, async request(method, params, options) {
     calls.push({ method, params });
     if (method === "thread/read") return { thread: { ...structuredClone(thread), id: connection === "desktop-cloud" ? thread.id.slice(8) : thread.id } };
-    if (method === "thread/turns/list") return { data: thread.turns.map(turn => ({ ...structuredClone(turn), itemsView: "full" })), nextCursor: null };
+    if (method === "thread/turns/list") { const turns = thread.turns.map(turn => ({ ...structuredClone(turn), itemsView: "full" })); return { data: params.sortDirection === "desc" ? turns.reverse().slice(0, params.limit) : turns, nextCursor: null }; }
     if (method === "turn/start") {
       assert.equal(options.mutation, true);
       thread.turns.push({ id: "next-turn", status: "inProgress", items: [{ id: "next-input", type: "userMessage", clientId: params.clientUserMessageId, content: params.input }] });
       thread.status = { type: "active", activeFlags: [] };
       return { turn: { id: "next-turn" } };
+    }
+    if (method === "turn/steer") {
+      assert.equal(options.mutation, true); assert.equal(params.expectedTurnId, thread.turns.at(-1).id);
+      thread.turns.at(-1).items.push({ id: `steer-${calls.length}`, type: "userMessage", clientId: params.clientUserMessageId, content: params.input });
+      return { turnId: params.expectedTurnId };
     }
     assert.fail(`Unexpected operation ${method}`);
   } };
@@ -48,8 +53,6 @@ for (const connection of ["shared", "desktop-cloud"]) test(`${connection}: empty
   assert.equal(work.execution, "idle"); assert.equal(work.attention, "review"); assert.equal(work.group, "検収待ち");
   assert.equal(work.reason.review_basis, "idle_after_completed_turn"); assert.equal(work.reason.latest_turn_id, "turn-fixture");
   assert.equal((await syncProject("review", {}, f)).works[0].attention, "review", "review persists on a later empty delta");
-  await assert.rejects(tellWork(f.thread.id, "Address the remaining verification.", {}, f), { code: connection === "shared" ? "TASK_IDLE" : "STALE_OBSERVATION" });
-  assert.equal(f.calls.filter(c => c.method === "turn/start").length, 0);
   const receipt = await tellWork(f.thread.id, "Address the remaining verification.", { newTurn: true }, f);
   assert.equal(receipt.delivery_status, "accepted");
   await assert.rejects(tellWork(f.thread.id, "Do not replay the start.", { newTurn: true }, f), { code: "WORK_TELL_STALE_SYNC" });
@@ -59,6 +62,31 @@ for (const connection of ["shared", "desktop-cloud"]) test(`${connection}: empty
   assert.equal(f.calls.filter(c => c.method === "turn/start").length, 1); assert.ok(f.calls.every(c => c.method !== "thread/start"));
   f.thread.turns.at(-1).status = "completed"; f.thread.status.type = "idle";
   assert.equal((await syncProject("review", {}, f)).works[0].group, "検収待ち");
+});
+
+const mutations = f => f.calls.filter(c => ["turn/start", "turn/steer"].includes(c.method)).map(c => c.method);
+const endTurn = f => { f.thread.turns.at(-1).status = "completed"; f.thread.turns.at(-1).items.push({ id: "next-report", type: "agentMessage", text: "Finished." }); f.thread.status = { type: "idle", activeFlags: [] }; };
+// The transport's own read is the first to see the change.
+const changedBeforeSend = (f, change) => { let pending = true; return { ...f, send: (...args) => { if (pending) { pending = false; change(); } return f.send(...args); } }; };
+
+for (const connection of ["shared", "desktop-cloud"]) test(`${connection}: work tell without --new-turn starts a new turn on a reviewed idle member and steers a running one`, async t => {
+  const f = await fixture(t, connection);
+  assert.equal((await syncProject("review", {}, f)).works[0].execution, "idle");
+  const started = await tellWork(f.thread.id, "Address the remaining verification.", {}, f);
+  assert.deepEqual([started.delivery_status, started.delivery_action, started.delivery_action_source, mutations(f)], ["accepted", "new-turn", "auto", ["turn/start"]]);
+  assert.equal((await syncProject("review", {}, f)).works[0].execution, "active");
+  const steered = await tellWork(f.thread.id, "Also run the linter.", {}, f);
+  assert.deepEqual([steered.delivery_status, steered.delivery_action, steered.delivery_action_source, mutations(f)], ["accepted", "steer", "auto", ["turn/start", "turn/steer"]]);
+});
+
+for (const connection of ["shared", "desktop-cloud"]) test(`${connection}: a turn that ends between the check and the send is retried as a new turn, and the pin on the reviewed turn still refuses it`, async t => {
+  const f = await fixture(t, connection);
+  await syncProject("review", {}, f); await tellWork(f.thread.id, "Start the follow-up.", {}, f);
+  assert.equal((await syncProject("review", {}, f)).works[0].execution, "active");
+  const error = await tellWork(f.thread.id, "Steer the follow-up.", {}, changedBeforeSend(f, () => endTurn(f))).then(() => assert.fail("sent"), error => error);
+  assert.deepEqual([error.retried_from?.delivery_action, error.retried_from?.code, error.delivery_action], ["steer", connection === "shared" ? "TASK_IDLE" : "STALE_OBSERVATION", "new-turn"]);
+  assert.equal(error.delivery_status, "not_sent"); assert.equal(error.code, "STALE_OBSERVATION"); assert.match(error.message, /different turn/); assert.equal(error.observed_action, undefined);
+  assert.deepEqual(mutations(f), ["turn/start"], "neither the steer nor the new turn was dispatched");
 });
 
 test("initial idle, pending start, unknown/missing turn evidence, unknown attention and contradictory running turns are not review", async t => {
