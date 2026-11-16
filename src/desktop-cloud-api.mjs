@@ -5,6 +5,7 @@ import { RpcClient, RpcFailure } from "./rpc.mjs";
 import { VERSION } from "./version.mjs";
 import { codexHome } from "./runtime.mjs";
 import { desktopCloudId, desktopCloudUuid } from "./desktop-cloud-id.mjs";
+import { listRecords } from "./store.mjs";
 const origin = "https://codex-cloud-backend.chatgpt.com", limit = 16 * 1024 * 1024;
 const failure = (message, code = "DESKTOP_CLOUD_PROTOCOL_ERROR") => Object.assign(new Error(message), { code });
 const headers = auth => ({ "ChatGPT-Account-ID": auth.accountId, "X-OpenAI-Product-Sku": "codex" });
@@ -52,16 +53,28 @@ export async function desktopCloudEnvironments(options = {}, { get = desktopClou
   }
   return { environments: [...rows.values()], source: "desktop-cloud-configurations", execution_environment: "cloud", connection_mode: "desktop-cloud" };
 }
-// Whether reads resume a running task to see its turn so far. Off unless the
-// environment turns it on: a replayed approval request and a turn that ends
-// just before the resume have not been observed on the service.
+// Whether reads resume a running task to see its turn so far. On unless the
+// environment turns it off, and only for the turns codexteer started under the
+// auto reviewer (see liveTurn). "on" means the same.
 export const LIVE_TURN_SWITCH = "CODEXTEER_DESKTOP_CLOUD_LIVE_TURN";
-export const liveTurnEnabled = (env = process.env) => env[LIVE_TURN_SWITCH] === "on";
+export const liveTurnEnabled = (env = process.env) => env[LIVE_TURN_SWITCH] !== "off";
 const LIVE_TIMEOUT_MS = 10000, LIVE_DRAIN_MS = 500;
+export const AUTO_REVIEW = "auto_review";
 
-export async function connectDesktopCloud(options = {}, { credentials = cloudCredentials, Socket = WebSocket, env = process.env } = {}) {
+// The turns codexteer started on a task, each with the approvals reviewer the
+// task reported right before the start (null when unknown): the accepted
+// new-turn send receipts. A steer's receipt names a turn someone else may
+// have started, so it does not count.
+export async function startedTurns(threadId, storage = {}) {
+  const id = desktopCloudId(threadId);
+  return new Map((await listRecords("desktop-cloud-sends", storage)).filter(row => row?.thread_id === id && row.delivery_action === "new-turn" && typeof row.turn_id === "string")
+    .map(row => [row.turn_id, typeof row.approvals_reviewer === "string" ? row.approvals_reviewer : null]));
+}
+
+export async function connectDesktopCloud(options = {}, { credentials = cloudCredentials, Socket = WebSocket, env = process.env, home } = {}) {
   const client = await openDesktopCloud(options, { credentials, Socket });
-  return new DesktopCloudClient(client, liveTurnEnabled(env) ? { openLive: () => openDesktopCloud({ timeoutMs: LIVE_TIMEOUT_MS }, { credentials, Socket }) } : {});
+  return new DesktopCloudClient(client, liveTurnEnabled(env) ? { openLive: () => openDesktopCloud({ timeoutMs: LIVE_TIMEOUT_MS }, { credentials, Socket }),
+    turns: threadId => startedTurns(threadId, home ? { home } : {}) } : {});
 }
 
 async function openDesktopCloud(options, { credentials, Socket }) {
@@ -82,6 +95,8 @@ async function openDesktopCloud(options, { credentials, Socket }) {
       socket.once("open", () => finish()); options.signal?.addEventListener("abort", cancel, { once: true }); if (options.signal?.aborted) cancel();
     });
     client = new RpcClient(socket, { timeoutMs, receiveLimitBytes: limit });
+    // A reader held open for the service lets the process end as it would.
+    client.unref = () => socket._socket?.unref?.();
     const cancelInitialization = () => client.abort("Desktop Cloud initialization cancelled.", "CANCELLED");
     options.signal?.addEventListener("abort", cancelInitialization, { once: true });
     if (options.signal?.aborted) cancelInitialization();
@@ -97,34 +112,66 @@ async function openDesktopCloud(options, { credentials, Socket }) {
 }
 // The task as a resuming client sees it, which includes the items of a running
 // turn that the history lists only when the turn ends. A separate connection
-// resumes the task, records the method of every server request it is sent,
-// never answers one, ignores notifications and closes. Returns the thread
-// status, its newest turn and the requests' methods.
+// resumes the task, records every server request it is sent, never answers
+// one and closes. Returns the thread status, its newest turn, the requests'
+// methods and the approvals reviewer the task reported.
+// The service interrupts the turn when a connection closes on a request it
+// has not resolved, so such a connection stays open until the service reports
+// each request resolved. It does not keep the process running: a process that
+// ends first closes it, and the service then interrupts the turn.
 async function resumeView(threadId, { openLive, timeoutMs = LIVE_TIMEOUT_MS, drainMs = LIVE_DRAIN_MS }) {
-  const uuid = desktopCloudUuid(threadId), requests = new Set();
-  let connection, abandoned = false, timer;
+  const uuid = desktopCloudUuid(threadId), requests = new Set(), unresolved = new Set();
+  let connection, abandoned = false, held = false, timer;
   const read = (async () => {
     const opened = await openLive();
     if (abandoned) { opened.close(); throw failure("Live turn read timed out.", "TIMEOUT"); }
     connection = opened;
-    connection.on("serverRequest", message => requests.add(message.method));
+    connection.on("serverRequest", message => { requests.add(message.method); unresolved.add(message.id); });
+    connection.on("notification", message => {
+      if (message.method !== "serverRequest/resolved") return;
+      unresolved.delete(message.params?.requestId);
+      if (held && !unresolved.size) connection.close();
+    });
     const result = await connection.request("thread/resume", { threadId: uuid });
     await delay(drainMs);
     if (result?.thread?.id !== uuid || !Array.isArray(result.thread.turns)) throw failure("Invalid live turn.");
-    return { status: result.thread.status ?? null, turn: result.thread.turns.at(-1) ?? null, requests: [...requests].sort() };
+    return { status: result.thread.status ?? null, turn: result.thread.turns.at(-1) ?? null, requests: [...requests].sort(),
+      reviewer: typeof result.approvalsReviewer === "string" ? result.approvalsReviewer : null };
   })();
   read.catch(() => {});
   try {
     return await Promise.race([read, new Promise((_, reject) => { timer = setTimeout(() => reject(failure("Live turn read timed out.", "TIMEOUT")), timeoutMs); })]);
-  } finally { abandoned = true; clearTimeout(timer); connection?.close(); }
+  } finally {
+    abandoned = true; clearTimeout(timer);
+    if (connection && unresolved.size) { held = true; connection.unref?.(); } else connection?.close();
+  }
+}
+
+// The live view of the running turn `turnId`, or why it is not resumed. Only a
+// turn codexteer started under the auto reviewer is: under it the service sends
+// a resuming reader no request, while a reader that closes on a request it
+// holds interrupts the turn.
+async function liveTurn(threadId, turnId, live) {
+  const started = await (live.turns ?? (async () => new Map()))(threadId);
+  if (!started.has(turnId)) return { fallback: "not_codexteer_turn" };
+  if (started.get(turnId) !== AUTO_REVIEW) return { fallback: "not_auto_review" };
+  return resumeView(threadId, live);
 }
 
 export class DesktopCloudClient {
-  // `live.openLive` opens the connection a live read resumes the task on; a
-  // client without it does not read running turns live.
+  // `live.openLive` opens the connection a live read resumes the task on, and
+  // `live.turns` lists the turns codexteer started on a task with their
+  // reviewers. A client without them does not read running turns live.
   constructor(client, live = {}) {
     this.client = client;
-    if (live.openLive) this.liveTurn = threadId => resumeView(threadId, live);
+    if (live.openLive) this.liveTurn = (threadId, turnId) => liveTurn(threadId, turnId, live);
+  }
+  // The approvals reviewer the task's next turn starts under. Only a resume
+  // reports it, and an idle task has no request for the connection to hold.
+  async approvalsReviewer(threadId) {
+    const uuid = desktopCloudUuid(threadId), result = await this.client.request("thread/resume", { threadId: uuid, excludeTurns: true });
+    if (result?.thread?.id !== uuid) throw failure("Desktop Cloud returned another task.");
+    return typeof result.approvalsReviewer === "string" ? result.approvalsReviewer : null;
   }
   close() { this.client.close(); }
   async history(threadId) {
