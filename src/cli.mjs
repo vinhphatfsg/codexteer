@@ -245,6 +245,7 @@ async function mainOnTarget(argv) {
         if (supervisor) throw Object.assign(new Error("A bound supervisor cannot wait for or guard an entire project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         const project = takeOption(args, "--project", undefined);
         const timeout = action === "wait" ? takeOption(args, "--timeout-ms", undefined) : undefined;
+        const progress = action === "wait" ? takeOption(args, "--progress-ms", undefined) : undefined;
         const status = action === "guard" && takeFlag(args, "--status");
         if (args.length) throw usage(`Unexpected project ${action} arguments.`);
         if (status) {
@@ -253,7 +254,7 @@ async function mainOnTarget(argv) {
           return;
         }
         if (action === "guard") { console.log(JSON.stringify(await guardProject(project))); return; }
-        const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout), connection: givenConnection }, {
+        const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout), ...(progress === undefined ? {} : { progressMs: Number(progress) }), connection: givenConnection }, {
           read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),
         }));
         success("project.wait", data, json); if (!json) console.log(JSON.stringify(data, null, 2));
