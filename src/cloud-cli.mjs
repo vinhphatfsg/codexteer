@@ -7,7 +7,7 @@ import { desktopCloudConnection, desktopCloudEnvironments, liveTurnEnabled } fro
 import { createDesktopCloudTask, listDesktopCloudTasks, desktopCloudReceipt, reconcileDesktopCloudCreation } from "./desktop-cloud.mjs";
 import { desktopCloudModels, readCloudModelDefaults, setCloudModelDefaults, resetCloudModelDefaults, resolveCloudModelSelection, validateCloudModelOptions } from "./desktop-cloud-models.mjs";
 import { pickCloudModel } from "./cloud-model-picker.mjs";
-import { isCloudTask, selectedCloudInvocation } from "./task-id.mjs";
+import { isCloudTask, selectedCloudInvocation, workTellInvocation } from "./task-id.mjs";
 import { cloudTaskId } from "./cloud-id.mjs";
 import { normalizeThreadId } from "./thread-id.mjs";
 import { connectionMismatch } from "./connection-error.mjs";
@@ -58,7 +58,9 @@ export const cloudInvocation = argv => !!selectedCloudInvocation(argv);
 // findings, journaling and saved-agent launch use the same local implementation.
 export async function mainCloud(argv) {
   rejectRepeatedBinding(argv);
-  const args = [...argv], json = flag(args, "--json"), connection = option(args, "--connection", selectedCloudInvocation(argv) || "cloud");
+  const args = [...argv], json = flag(args, "--json"), selected = selectedCloudInvocation(argv) || "cloud", given = option(args, "--connection", selected);
+  // A member's record keeps its own route, so the project's host route reaches a Cloud member.
+  const connection = given === "shared" && workTellInvocation(argv) ? selected : given;
   const desktopCloud = connection === "desktop-cloud";
   const targetId = desktopCloud ? desktopCloudId : value => {
     try { return cloudTaskId(value); }

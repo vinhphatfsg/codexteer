@@ -146,3 +146,16 @@ test("work tell routes a Desktop Cloud target automatically and refuses the obse
   assert.equal(error(["--connection", "desktop", "work", "tell", local, "fixture"]).code, "DESKTOP_READ_ONLY");
   assert.equal(error(["work", "tell", local, "fixture"]).code, "WORK_TELL_UNMANAGED");
 });
+
+test("work tell under the project's shared route reaches a Desktop Cloud member by its record, and a contradicting route still fails", async t => {
+  const { home, run } = await fixture(t);
+  const { registerManagedThread } = await import("../src/project-index.mjs");
+  await registerManagedThread(desktopCloudId(durable), { projectId: "project-mixed", connection: "desktop-cloud", environmentConfigId: "fixture-config", syncCursor: "fixture-cursor" }, { home });
+  const error = args => JSON.parse(run([...args, "--json"]).stdout).error;
+  for (const route of [[], ["--connection", "shared"], ["--connection", "desktop-cloud"]]) {
+    const refused = error([...route, "work", "tell", durable, "fixture"]);
+    assert.equal(refused.code, "WORK_TELL_SYNC_INCOMPLETE", route.join(" ") || "no route"); assert.match(refused.message, /No project sync/);
+  }
+  for (const [selected, code] of [["cloud", "CLOUD_OPTIONS_INVALID"], ["desktop", "CLOUD_TARGET_CONFLICT"]]) assert(hint(error(["--connection", selected, "work", "tell", durable, "fixture"]), "desktop-cloud", selected, code), selected);
+  assert(hint(error(["--connection", "desktop-cloud", "work", "tell", local, "fixture"]), "shared", "desktop-cloud"));
+});
