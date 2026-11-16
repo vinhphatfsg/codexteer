@@ -11,6 +11,7 @@ import { assertReadOptions, digest, fetchThread, mutableStatus, prefixHash, proj
 import { encodeCursor, invalidCursor, parseCursor } from "./cursor.mjs";
 import { hostFields } from "./target.mjs";
 import { turnEvidence } from "./attention-coverage.mjs";
+import { assertNoForeignInput, snapshotDelta } from "./input-origin.mjs";
 
 const FINAL = new Set(["completed", "failed", "interrupted", "cancelled"]), RUNNING = new Set(["inProgress", "in_progress", "running", "pending", "queued"]);
 const PAGES = 1000, BYTES = 32 * 1024 * 1024;
@@ -219,13 +220,13 @@ async function withLiveTurn(client, threadId, turns, s, old, result, { liveTurn:
       changed: !old || events.length > 0 || old.state !== result.cursor.state || JSON.stringify(before) !== JSON.stringify(attention) } };
 }
 
-// The --based-on check for a v3 cursor: no new user input and the same latest
-// and active turn, over the window the cursor names.
-export async function verifyCloudFreshness(client, threadId, claim) {
+// The --based-on check for a v3 cursor, over the window the cursor names: no
+// input codexteer did not send. A turn the history lists after the cursor was
+// opened by input, which a running turn does not list yet, so it is codexteer's
+// only when codexteer's own new turn started it.
+export async function verifyCloudFreshness(client, threadId, claim, own) {
   const { thread } = await client.request("thread/read", { threadId, includeTurns: false });
   if (thread?.id !== threadId) throw invalidCursor();
-  const turns = await windowTurns(client, threadId, claim), s = threadSnapshot({ ...thread, turns });
-  if (turns.at(-1)?.id !== claim.latest_turn_id || s.state.active_turn_id !== claim.active_turn_id || s.user_revision !== claim.user_revision) {
-    throw Object.assign(new Error("New user input or a different turn was observed. Read the task again before sending."), { code: "STALE_OBSERVATION" });
-  }
+  const turns = await windowTurns(client, threadId, claim);
+  assertNoForeignInput(snapshotDelta(threadSnapshot({ ...thread, turns }), claim, claim.live?.items.map(item => item.id)), own);
 }

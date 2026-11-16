@@ -424,25 +424,41 @@ test("work tell reads the running turn live at its first read and again right be
   await f.sync();
   f.progress(agent("Still going."));
   resumes = f.resumes();
-  await assert.rejects(f.tell(ID, "Also run the linter."), { code: "WORK_TELL_STALE_SYNC" }, "new progress after the sync makes it stale, as on local threads");
-  assert.equal(f.resumes() - resumes, 1, "a tell refused at its first read does not reach the second");
+  const linted = await f.tell(ID, "Also run the linter.");
+  assert.equal(linted.delivery_status, "accepted", "progress after the sync is sent over, as on local threads");
+  assert.deepEqual([linted.unseen_since_basis.events, linted.unseen_since_basis.latest_agent_message.text], [1, "Still going."], "and returned as not yet reviewed");
+  assert.equal(f.resumes() - resumes, 2);
 
   await f.sync();
   f.progress(question("Should the linter be strict?"));
   resumes = f.resumes();
-  await assert.rejects(f.tell(ID, "Also run the linter."), { code: "WORK_TELL_HUMAN_REQUIRED" });
+  await assert.rejects(f.tell(ID, "Also run the formatter."), { code: "WORK_TELL_HUMAN_REQUIRED" });
   assert.equal(f.resumes() - resumes, 1);
   await f.sync();
   resumes = f.resumes();
-  await assert.rejects(f.tell(ID, "Also run the linter."), { code: "WORK_TELL_HUMAN_REQUIRED" }, "a question in the reviewed sync");
+  await assert.rejects(f.tell(ID, "Also run the formatter."), { code: "WORK_TELL_HUMAN_REQUIRED" }, "a question in the reviewed sync");
   assert.equal(f.resumes(), resumes, "a tell refused by its sync basis reads nothing");
-  assert.equal(steers(f), 1);
+  assert.equal(steers(f), 2);
 });
 
-test("work tell does not steer over a question, a pending request or progress that appears after its first read", async t => {
+test("work tell sends over progress that appears after its first read and returns it as not yet reviewed", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  await f.sync();
+  f.start(); f.progress(agent("Working."));
+  const rows = [await f.row()], resumes = f.resumes();
+  let late;
+  const receipt = await lateTell(f, () => { late ??= f.progress(agent("Still going."))[0]; });
+  assert.deepEqual([receipt.delivery_status, receipt.delivery_action, steers(f)], ["accepted", "steer", 1]);
+  assert.equal(f.resumes() - resumes, 2, "the check before sending resumed the task itself");
+  assert.equal(receipt.unseen_since_basis.latest_agent_message.text, "Still going.");
+  rows.push(await f.row());
+  assert.equal(eventIds(rows[1]).filter(id => id === late.id).length, 1, "the late progress reaches the next sync once");
+});
+
+test("work tell does not steer over a question or a pending request that appears after its first read", async t => {
   const late = { question: [f => f.progress(question("Should the linter be strict?")), "WORK_TELL_HUMAN_REQUIRED"],
-    request: [f => { f.state.live.requests = [APPROVAL]; }, "WORK_TELL_HUMAN_REQUIRED"],
-    progress: [f => f.progress(agent("Still going.")), "WORK_TELL_STALE_SYNC"] };
+    request: [f => { f.state.live.requests = [APPROVAL]; }, "WORK_TELL_HUMAN_REQUIRED"] };
   for (const [name, [change, code]] of Object.entries(late)) {
     const f = await member(t);
     f.append([user("first order"), agent("first report")]);
@@ -458,28 +474,32 @@ test("work tell does not steer over a question, a pending request or progress th
     assert.deepEqual(await basis(f), reviewed, `${name}: the refused tell leaves the member's cursor as the sync saved it`);
 
     rows.push(await f.row());
-    assert.equal(rows[1].attention, name === "progress" ? "none" : "human", name);
+    assert.equal(rows[1].attention, "human", name);
     f.state.live.requests = [];
     f.complete([agent("Done.")]);
     rows.push(await f.row());
     const ids = itemIds(rows, [turn]), count = id => ids.filter(other => other === id).length;
     // An unanswered question stays on the member's later rows, so it is counted on the row that first shows it.
     assert.equal(eventIds(rows[1]).filter(id => id === changed[0]?.id).length, name === "request" ? 0 : 1, `${name}: what appeared late reaches the next sync once`);
-    assert.deepEqual([opening.id, note.id, ...(name === "progress" ? [changed[0].id] : [])].map(count).filter(n => n !== 1), [], `${name}: nothing is delivered twice or skipped`);
+    assert.deepEqual([opening.id, note.id].map(count).filter(n => n !== 1), [], `${name}: nothing is delivered twice or skipped`);
     const before = f.resumes(), next = await f.tell(ID, "Continue the same delegation.", { newTurn: true }).catch(error => error);
     assert.equal(f.resumes(), before, `${name}: a tell to a task with no running turn resumes nothing`);
     assert.equal(name === "question" ? next.code : next.delivery_status, name === "question" ? "WORK_TELL_HUMAN_REQUIRED" : "accepted", `${name}: the next sync is a usable basis`);
   }
 });
 
-test("work tell does not steer a turn that ends after its first read", async t => {
+test("work tell does not steer a turn that ends after its first read: it starts a new turn instead", async t => {
   const f = await member(t);
   f.append([user("first order"), agent("first report")]);
   f.start(); f.progress(agent("Working."));
   await f.sync();
   const reviewed = await basis(f), resumes = f.resumes();
-  await assert.rejects(lateTell(f, () => f.complete([agent("Finished.")])), { code: "STALE_OBSERVATION", delivery_status: "not_sent" }, "the send's own check of its basis sees the turn end");
-  assert.equal(steers(f), 0); assert.equal(f.resumes() - resumes, 1, "an ended turn is not resumed");
+  let ended = false;
+  const receipt = await lateTell(f, () => { if (!ended) { ended = true; f.complete([agent("Finished.")]); } });
+  assert.deepEqual([receipt.delivery_status, receipt.delivery_action, receipt.retried_from?.delivery_action, receipt.retried_from?.code], ["accepted", "new-turn", "steer", "STALE_OBSERVATION"]);
+  assert.equal(steers(f), 0, "the ended turn is not steered"); assert.equal(f.state.turns.at(-1).status, "inProgress");
+  assert.equal(f.resumes() - resumes, 1, "an ended turn is not resumed");
+  assert.equal(receipt.unseen_since_basis.latest_agent_message.text, "Finished.");
   assert.deepEqual(await basis(f), reviewed);
 });
 

@@ -224,19 +224,36 @@ test("a wait baseline saved by an earlier version returns the change since it on
   assert.ok(f.state.served.turns <= 2 * f.state.calls.filter(call => call.method === "thread/read").length, "the published baseline is read from its newest turn");
 });
 
-test("a --based-on check from a tail cursor refuses new user input in the running turn or a new turn", async () => {
+test("a --based-on check from a tail cursor refuses new user input in the running turn or a new turn", async t => {
+  const journal = { home: await mkdtemp(tempPrefix("ct-cloud-journal-")) }; t.after(() => rm(journal.home, { recursive: true, force: true }));
   const { prepareDirective } = await import("../src/directive.mjs");
   for (const change of ["steer", "turn"]) {
     const f = cloud();
     for (let n = 0; n < 3; n++) f.append(work(n));
     f.append([user("order")], { status: "inProgress" }); f.state.status = "active";
     const { cursor } = await f.read(ID, { limit: 1000 }), client = await f.connect();
-    const directive = await prepareDirective(ID, "Continue.", { basedOn: cursor, source: "test" }, "fixture-message");
+    const directive = await prepareDirective(ID, "Continue.", { basedOn: cursor, source: "test" }, "fixture-message", journal);
     await directive.beforeSend({}, client);
     if (change === "steer") f.state.turns.at(-1).items.push(user("steer"));
     else { f.complete(); f.append([user("next")], { status: "inProgress" }); }
     await assert.rejects(directive.beforeSend({}, client), { code: "STALE_OBSERVATION" }, change);
   }
+});
+
+test("a --based-on check lets the end of the worker's turn and codexteer's own input through, matched by text, and refuses anyone else's", async t => {
+  const { sendTrackedMessage } = await import("../src/journal.mjs");
+  const home = await mkdtemp(tempPrefix("ct-cloud-own-")); t.after(() => rm(home, { recursive: true, force: true }));
+  const f = cloud(), send = (id, text, options) => sendDesktopCloudInput(id, text, options, { home, connect: f.connect });
+  f.state.nullClientId = true;
+  f.append(work(0)); f.append([user("order")], { status: "inProgress" }); f.state.status = "active";
+  const { cursor } = await f.read(ID, { limit: 1000 });
+  f.progress(agent("Working.")); f.complete([agent("Finished.")]);
+  assert.equal((await sendTrackedMessage(ID, "Continue with the tests.", { basedOn: cursor, source: "test", newTurn: true }, { home, send })).delivery_status, "accepted", "the worker ended its own turn");
+  assert.equal(f.state.turns.at(-1).items[0].clientId, null, "the service kept no client id on codexteer's message");
+  assert.equal((await sendTrackedMessage(ID, "Also run the linter.", { basedOn: cursor, source: "test" }, { home, send })).delivery_status, "accepted", "the new turn codexteer opened is its own");
+  f.progress(user("Stop and do something else."));
+  const refused = await sendTrackedMessage(ID, "One more thing.", { basedOn: cursor, source: "test" }, { home, send }).catch(error => error);
+  assert.deepEqual([refused.code, refused.delivery_status, refused.events?.map(event => event.text)], ["STALE_OBSERVATION", "not_sent", ["Stop and do something else."]]);
 });
 
 test("work tell to a long-history member reads its newest turn, not its history", async t => {
@@ -254,7 +271,7 @@ test("a v1 --based-on check still reads the full history before a send", async t
   for (const change of [false, true]) {
     const f = await member(t, 5), v1 = (await f.fullRead(ID, { limit: 1000 })).cursor;
     if (change) f.append(work(5));
-    const directive = await prepareDirective(ID, "Continue.", { basedOn: v1, source: "test" }, "fixture-message");
+    const directive = await prepareDirective(ID, "Continue.", { basedOn: v1, source: "test" }, "fixture-message", f.storage);
     const send = sendDesktopCloudInput(ID, directive.wireText, { newTurn: true, beforeSend: directive.beforeSend }, { ...f.storage, connect: f.connect });
     if (change) await assert.rejects(send, { code: "STALE_OBSERVATION" });
     else assert.equal((await send).delivery_status, "accepted");

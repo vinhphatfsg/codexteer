@@ -5,6 +5,7 @@ import { getCheckpoint, verifyCheckpoint } from "./checkpoint.mjs";
 import { verifyPagedFreshness } from "./paged-read.mjs";
 import { verifyCloudFreshness } from "./desktop-cloud-read.mjs";
 import { assertFindingSend, getFinding } from "./findings.mjs";
+import { ownInputs, assertNoForeignInput, snapshotDelta } from "./input-origin.mjs";
 
 export const kindLabels = { decision: "ユーザー決定の伝達", review: "レビュー", hypothesis: "仮説（未確定）", suggestion: "任意提案" };
 
@@ -32,15 +33,14 @@ export async function prepareDirective(threadId, body, options, id, storage = {}
   return { metadata, wireText: lines.join("\n") + "\n\n" + body, async beforeSend(thread, client) {
     if (expiresAt && Date.parse(expiresAt) <= Date.now()) throw Object.assign(new Error("Directive expired before sending."), { code: "EXPIRED_DIRECTIVE" });
     if (observed) {
-      if (observed.v === 2) await verifyPagedFreshness(client, threadId, basedOn);
-      else if (observed.v === 3) await verifyCloudFreshness(client, threadId, observed);
+      // The worker's progress and the end of its turn do not make the observation stale: the transport refuses an action
+      // that no longer fits, and what the worker did is reported by the next read.
+      const own = await ownInputs(threadId, storage);
+      if (observed.v === 2) await verifyPagedFreshness(client, threadId, basedOn, own);
+      else if (observed.v === 3) await verifyCloudFreshness(client, threadId, observed, own);
       else {
         if (thread.turns?.some(t => t.itemsView && t.itemsView !== "full") || !thread.turns?.length) thread = await fetchThread(client, threadId);
-        const current = threadSnapshot(thread);
-        const latestChanged = observed.latest_turn_id !== undefined && observed.latest_turn_id !== (thread.turns?.at(-1)?.id ?? null);
-        // Older v1 cursors cannot distinguish two ambiguous active snapshots.
-        const unpinned = observed.latest_turn_id === undefined && thread.historyMode === "paginated" && thread.turns.filter(t => t.status === "inProgress").length > 1;
-        if (latestChanged || unpinned || current.user_revision !== observed.user_revision || current.state.active_turn_id !== observed.active_turn_id) throw Object.assign(new Error("New user input or a different turn was observed, or the old cursor cannot identify the latest turn. Read the task again before sending."), { code: "STALE_OBSERVATION" });
+        assertNoForeignInput(snapshotDelta(threadSnapshot(thread), observed), own);
       }
     }
     await verifyEvidence(refs);
