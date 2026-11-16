@@ -15,9 +15,8 @@ import { AUTO_REVIEW } from "./desktop-cloud-api.mjs";
 
 const FINAL = new Set(["completed", "failed", "interrupted", "cancelled"]), RUNNING = new Set(["inProgress", "in_progress", "running", "pending", "queued"]);
 const PAGES = 1000, BYTES = 32 * 1024 * 1024;
-// The live ledger lives in the cursor, so its size bounds the cursor's.
-// 512 holds the events a turn of about six hours projects at the rate observed
-// on long turns; a full ledger is a cursor of about 40 KB.
+// The live ledger lives in the cursor, so its size bounds the cursor's: a full
+// ledger is a cursor of about 40 KB.
 const LIVE_ITEMS = 512, REQUEST = "pendingRequest:";
 const failure = message => Object.assign(new Error(message), { code: "DESKTOP_CLOUD_PROTOCOL_ERROR" });
 const startedAt = turn => Number.isSafeInteger(turn?.startedAt) && turn.startedAt >= 0 ? turn.startedAt : null;

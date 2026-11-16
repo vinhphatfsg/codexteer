@@ -2,6 +2,22 @@
 
 公開日は日本時間です。
 
+## 0.26.0 — 未公開
+
+### 実行中のDesktop Cloudターンを読む（既定で有効、codexteerが開始したターンだけ）
+
+0.25.0の実行中ターンの読み取りは、既定で無効でした。承認をユーザーが行うタスクでは、resumeした接続にも承認要求が届き、その要求を持ったまま接続を閉じるとサービスがターンを中断します。自動レビューのタスクでは、承認は自動レビューが行い、resumeした接続に要求は届きません。
+
+- 既定で有効にし、読むターンを、codexteerが開始し、開始の直前にタスクが自動レビュー（`approvalsReviewer:"auto_review"`）を報告したターンに限りました。`work start`の最初のターンと、`work tell --new-turn`・`send --new-turn`のターンです。
+- 新しいターンの送信の受付記録（`desktop-cloud-sends`）が`approvals_reviewer`を持ちます。`work start`はタスク作成の応答から読み、それ以外はターンを始める直前に送信の接続でidleのタスクをresumeして読みます。読めなかったときは`null`で、そのターンは読みません。
+- それ以外の実行中ターンはresumeせず、従来どおり`attention_coverage`の印を付け、理由の`live_fallback`に`not_codexteer_turn`か`not_auto_review`を返します。
+- resumeの結果が自動レビュー以外を示したときは、その読み取りで読めた項目を返し、以後そのタスクはresumeしません。cursorに残り、`live_fallback:"not_auto_review"`を返します。
+- resumeした接続にサーバー要求が届いたときは、サービスがその要求を全て解決済みと通知するまで接続を閉じません。プロセスは延ばさないため、先にコマンドが終わると接続は閉じ、サービスはターンを中断します。
+- 実行中に読める項目を1ターン256から512に増やしました。512を超える項目を見た読み取りは古い順に512個までを返し、以後そのターンが終わるまでresumeしません（`live_fallback:"ledger_full"`）。これまでは、上限を超えた後も照会ごとにresumeしていました。512個のcursorは約40 KBです。
+- `CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=off`で無効にできます。`on`は既定と同じで、どのターンでもresumeする0.25.xの動作はなくなりました。
+- Desktop Cloudの`doctor`の`running_turn_attention`は、有効なら`"codexteer_turns"`、無効なら`"unobserved"`です。
+- `not_auto_review`を持つcursorは0.25.x以前では読めず、`STALE_CURSOR`になります。
+
 ## 0.25.1 — 2026-11-13公開
 
 ローカルの`work start`と standalone `thread create` が、Desktop で権限モードを選んであっても `DESKTOP_PERMISSION_UNVERIFIED` で止まることがありました。
