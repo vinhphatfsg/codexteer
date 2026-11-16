@@ -75,8 +75,14 @@ test("stale events, new user input, and human attention all refuse delivery", as
 test("incomplete sync, stale token, and competing bases refuse delivery", async t => {
   const f = await fixture(t); let dispatches = 0;
   await syncProject("project-tell", {}, { storage: f, read: async () => { throw Object.assign(new Error("rate"), { code: "CLOUD_RATE_LIMITED" }); } });
-  await assert.rejects(tellWork(THREAD, "blocked", {}, { storage: f, read: f.read, send: async () => { dispatches++; } }), { code: "WORK_TELL_SYNC_INCOMPLETE" });
+  await assert.rejects(tellWork(THREAD, "blocked", {}, { storage: f, read: f.read, send: async () => { dispatches++; } }), { code: "WORK_TELL_SYNC_INCOMPLETE", reason: "target_incomplete", target_error: "CLOUD_RATE_LIMITED", message: /error is CLOUD_RATE_LIMITED\. Run codexteer project sync --project project-tell --json/ });
   assert.equal(dispatches, 0);
+  await registerManagedThread(OTHER, { projectId: "project-tell", connection: "shared", syncCursor: readSnapshot({ ...task(), id: OTHER }).cursor }, f);
+  await assert.rejects(tellWork(OTHER, "registered after the sync", {}, { storage: f, read: f.read }), { code: "WORK_TELL_SYNC_INCOMPLETE", reason: "target_absent" });
+  const unsynced = { home: f.home }, LONE = "11111111-1111-4111-8111-565656565656";
+  await registerManagedThread(LONE, { projectId: "project-unsynced", connection: "shared", syncCursor: readSnapshot({ ...task(), id: LONE }).cursor }, unsynced);
+  await assert.rejects(tellWork(LONE, "no sync yet", {}, { storage: unsynced, read: f.read }), { code: "WORK_TELL_SYNC_INCOMPLETE", reason: "no_sync", sync_token: null, message: /project sync --project project-unsynced/ });
+
   const fresh = await fixture(t), oldToken = "33333333-3333-4333-8333-121212121212";
   await assert.rejects(tellWork(THREAD, "stale token", { syncToken: oldToken }, { storage: fresh, read: fresh.read }), { code: "WORK_TELL_SYNC_CONFLICT" });
   const projectKey = createHash("sha256").update("project-tell").digest("hex").slice(0, 40), head = await readRecord("project-sync-heads", projectKey, fresh);
@@ -90,7 +96,7 @@ test("an unreadable member does not block work tell to a completely read member"
   const receipt = await tellWork(THREAD, "continue the healthy work", {}, { storage: f, read: f.readAll, send: accept(f) });
   assert.equal(receipt.sent, true); assert.equal(receipt.sync_token, sync.sync_token);
   assert.deepEqual(receipt.other_work, { incomplete: [OTHER], human_attention: [], membership_changed: false });
-  await assert.rejects(tellWork(OTHER, "unread target", {}, { storage: f, read: f.readAll, send: async () => assert.fail("dispatch") }), { code: "WORK_TELL_SYNC_INCOMPLETE" });
+  await assert.rejects(tellWork(OTHER, "unread target", {}, { storage: f, read: f.readAll, send: async () => assert.fail("dispatch") }), { code: "WORK_TELL_SYNC_INCOMPLETE", reason: "history_gap" });
 });
 
 test("the receipt reports other members that are unread, waiting for a human, or registered after the sync", async t => {

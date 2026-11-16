@@ -25,17 +25,30 @@ async function policyStatus(threadId, member, storage, readPolicy) {
   return { checked: true, changed: policy.sha256 !== member.policy_sha256, expected_sha256: member.policy_sha256, current_sha256: policy.sha256, present: policy.present, source: policy.file };
 }
 
+// One refusal code, kept for callers that match it; the reason says which
+// part of the basis is missing and the message what to run next.
+const basisGaps = {
+  no_sync: "No project sync has been published for this project yet.",
+  basis_missing: "The sync result the basis names is no longer stored.",
+  target_absent: "The target is not in the sync basis; it was registered after that sync.",
+  target_incomplete: "The target's row in the sync basis is incomplete: its read failed or stopped early.",
+  history_gap: "The target's row in the sync basis has a history gap, so the instruction could skip unread work.",
+};
+const incompleteBasis = (reason, member, details) => fail(`${basisGaps[reason]}${details.target_error ? ` The row's error is ${details.target_error}.` : ""} Run codexteer project sync --project ${member.project_id} --json, review the target's row, then run work tell again. Nothing was sent.`,
+  "WORK_TELL_SYNC_INCOMPLETE", { reason, ...details });
+
 // The basis is decided for the target alone: another member that is unread, changed or newly
 // registered must not block an instruction to a member whose own reviewed row is still current.
 async function syncBasis(threadId, member, token, storage) {
   const head = await readRecord("project-sync-heads", projectKey(member.project_id), storage);
-  if (!head) throw fail("A project sync is required before work tell.", "WORK_TELL_SYNC_INCOMPLETE", { sync_token: null });
+  if (!head) throw incompleteBasis("no_sync", member, { sync_token: null });
   if (head.conflict_tokens?.length && !token) throw fail("Concurrent project syncs produced competing bases. Review the latest result and pass its token explicitly.", "WORK_TELL_SYNC_TOKEN_REQUIRED", { sync_tokens: head.conflict_tokens, current_sync_token: head.sync_token });
   const syncToken = token ?? head.sync_token, named = syncToken !== head.sync_token;
   const result = syncTokenPattern.test(syncToken) ? await readHistoryRecord("project-sync-results", syncToken, member.project_id, storage) : null;
   if (named && result?.project_id !== member.project_id) throw fail("The requested sync is not a readable result of this project. Use the current token after reviewing it.", "WORK_TELL_SYNC_CONFLICT", { current_sync_token: head.sync_token });
   const work = result?.works?.find(row => row.thread_id === threadId);
-  if (!work || work.complete !== true || work.history_gap || !work.cursor) throw fail("The target is absent, incomplete, or has a history gap in the sync basis.", "WORK_TELL_SYNC_INCOMPLETE", { sync_token: syncToken });
+  const gap = !result ? "basis_missing" : !work ? "target_absent" : work.history_gap ? "history_gap" : work.complete !== true || !work.cursor ? "target_incomplete" : null;
+  if (gap) throw incompleteBasis(gap, member, { sync_token: syncToken, ...(work?.error ? { target_error: work.error } : {}) });
   // Every complete read of a member bumps its revision, so equality proves the reviewed row is still its latest one.
   const current = await getManagedThread(threadId, storage);
   if (current?.sync_cursor !== work.cursor || (current?.sync_revision ?? 0) !== (work.sync_revision ?? 0)) throw fail("The target was read again after the reviewed basis. Review the latest sync before sending.", "WORK_TELL_SYNC_CONFLICT", { current_sync_token: head.sync_token });

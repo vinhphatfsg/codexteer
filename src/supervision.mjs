@@ -199,7 +199,7 @@ export async function dispatchExternalEffect(threadInput, sessionInput, kind, di
     throw failure("Unknown external-effect kind.", "EXTERNAL_EFFECT_INVALID");
   }
   const threadId = normalizeTaskId(threadInput), managed = await getManagedThread(threadId, storage);
-  if (managed && kind === "desktop-ui") throw failure("Desktop UI delivery has no acceptance receipt and is unavailable for managed tasks.", "MANAGED_UI_UNSUPPORTED");
+  if (managed && kind === "desktop-ui") throw Object.assign(failure(`Desktop UI delivery has no acceptance receipt and is unavailable for managed tasks. Review the latest project sync, then run codexteer work tell ${threadId} <INSTRUCTION>. Nothing was sent.`, "MANAGED_UI_UNSUPPORTED"), { thread_id: threadId, sent: false, delivery_status: "not_sent" });
   if (managed && kind === "paired-command") throw failure("Paired command/exec has no separate acceptance receipt and is unavailable for managed tasks.", "MANAGED_PAIRED_COMMAND_UNSUPPORTED");
   return withSupervisedMutation(threadId, sessionInput, dispatch, { connection, ...storage });
 }

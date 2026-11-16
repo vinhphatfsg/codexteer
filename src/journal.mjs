@@ -73,7 +73,7 @@ export function sendWorkTellMessage(threadInput, body, options, dependencies) {
 
 export async function sendTrackedMessage(threadInput, body, options = {}, { send = sendAppServerMessage, ...storage } = {}) {
   const threadId = normalizeTaskId(threadInput);
-  if (!options[workTellCapability] && await getManagedThread(threadId, storage)) throw Object.assign(new Error("Managed tasks require work tell so freshness and intervention tracking cannot be bypassed."), { code: "MANAGED_INTERVENTION_REQUIRED" });
+  if (!options[workTellCapability] && await getManagedThread(threadId, storage)) throw Object.assign(new Error(`Managed tasks require work tell so freshness and intervention tracking cannot be bypassed. Review the latest project sync, then run codexteer work tell ${threadId} <INSTRUCTION>; it chooses a steer or a new turn itself. Nothing was sent.`), { code: "MANAGED_INTERVENTION_REQUIRED", thread_id: threadId, sent: false, delivery_status: "not_sent" });
   if (options.supervisor && !options.basedOn) throw Object.assign(new Error("Supervised sends require --based-on from a completed read."), { code: "SUPERVISOR_OBSERVATION_REQUIRED" });
   if (options.supervisor && !options.finding && !options.retracts) throw Object.assign(new Error("Supervised sends require --finding so pending interventions can be tracked and deduplicated."), { code: "SUPERVISOR_FINDING_REQUIRED" });
   if (options.dryRun) {
