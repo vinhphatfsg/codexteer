@@ -4,6 +4,29 @@
 
 ## 0.26.0 — 未公開
 
+### work tellが送れる場面を広げる
+
+`work tell`は、担当がsyncの後に少しでも進むと`WORK_TELL_STALE_SYNC`で拒否していました。担当は数分ごとに進むため、オーケストレーターは実行中の担当をほとんどステアリングできませんでした。idleの担当には`--new-turn`が必要で、送信の種類を呼び出し側が当てる必要もありました。
+
+- 担当自身の進捗とターンの終了では止めずに送り、receiptの`unseen_since_basis`（syncの後のイベント数と、担当の最新の発言を2000文字まで）で返します。送った後に確かめてください。
+- codexteerが送っていない入力（ユーザーや別のセッションの発言、codexteerが開いていないturn）がsyncの後にあれば、`WORK_TELL_FOREIGN_INPUT`で送りません。`error.events`にその入力が入ります。`WORK_TELL_STALE_SYNC`は返さなくなりました。codexteerが送った入力かどうかは、本文のsha256を送信記録と照合して決めます。
+- 質問・承認待ち、監督の停止・一時停止、配送が不明な以前の指示、接続の不一致、不完全なsyncでは、従来どおり送りません。
+- `--new-turn`がなければ、送信の種類を担当の状態から選びます。実行中ならsteer、idleか終了済みなら新しいturnです。receiptは`delivery_action`と`delivery_action_source`（`auto`か`requested`）を持ちます。
+- 送信直前の読み取りでターンが終わっていた・始まっていたと分かり、何も送らずに拒否されたときは、もう一方の種類で1回だけ送り直します。送り直しも同じ確認を全て通り、receiptは`retried_from`を持ちます。配送が不明な指示と`--new-turn`の指定は送り直しません。
+- 同じ指示を`--new-turn`の有無を変えて送っても、届くのは1回です。
+- project全体を`--connection shared`で扱っていても、Desktop Cloudの担当へ、その担当の接続で送ります。担当と矛盾する接続は従来どおり拒否します。
+- `WORK_TELL_SYNC_INCOMPLETE`は`reason`（`no_sync`・`basis_missing`・`target_absent`・`target_incomplete`・`history_gap`）と`target_error`を持ち、次に実行する`project sync`を示します。`work tell`の拒否の詳細は、`--json`でもテキストでも表示します。
+- `send --based-on`も同じ規則で確かめます。担当自身のターンの終了では拒否せず、送っていない入力か、入力の書き換え・削除で拒否します。
+
+### project waitが作業の途中で起こす
+
+
+`project wait`は、担当がターンの途中で目的から外れた作業をしていても、そのターンが終わるまで返りませんでした。オーケストレーターは、ずれた作業がターンの終わりまで続いた後にしか気付けませんでした。
+
+- 実行中の担当が新しく発言すると、waitは最後の基準更新から`--progress-ms`（既定10分）経った時点で`reason:work_progress`で返ります。結果の`progress`は、担当ごとの発言数と最新の発言です。間隔はwaitの開始からではなく最後の基準更新から数えるため、timeoutで返るたびにwaitを再開しても延びません。同じ発言で2回は返りません。
+- Desktop Cloudで実行中のターンを読めない担当は、そのターンにつき1回、同じ間隔の後に`reason:work_unobserved`で返ります。これまでは読めないことを`attention_unobserved`で示すだけで、他に返る理由がなければターンが終わるまで返りませんでした。
+- ターン終了・質問・承認待ちなどは、従来どおり間隔を待たずに返ります。
+
 ### 実行中のDesktop Cloudターンを読む（既定で有効、codexteerが開始したターンだけ）
 
 0.25.0の実行中ターンの読み取りは、既定で無効でした。承認をユーザーが行うタスクでは、resumeした接続にも承認要求が届き、その要求を持ったまま接続を閉じるとサービスがターンを中断します。自動レビューのタスクでは、承認は自動レビューが行い、resumeした接続に要求は届きません。
@@ -21,11 +44,15 @@
 - Desktop Cloudの`doctor`の`running_turn_attention`は、有効なら`"codexteer_turns"`、無効なら`"unobserved"`です。
 - `not_auto_review`を持つcursorは0.25.x以前では読めず、`STALE_CURSOR`になります。
 
-`project wait`は、担当がターンの途中で目的から外れた作業をしていても、そのターンが終わるまで返りませんでした。オーケストレーターは、ずれた作業がターンの終わりまで続いた後にしか気付けませんでした。
+### 長いDesktop Cloudターンを読む
 
-- 実行中の担当が新しく発言すると、waitは最後の基準更新から`--progress-ms`（既定10分）経った時点で`reason:work_progress`で返ります。結果の`progress`は、担当ごとの発言数と最新の発言です。間隔はwaitの開始からではなく最後の基準更新から数えるため、timeoutで返るたびにwaitを再開しても延びません。同じ発言で2回は返りません。
-- Desktop Cloudで実行中のターンを読めない担当は、そのターンにつき1回、同じ間隔の後に`reason:work_unobserved`で返ります。これまでは読めないことを`attention_unobserved`で示すだけで、他に返る理由がなければターンが終わるまで返りませんでした。
-- ターン終了・質問・承認待ちなどは、従来どおり間隔を待たずに返ります。
+1ターンの項目が多いDesktop Cloudの担当は、ターンを1回の応答で受け取るため、受信の上限（16 MiB）か30秒の待ち時間を超えて読めませんでした。`status`・`read`・`project sync`の行・`project wait`・`work tell`のどれも失敗していました。
+
+- ターンは項目なしで一覧し、項目は`thread/items/list`で100件ずつ読みます。cursorは変わりません。
+- 1回の`project sync`・`project wait`の照会・`work tell`の確認の中では、読み込んだ終了済みのターンの項目を32 MiBまで使い回します。
+- 1件の項目だけで受信の上限を超えるときは、従来どおり`PAYLOAD_TOO_LARGE`です。
+
+### project syncの読み残しと競合
 
 新しい履歴が16 MiBを超えた担当を、`project sync`がいつまでも完全に読めず、`work tell`がその担当へ指示できませんでした。
 
@@ -40,6 +67,18 @@
 - 公開の途中で終了したsyncがcursorだけを進めていた場合も同じです。次のsyncは進んだcursorから読み、headは終了したsyncが読んだ分まで反映した状態から続きます。
 - 間に公開したsyncが新しいイベントを読まずcursorを変えなかった場合は、競合にも`SYNC_CURSOR_CONFLICT`の行にもなりません。これまでは、waitが基準から読み直した回答済みの質問をその行が未解決に戻し、次のwaitが同じ変化をもう一度返していました。
 - waitが基準から読み直した担当を最後まで読めなかったとき（`PROJECT_WAIT_ATTENTION_UNKNOWN`など）は、その読み取りの質問をheadに加えず、前のsyncが反映した状態のままにします。続きは次のsyncが読みます。これまでは、回答済みの質問を未解決に戻すことがありました。
+
+### アップグレード時の注意
+
+- `WORK_TELL_STALE_SYNC`を見て処理していた呼び出し側は、`WORK_TELL_FOREIGN_INPUT`を見るようにしてください。担当自身の進捗では拒否されなくなったので、送った後に`unseen_since_basis`を確かめてください。
+- `--new-turn`なしの`work tell`は、idleの担当に新しいturnを始めます。同じ委任の未完了作業がある場合だけ送ってください。
+- `project wait`は`reason:work_progress`と`reason:work_unobserved`でも返ります。どちらも、結果を確かめてからwaitを再開してください。
+- Desktop Cloudの実行中ターンの読み取りは既定で有効です。`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=off`で止められます。
+
+### 0.25.x以前へ戻すときの注意
+
+- `not_auto_review`を持つcursorは、0.25.x以前では`STALE_CURSOR`になります。
+- `project wait --progress-ms`は0.25.x以前にはありません。
 
 ## 0.25.1 — 2026-11-13公開
 
