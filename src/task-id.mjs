@@ -23,19 +23,25 @@ export function taskConnection(value, selected = "shared") {
   return cloud ? "cloud" : selected;
 }
 
-const values = new Set("--environment --connection --supervisor --require-node-version --host --remote-transport --context-thread --thread --backend --source --kind --evidence --based-on --finding --expires-at --supersedes --checkpoint --limit --max-chars --since --poll-ms --timeout-ms --until --notify --settle-ms --max-hold-ms --owner --key --condition --note --rating --reason --root --path --exclude --command --cwd --artifact --status --by --token --ttl-ms --agent --project --env --branch --title --byte-budget --continue --offset --sync-token --model --thinking --cursor --attempt --event-offset --work --wait-ms --search --exclude-unreadable".split(" "));
+const values = new Set("--environment --connection --supervisor --require-node-version --host --remote-transport --context-thread --thread --backend --source --kind --evidence --based-on --finding --expires-at --supersedes --checkpoint --limit --max-chars --since --poll-ms --timeout-ms --progress-ms --until --notify --settle-ms --max-hold-ms --owner --key --condition --note --rating --reason --root --path --exclude --command --cwd --artifact --status --by --token --ttl-ms --agent --project --env --branch --title --byte-budget --continue --offset --sync-token --model --thinking --cursor --attempt --event-offset --work --wait-ms --search --exclude-unreadable".split(" "));
 
-// "cloud", "desktop-cloud", or false for local. The router and error-usage selection
-// both read this one rule.
-export function selectedCloudInvocation(argv) {
-  const end = argv.indexOf("--"), own = end < 0 ? argv : argv.slice(0, end);
-  const connection = own.indexOf("--connection");
+const ownArguments = argv => { const end = argv.indexOf("--"); return end < 0 ? argv : argv.slice(0, end); };
+function positionals(own) {
   const positional = [];
   for (let i = 0; i < own.length; i++) {
     if (values.has(own[i])) { i++; continue; }
     if (!own[i].startsWith("--")) positional.push(own[i]);
   }
-  const [command, action] = positional;
+  return positional;
+}
+
+export const workTellInvocation = argv => { const [command, action] = positionals(ownArguments(argv)); return command === "work" && action === "tell"; };
+
+// "cloud", "desktop-cloud", or false for local. The router and error-usage selection
+// both read this one rule.
+export function selectedCloudInvocation(argv) {
+  const own = ownArguments(argv), connection = own.indexOf("--connection");
+  const positional = positionals(own), [command, action] = positional;
   if (["help", "--help", "--version"].includes(command) || own.includes("--help") || own.includes("--version")) return false;
   if (connection >= 0 && ["cloud", "desktop-cloud"].includes(own[connection + 1])) return own[connection + 1];
   const thread = own.indexOf("--thread");

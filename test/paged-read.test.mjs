@@ -1,6 +1,8 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { readOnClient, readSnapshot, observeThread } from "../src/observe.mjs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tempPrefix } from "../test-support/temp.mjs";
+import { readOnClient, readSnapshot, observeThread, digest } from "../src/observe.mjs";
 import { parseCursor } from "../src/cursor.mjs";
 import { verifyPagedFreshness } from "../src/paged-read.mjs";
 import { streamThread } from "../src/monitor.mjs";
@@ -8,6 +10,8 @@ import { sendOnClient } from "../src/app-server.mjs";
 import { prepareDirective } from "../src/directive.mjs";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-000000000001";
+const journal = { home: await mkdtemp(tempPrefix("ct-paged-journal-")) };
+after(() => rm(journal.home, { recursive: true, force: true }));
 const msg = (id, text = id) => ({ id, type: "agentMessage", text });
 const user = (id, text = id) => ({ id, type: "userMessage", content: [{ type: "text", text }] });
 const cmd = (id, status = "inProgress", output = "") => ({ id, type: "commandExecution", command: "test", status, aggregatedOutput: output });
@@ -73,7 +77,7 @@ test("paged send preserves v2 freshness checks without fetching full history", a
   for (const stale of [false, true]) {
     const t = task([user("u"), msg("reply")]), s = server(t);
     const observed = await s.read();
-    const directive = await prepareDirective(ID, "check", { basedOn: observed.cursor }, "id");
+    const directive = await prepareDirective(ID, "check", { basedOn: observed.cursor }, "id", journal);
     t.turns[0].items.push(stale ? user("new-user") : msg("progress"));
     let writes = 0;
     const client = { async request(method, params) {
@@ -91,7 +95,7 @@ test("paged send preserves v2 freshness checks without fetching full history", a
 test("v1 freshness checks never treat paged send summaries as full item history", async () => {
   for (const stale of [false, true]) {
     const t = task([user("u")]), observed = readSnapshot(t), s = server(t);
-    const directive = await prepareDirective(ID, "check", { basedOn: observed.cursor }, "id");
+    const directive = await prepareDirective(ID, "check", { basedOn: observed.cursor }, "id", journal);
     if (stale) t.turns[0].items.push(user("new-user"));
     let writes = 0;
     const client = { async request(method, params) {
@@ -106,22 +110,22 @@ test("v1 freshness checks never treat paged send summaries as full item history"
   }
 });
 
-test("orphan steering preserves observations and pins the latest turn for both cursor formats", async () => {
+test("orphan steering preserves observations and refuses a turn or input codexteer did not start, for both cursor formats", async () => {
   for (const version of [1, 2]) {
-    for (const change of ["progress", "new-empty-turn", "new-user", ...(version === 1 ? ["legacy-cursor"] : [])]) {
+    for (const change of ["progress", "new-empty-turn", "new-user", ...(version === 1 ? ["legacy-progress", "legacy-new-empty-turn"] : [])]) {
       const t = task([user("old-input"), msg("old-output")]);
       t.turns.push({ id: "current", status: "inProgress", items: [msg("current-output")] });
       const s = server(t), observed = version === 1 ? readSnapshot(t) : await s.read();
       assert.equal(observed.active_turn_id, null, "observation must not claim a verified runtime ID");
       assert.deepEqual(observed.events.filter(e => e.type === "turn").map(e => [e.id, e.status]), [["t0", "inProgress"], ["current", "inProgress"]]);
       let cursor = observed.cursor;
-      if (change === "legacy-cursor") {
+      if (change.startsWith("legacy-")) {
         // Cursors from before latest_turn_id existed are base64url JSON without it.
         const { latest_turn_id, ...value } = parseCursor(cursor, ID);
         cursor = Buffer.from(JSON.stringify({ ...value, thread_id: ID })).toString("base64url");
       }
-      const directive = await prepareDirective(ID, "check", { basedOn: cursor }, "id");
-      if (change === "new-empty-turn") {
+      const directive = await prepareDirective(ID, "check", { basedOn: cursor }, "id", journal);
+      if (change.endsWith("new-empty-turn")) {
         t.turns.at(-1).status = "completed";
         t.turns.push({ id: "next", status: "inProgress", items: [] });
         assert.equal(readSnapshot(t).active_turn_id, null, "null alone would miss this turn change");
@@ -132,9 +136,10 @@ test("orphan steering preserves observations and pins the latest turn for both c
         writes++; assert.equal(params.expectedTurnId, "current"); return { turnId: "current" };
       } };
       const send = sendOnClient(client, ID, directive.wireText, { beforeSend: directive.beforeSend });
-      if (change === "progress") assert.equal((await send).turn_id, "current");
-      else await assert.rejects(send, { code: "STALE_OBSERVATION" });
-      assert.equal(writes, change === "progress" ? 1 : 0);
+      const delivered = change.endsWith("progress");
+      if (delivered) assert.equal((await send).turn_id, "current");
+      else await assert.rejects(send, { code: "STALE_OBSERVATION" }, change);
+      assert.equal(writes, delivered ? 1 : 0);
     }
   }
 });
@@ -293,15 +298,21 @@ test("the cursor keeps its size as the task grows from 10 to 200 turns", async (
   for (const phase of [0, 1]) assert.ok(Math.abs(lengths[200][phase] - lengths[10][phase]) <= 8, JSON.stringify(lengths));
 });
 
-test("v2 freshness permits progress and detects new user input, turn changes and unread pages", async () => {
-  const t = task([user("u"), msg("a")]), s = server(t), a = await s.read();
-  t.turns[0].items.push(msg("progress")); await verifyPagedFreshness(s.client, ID, a.cursor);
+test("v2 freshness permits progress, the end of the turn and codexteer's own input, and detects other input, unexplained turns and unread pages", async () => {
+  const t = task([user("u"), msg("a")]), s = server(t), a = await s.read(), own = { texts: new Set([digest("codexteer follow-up")]), turns: new Set(["started-by-codexteer"]) };
+  t.turns[0].items.push(msg("progress")); await verifyPagedFreshness(s.client, ID, a.cursor, own);
   t.turns[0].items.push(user("u2"));
-  await assert.rejects(verifyPagedFreshness(s.client, ID, a.cursor), { code: "STALE_OBSERVATION" });
+  await assert.rejects(verifyPagedFreshness(s.client, ID, a.cursor, own), { code: "STALE_OBSERVATION", events: [{ id: "u2", turn_id: "t0", type: "userMessage", client_message_id: null, text: "u2", attachments: [] }] });
   const partial = await s.read({ since: a.cursor, limit: 1 }); assert.equal(partial.has_more, true);
-  await assert.rejects(verifyPagedFreshness(s.client, ID, partial.cursor), { code: "STALE_OBSERVATION" });
+  await assert.rejects(verifyPagedFreshness(s.client, ID, partial.cursor, own), { code: "STALE_OBSERVATION" });
   const fresh = await s.read(); t.turns[0].status = "completed"; t.status.type = "idle";
-  await assert.rejects(verifyPagedFreshness(s.client, ID, fresh.cursor), { code: "STALE_OBSERVATION" });
+  await verifyPagedFreshness(s.client, ID, fresh.cursor, own);
+  t.turns.push({ id: "t1", status: "inProgress", items: [user("mine", "codexteer follow-up")] }); t.status.type = "active";
+  await verifyPagedFreshness(s.client, ID, fresh.cursor, own);
+  t.turns.push({ id: "started-by-codexteer", status: "inProgress", items: [] });
+  await verifyPagedFreshness(s.client, ID, fresh.cursor, own);
+  t.turns.push({ id: "t3", status: "inProgress", items: [] });
+  await assert.rejects(verifyPagedFreshness(s.client, ID, fresh.cursor, own), { code: "STALE_OBSERVATION" }, "a turn nobody can say codexteer opened");
 });
 
 test("v2 freshness rejects an edited user message at the observed head", async () => {

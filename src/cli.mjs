@@ -11,7 +11,7 @@ import { launchDesktopUpdate, desktopUpdateStatus } from "./update.mjs";
 import { appServerDoctor, startDesktop } from "./launcher.mjs";
 import { publicRpcDetail } from "./rpc-error.mjs";
 import { VERSION, helpData, renderHelp, renderErrors, errorRemedy, topicFor } from "./help.mjs";
-import { observeThread, printObservation } from "./observe.mjs";
+import { observeThread, printObservation, trimEvent } from "./observe.mjs";
 import { monitorCommand } from "./monitor.mjs";
 import { notificationOptions } from "./notify.mjs";
 import { createCheckpoint, listCheckpoints, getCheckpoint, checkpointSummary, verifyCheckpoint, runCheckpoint, attachArtifacts } from "./checkpoint.mjs";
@@ -45,9 +45,24 @@ function success(command, data, json) {
   return data;
 }
 
+// What a refused work tell was checked against: the delta, the basis and the
+// chosen action. At most the newest 20 events, every string in them clipped.
+const REFUSAL_EVENTS = 20, REFUSAL_EVENT_CHARS = 2000;
+const clipStrings = value => typeof value === "string" ? (value.length > REFUSAL_EVENT_CHARS ? `${value.slice(0, REFUSAL_EVENT_CHARS)}\n[truncated]` : value)
+  : Array.isArray(value) ? value.map(clipStrings) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clipStrings(item)])) : value;
+function refusalDetail(error) {
+  const events = Array.isArray(error.events) ? { events: error.events.slice(-REFUSAL_EVENTS).map(event => clipStrings(trimEvent(event, REFUSAL_EVENT_CHARS, false))), events_omitted: Math.max(0, error.events.length - REFUSAL_EVENTS) } : {};
+  // A plain send refused for input codexteer did not send names that input too.
+  if (!(typeof error.code === "string" && error.code.startsWith("WORK_TELL_")) && error.delivery_action_source === undefined) return { observed_action: error.observed_action, ...(error.code === "STALE_OBSERVATION" ? events : {}) };
+  return { reason: error.reason, target_error: error.target_error, sync_token: error.sync_token, sync_tokens: error.sync_tokens, current_sync_token: error.current_sync_token,
+    attention: error.attention, ...events,
+    delivery_action: error.delivery_action, delivery_action_source: error.delivery_action_source, retried_from: error.retried_from, observed_action: error.observed_action,
+    finding_id: error.finding_id, policy: error.policy, reconciliation: error.reconciliation };
+}
+
 export function fail(error, json, argv = []) {
   const message = error instanceof Error ? error.message : String(error);
-  const remedy = errorRemedy(argv, error.code), rpc = publicRpcDetail(error);
+  const remedy = errorRemedy(argv, error.code), rpc = publicRpcDetail(error), detail = refusalDetail(error);
   if (json) console.log(JSON.stringify({ ok: false, ...(error.watch ? { command: "watch", data: error.watch } : {}), error: {
     message, code: error.code, ...remedy, ...hostFields(), delivery_status: error.delivery_status,
     operation: error.operation, capability: error.capability,
@@ -74,6 +89,7 @@ export function fail(error, json, argv = []) {
     verification_checks: error.verification_checks,
     remote_control_auth: error.remote_control_auth,
     storage_bytes: error.storage_bytes, required_bytes: error.required_bytes, limit_bytes: error.limit_bytes, history_pruned: error.history_pruned, publication_in_progress: error.publication_in_progress,
+    ...detail,
   } }));
   else {
     console.error(`codexteer: ${message}`);
@@ -83,6 +99,10 @@ export function fail(error, json, argv = []) {
     for (const key of ["storage_bytes", "required_bytes", "limit_bytes"]) if (Number.isSafeInteger(error[key])) console.error(`${key}: ${error[key]}`);
     if (error.history_pruned) console.error(`history_pruned: ${JSON.stringify(error.history_pruned)}`);
     if (error.publication_in_progress) console.error("publication_in_progress: true");
+    for (const [key, value] of Object.entries(detail)) {
+      if (key === "events") for (const event of value) console.error(`event: ${JSON.stringify(event)}`);
+      else if (value !== undefined && value !== null && !(key === "events_omitted" && value === 0)) console.error(`${key}: ${JSON.stringify(value)}`);
+    }
     if (error.execution_environment === "cloud" || (typeof error.code === "string" && error.code.startsWith("DESKTOP_CLOUD_"))) {
       // Recovery metadata must survive an uncertain submission or a stale
       // on-disk receipt. Never print the child error, prompt, or diagnostics.
@@ -125,7 +145,7 @@ function takeOptions(args, name) {
 
 function routingThread(probe) {
   const valued = new Set(["--backend", "--source", "--kind", "--evidence", "--based-on", "--supersedes", "--expires-at", "--checkpoint", "--finding",
-    "--wait-ms", "--limit", "--max-chars", "--since", "--until", "--timeout-ms", "--poll-ms", "--notify", "--settle-ms", "--max-hold-ms",
+    "--wait-ms", "--limit", "--max-chars", "--since", "--until", "--timeout-ms", "--progress-ms", "--poll-ms", "--notify", "--settle-ms", "--max-hold-ms",
     "--owner", "--agent", "--status", "--note", "--by", "--reason", "--condition", "--ttl-ms", "--token", "--cwd", "--exec-backend", "--shell", "--key", "--title", "--rating", "--path", "--exclude", "--artifact"]);
   const positional = [];
   for (let i = 0; i < probe.length; i++) {
@@ -245,6 +265,7 @@ async function mainOnTarget(argv) {
         if (supervisor) throw Object.assign(new Error("A bound supervisor cannot wait for or guard an entire project."), { code: "SUPERVISOR_CONTROL_FORBIDDEN" });
         const project = takeOption(args, "--project", undefined);
         const timeout = action === "wait" ? takeOption(args, "--timeout-ms", undefined) : undefined;
+        const progress = action === "wait" ? takeOption(args, "--progress-ms", undefined) : undefined;
         const status = action === "guard" && takeFlag(args, "--status");
         if (args.length) throw usage(`Unexpected project ${action} arguments.`);
         if (status) {
@@ -253,7 +274,7 @@ async function mainOnTarget(argv) {
           return;
         }
         if (action === "guard") { console.log(JSON.stringify(await guardProject(project))); return; }
-        const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout), connection: givenConnection }, {
+        const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout), ...(progress === undefined ? {} : { progressMs: Number(progress) }), connection: givenConnection }, {
           read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),
         }));
         success("project.wait", data, json); if (!json) console.log(JSON.stringify(data, null, 2));

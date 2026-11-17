@@ -34,13 +34,13 @@ codexteer work start --project sample --root /path/to/checkout --title tests - -
 codexteer --connection desktop-cloud work start --project sample --environment example-config --root /path/to/checkout --title verify - --json < order.txt
 codexteer project sync --project sample --json
 codexteer work tell <THREAD> - --json < instruction.txt
-codexteer --connection desktop-cloud work tell <DURABLE-THREAD> - --json < instruction.txt
+codexteer work tell <DURABLE-THREAD> - --json < instruction.txt
 codexteer project control pause --project sample --work <THREAD> --json
 codexteer project control resume --project sample --work <THREAD> --json
 codexteer project control stop --project sample --all --json
 ```
 
-sharedの作成先はDesktopの実在project ID・完全一致名とrootsを照合します。managed projectの集合はwork startへ渡した指定文字列で保存するため、名前で起動した場合もsync・wait・guard・controlで同じ文字列を使い、照合で得たIDへ途中で置き換えません。sharedとDesktop Cloudを同じproject集合に入れる場合は同じ調整用IDを使い、各担当の接続はmembershipへ保存します。発注本文をシェルコードとして評価しません。
+sharedの作成先はDesktopの実在project ID・完全一致名とrootsを照合します。managed projectの集合はwork startへ渡した指定文字列で保存するため、名前で起動した場合もsync・wait・guard・controlで同じ文字列を使い、照合で得たIDへ途中で置き換えません。sharedとDesktop Cloudを同じproject集合に入れる場合は同じ調整用IDを使い、各担当の接続はmembershipへ保存します。`work tell`は`--connection shared`のままでも担当の記録した接続で送ります。発注本文をシェルコードとして評価しません。
 
 作成結果の担当IDとreceiptを記録します。`create_not_dispatched`は作成側が未作成・作成RPC未送信・指示未送信・担当IDなしを明示した段階です。原因を直して同じ発注・開始オプションを再実行すると同じattempt_idで作成をやり直せます。部分成功・unknown・観測不能では同じ担当を読み取り照合し、createを繰り返しません。membershipを先に登録してから監督を結び、stoppedを自動で置き換えません。初回観測で省略件数が0と確認できない場合は、sharedとDesktop Cloudの双方でhistory gapとして止まり、cursorを保存しません。完全な初回観測の公開イベント全文は未提示として保存し、次のsyncで返します。
 
@@ -86,9 +86,9 @@ codexteer project sync --project sample --exclude-unreadable <THREAD> --reason '
 
 停止していない担当は除外できません（`PROJECT_SYNC_EXCLUDE_NOT_STOPPED`）。読めない担当がまだ作業中なら不完全のまま扱い、原因を調べます。syncを完全にする目的で、検収前の担当をstopしないでください。stopは取り消せず、その担当へは二度と指示を送れません。
 
-tellの可否は対象の担当だけで決まります。最新のsyncで対象が完全に読めていること（`complete:true`、履歴欠落なし）を基点に送信直前まで再照合し、対象の新しいイベント、質問・承認待ち、attention不明、履歴欠落、不完全な観測では拒否します。他の担当が未読・不完全でも、対象への指示は妨げません。receiptの`other_work`は、未読の担当を`incomplete`、質問・承認待ちの担当を`human_attention`、sync後のmembership変更を`membership_changed`で返します。空でなければ、送信後もその担当への対応を続けます。`settled`の担当は読まれず回答もできないため、`incomplete`にも`human_attention`にも含めません。その担当の質問は`project sync`の「監視終了」の行に残ります。`--sync-token`で以前のsyncを基点にできるのは、その後に対象が完全に再読されていない間だけです。質問・承認待ちは常に最新のsyncで判定します。サーバーが観測版と送信を原子的に照合する保証はなく、最終観測の後に起きる競合は残ります。代理回答はせず、同じ意図やunknownを自動再送しません。検収待ちでもidleなら`--new-turn`が必要です。同じ委任の未完了作業がある場合だけ続け、受付後に新turnがactiveになれば動作中へ戻ります。検収待ちは成果の受入や全体の完了認定ではありません。
+tellの可否は対象の担当だけで決まります。最新のsyncで対象が完全に読めていること（`complete:true`、履歴欠落なし）を基点に送信直前まで再照合します。担当自身の進捗とターンの終了では止めず、送った後にreceiptの`unseen_since_basis`（sync後のイベント数`events`と、担当の最新の発言`latest_agent_message`）で返します。実行中の担当へ方向修正を間に合わせるためです。送信後に`unseen_since_basis`を読み、必要なら続けて指示します。拒否するのは、codexteerが送っていない入力（ユーザーや別のセッションの発言、codexteerが開いていないturn。`WORK_TELL_FOREIGN_INPUT`、`error.events`にその入力）、質問・承認待ち、attention不明、履歴欠落、不完全な観測です。codexteerが送った発言かどうかは、履歴の本文を送信記録のsha256と照合して決めます。サービスがclient idを残さないことがあるためです。直前に送ったtellの発言は自分の入力なので、syncをやり直さずに続けて送れます。他の担当が未読・不完全でも、対象への指示は妨げません。receiptの`other_work`は、未読の担当を`incomplete`、質問・承認待ちの担当を`human_attention`、sync後のmembership変更を`membership_changed`で返します。空でなければ、送信後もその担当への対応を続けます。`settled`の担当は読まれず回答もできないため、`incomplete`にも`human_attention`にも含めません。その担当の質問は`project sync`の「監視終了」の行に残ります。`--sync-token`で以前のsyncを基点にできるのは、その後に対象が完全に再読されていない間だけです。質問・承認待ちは常に最新のsyncで判定します。サーバーが観測版と送信を原子的に照合する保証はなく、最終観測の後に起きる競合は残ります。代理回答はせず、同じ意図やunknownを自動再送しません。`work tell`は、送信前に読んだ担当が実行中ならsteer、idle・terminalなら新しいturnを自動で選び、receiptの`delivery_action`と`delivery_action_source`で返します。sync後に担当がターンを終えていれば新しいturnになります。送信直前の読み取りでターンが終わった・始まったと分かり、何も送らずに拒否された場合は、もう一方で1回だけ、同じ照合を通して送り直します（`retried_from`）。担当がターンを終えただけなら新しいturnとして届き、別の誰かがturnを始めていれば`WORK_TELL_FOREIGN_INPUT`で止まります。同じ指示は`--new-turn`の有無によらず一度だけ送ります。`--new-turn`は新しいturnだけを送る明示指定です。idleの担当への指示は同じ委任の未完了作業がある場合だけ続け、受付後に新turnがactiveになれば動作中へ戻ります。検収待ちは成果の受入や全体の完了認定ではありません。
 
-実行中のDesktop Cloudターンでは、質問・承認待ちを観測できません。tellはその場合も送信の可否を変えず、receiptに`attention_coverage:"running_turn_unobserved"`を付けます。対象が質問で止まっていないかは、Codexの画面で確認します。`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=on`では、tellは最初の確認と送信の直前に、それぞれそのターンを読みます。どちらかで質問かサーバー要求が見えれば`WORK_TELL_HUMAN_REQUIRED`で、sync後に新しい項目が出ていれば`WORK_TELL_STALE_SYNC`で送りません。送信の直前に読めなかったときは送り、receiptに`attention_coverage`を付けます（[Desktop Cloud](desktop-cloud.md)を参照）。
+codexteerが開始していない実行中のDesktop Cloudターンと、自動レビュー以外のタスクで開始したターンでは、質問・承認待ちを観測できません。tellはその場合も送信の可否を変えず、receiptに`attention_coverage:"running_turn_unobserved"`を付けます。対象が質問で止まっていないかは、Codexの画面で確認します。codexteerが自動レビューのタスクで開始したターンでは、tellは最初の確認と送信の直前に、それぞれそのターンを読みます。どちらかで質問かサーバー要求が見えれば`WORK_TELL_HUMAN_REQUIRED`で、codexteerが送っていない入力が見えれば`WORK_TELL_FOREIGN_INPUT`で送りません。新しい項目は送信を止めず、`unseen_since_basis`に入ります。送信の直前に読めなかったときは送り、receiptに`attention_coverage`を付けます（[Desktop Cloud](desktop-cloud.md)を参照）。
 
 controlはproject全体の新しい監督IDを作らず、各担当の既存recordを制御します。`--all`と`--work`はどちらか一方を指定します。返り値のrequested・changed・already・failed、各code、membership_digestを確認してください。部分失敗でも全担当の結果を返し、CLIは終了値1（JSONはok:false）です。busyは未完了、binding不在は失敗、同じ状態への再実行はalreadyです。stop済みはresumeできません。対象集合は呼出し開始時のsnapshotで、新しく追加された担当は含まれません。
 
@@ -105,7 +105,9 @@ codexteer project guard --project sample --status --json
 
 未停止の担当がいる間は、waitを終了通知の届くバックグラウンドタスクとして実行します。単にシェルの`&`で切り離すだけでは親セッションへ通知される保証がありません。返ったら結果を読み、必要な検収・対応の後に再びwaitを開始します。質問・承認・URLをユーザーへ伝えた後も続けます。timeout・接続失敗で終了したwaitは監視中ではありません。検収済みの担当は`project control stop`で終了し、ユーザーがオーケストレーションの終了を求めた場合も対象の制御を明示的にstopします。
 
-waitは担当ごとに、最後にwaitが返した観測か完全なproject syncで示した観測を基準に、新しいターン終了（成功・失敗・取消・中断）、質問、承認待ち、バックエンド失敗、membership変更を待ちます。既にidleの担当や、既に確認した質問・承認待ちだけでは返りません。ユーザーがDesktopで直接次のターンを開始・完了した場合も検知します。通常の進捗だけではcursorや基準を更新しません。`settled`の担当は読まず、`settled`になったことや除外そのものは変化として返しません。sharedは既定1秒、Cloudを含む集合は15秒間隔で照会します。`--timeout-ms`は0以上の整数で、省略時は無期限です。開始済みの観測は完了まで待つため、指定時間を超えて返る場合があります。
+waitは担当ごとに、最後にwaitが返した観測か完全なproject syncで示した観測を基準に、新しいターン終了（成功・失敗・取消・中断）、質問、承認待ち、バックエンド失敗、membership変更を待ちます。既にidleの担当や、既に確認した質問・承認待ちだけでは返りません。ユーザーがDesktopで直接次のターンを開始・完了した場合も検知します。
+
+ターンの実行中に担当が新しく発言する（最終回答以外の`agentMessage`）と、waitは最後の基準更新から`--progress-ms`（既定600000、10分）経った時点で`reason:work_progress`で返ります。ターンの途中で担当が目的から外れていないかを、ターンの終わりを待たずに確かめるためです。結果の`progress:[{thread_id, turn_id, messages, latest}]`は、担当ごとの基準更新後の発言数と最新の発言（末尾600文字）です。全文は`sync`のイベントにあります。間隔は最後の基準更新から数えます。timeoutで返ったwaitを再開しても間隔は延びず、完全な`project sync`は間隔を数え直します。同じ発言で2回は返りません。Desktop Cloudで実行中のターンを読めない担当（`attention_unobserved`に載る担当）は、そのターンの発言を観測できません。waitはそうなったターンを、同じ間隔の後に1回だけ`reason:work_unobserved`で返します。そのターンを既に結果に示した基準更新があれば返りません。どちらの理由も基準を更新します。ターン終了・質問・承認待ちなどはこの間隔を待たずに返ります。`--progress-ms 0`は間隔を置きません。これら以外の進捗だけではcursorや基準を更新しません。`settled`の担当は読まず、`settled`になったことや除外そのものは変化として返しません。sharedは既定1秒、Cloudを含む集合は15秒間隔で照会します。`--timeout-ms`は0以上の整数で、省略時は無期限です。`--progress-ms`も0以上の整数です。開始済みの観測は完了まで待つため、指定時間を超えて返る場合があります。
 
 返り値の`changed:true`と`sync`に、syncと同じsnapshot・詳細token・continuationを返します。waitが返した時点と完全なsyncの公開時点を基準更新点とし、同じ変化を繰り返し通知しません。更新するのは読めた担当の基準だけで、読めなかった担当は前の基準を保持します。基準が未作成（旧版のsnapshotを含む）なら`reason:initial_sync`として最初のsyncを返します。timeoutは`changed:false, timed_out:true, reason:timeout, sync:null`です。通常のsyncでも全体が不完全なら、waitの基準は進めません。projectごとにwaitは1つで、重複起動は`RECORD_BUSY`です。waitは各照会の前に、開始時に特定した自分のClaude/Codex CLIセッションが生きているかを確かめます。そのセッションが異常終了していれば、照会も公開もせずに`reason:owner_exited, changed:false, timed_out:false, sync:null`で終わり、終了値1になります。照会の途中で終了した場合は、その照会の結果を通常どおり返してから終わります。wait記録とlockも解放するため、再開したセッションはその後に新しいwaitを開始できます。それまでの`RECORD_BUSY`は少し待って再実行してください。セッションを特定できなかったwaitと、プロセスを一時的に調べられなかった照会は、従来どおり待ち続けます。送信や担当制御は行いません。
 
@@ -115,7 +117,7 @@ waitは、自分を起動したコマンドが生きているかも確かめま�
 
 `unreadable`は直近の照会の結果です。`reported:false`の担当はその照会で失敗しただけで、一時的な失敗のことがあります。waitはその担当を読み続け、読めない状態が続けば報告します。`reported:true`の担当は、stopしていなくても、次に読めるまで監視されていません。その間のターン終了・質問・承認待ちは、読めるようになるまで返りません。その担当は`codexteer status <THREAD>`やその担当のbranchで別に確認し、読めないことと確認結果をユーザーへ報告します。waitを静かにする目的でその担当をstopしないでください。stopは検収後の終了操作で、stop後に`--exclude-unreadable`で除外した担当の作業は以後どこからも検知されません。読めない担当が検収してstop済みなら`--exclude-unreadable`で除外し、作業中なら原因を調べます。
 
-Desktop Cloudの担当は、ターンの実行中は開始時の指示しか読めず、その間の質問・承認待ち・進捗を観測できません。syncはその担当の行に`attention_coverage:"running_turn_unobserved"`を付け（ターンが実行中でないと確認できない担当にも付けます）、syncの全ページとwaitの全ての結果（timeoutを含みます）は`attention_unobserved:[{thread_id, attention_coverage}]`にその担当を並べます。該当する担当がいなければ付きません。`attention`・`group`・`complete`の値は変えません。この担当について、codexteerの結果から「待っているものはない」とは言えません。Codexの画面で確認します。ターン中に出た質問は、ターンが終わるとwaitが返します。`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=on`では、syncとwaitの照会は実行中のターンを1回ずつ読み、ターン中の質問を実行中に返します。読めた担当に印は付きません。読めなかった担当には従来どおり印が付き、その質問は遅くともターンが終わると返ります。読めなかった理由は、担当行と`attention_unobserved`のその担当の`live_fallback`で分かります。`mismatch`と`view_mismatch`の担当は以後ずっと履歴だけで読み、waitはそうなった照会で1回返ります（値の意味は[Desktop Cloud](desktop-cloud.md)を参照）。サーバー要求は`attention`の`pendingRequest:<メソッド名>`として「対応が必要」になります。
+Desktop Cloudの担当は、ターンの実行中は履歴が載せた項目しか読めません。履歴は実行中のターンの項目を遅れて載せるため、まだ載っていない進捗と、質問・承認待ちを観測できません。syncはその担当の行に`attention_coverage:"running_turn_unobserved"`を付け（ターンが実行中でないと確認できない担当にも付けます）、syncの全ページとwaitの全ての結果（timeoutを含みます）は`attention_unobserved:[{thread_id, attention_coverage}]`にその担当を並べます。該当する担当がいなければ付きません。`attention`・`group`・`complete`の値は変えません。この担当について、codexteerの結果から「待っているものはない」とは言えません。Codexの画面で確認します。ターン中に出た質問は、ターンが終わるとwaitが返します。codexteerが開始したターン（`work start`の最初のターンと`work tell --new-turn`のターン）は、開始の直前にタスクが自動レビューを報告していれば、syncとwaitの照会が実行中に1回ずつ読み、ターン中の質問を実行中に返します。読めた担当に印は付きません。読めなかった担当には従来どおり印が付き、その質問は遅くともターンが終わると返ります。読めなかった理由は、担当行と`attention_unobserved`のその担当の`live_fallback`で分かります。codexteerが開始していないターンは`not_codexteer_turn`、自動レビュー以外で開始したターンは`not_auto_review`です。`not_auto_review`（resumeで分かったもの）・`mismatch`の担当は以後ずっと履歴だけで読み、waitは`mismatch`になった照会で1回返ります。`view_unconfirmed`は一時的で、次の照会でまた読みます。`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=off`で読むのをやめられます（値の意味は[Desktop Cloud](desktop-cloud.md)を参照）。サーバー要求は`attention`の`pendingRequest:<メソッド名>`として「対応が必要」になります。
 
 承認・質問のフラグは、読了済みcursorとは別に、各担当の基準に対応する直近の観測を保存します。同じフラグが立ち続ける間は通知せず、消えたことを観測した後の再出現は同じ実行turnでも通知します。この観測はtimeout後のwait再起動にも引き継ぎ、その担当の基準が更新されたときに初期化します。`attention:null`など現在のフラグが不明な場合は空配列と区別し、`PROJECT_WAIT_ATTENTION_UNKNOWN`の読み取り失敗として扱います。その担当のcursorと基準は進めません。
 
@@ -169,7 +171,7 @@ macOSの起動識別は、起動日時とcommandのSHA-256だけを保存・比�
 
 ## 保存量と整理
 
-履歴（`project-sync-events`・`project-sync-results`・`work-starts`のJSONファイル）は、projectごとに別の場所へ保存し、総量をprojectごとに256 MiBまでに制限します。work-startのreceipt・方針本文も含みます。上限の確認、保存と整理の排他、整理はprojectごとに独立しています。同じ`CODEX_HOME`の他projectの履歴が、そのprojectのsync・wait・work start・work tellを拒否・待機・失敗させることはありません。最新headなど他の管理メタデータ、ジャーナルやバックエンド履歴はこの上限の対象外です。表示byte予算とは別の制限です。1担当1回の全文観測は16 MiBまでで、超過は`PROJECT_HISTORY_BATCH_LIMIT`としてcursorを進めません。
+履歴（`project-sync-events`・`project-sync-results`・`work-starts`のJSONファイル）は、projectごとに別の場所へ保存し、総量をprojectごとに256 MiBまでに制限します。work-startのreceipt・方針本文も含みます。上限の確認、保存と整理の排他、整理はprojectごとに独立しています。同じ`CODEX_HOME`の他projectの履歴が、そのprojectのsync・wait・work start・work tellを拒否・待機・失敗させることはありません。最新headなど他の管理メタデータ、ジャーナルやバックエンド履歴はこの上限の対象外です。表示byte予算とは別の制限です。1担当1回の全文観測は16 MiBまでです。超える分は次のsyncが読みます。その回の行は`complete:false`・`error:PROJECT_HISTORY_BACKLOG`で、cursorは返した分の後ろへ進みます。1件のイベントだけで16 MiBを超えるときは`PROJECT_HISTORY_BATCH_LIMIT`とし、cursorを進めません。
 
 保存の前に、今回書くrecord（イベント・sync結果・担当詳細）の保存後のサイズを合計し、置き換えるrecordの分を引いて、上限に収まるかを確認します。recordが空きに収まるpublicationは保存されます。sync結果と担当詳細はcursorの更新後に確定するため、完全に読めた担当の行は、cursorを進めた場合と更新が拒否された場合の大きい方で数えます。確認する量は実際に保存する量と同じか、その差の分だけ大きくなります。確認を通ったpublicationが途中で容量不足になることはありません。
 

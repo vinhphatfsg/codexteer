@@ -4,7 +4,7 @@ const C_NOT_PROOF = "history checkのnot_observedは未配送の証明ではな�
 const C_SUPERVISED_SEND = "--supervisor付きの送信は--based-onと--findingが必須（SUPERVISOR_OBSERVATION_REQUIRED/SUPERVISOR_FINDING_REQUIRED）。instructions retractは--finding不要。";
 const C_EVIDENCE_FILES = "--evidenceのファイルは指定時にsha256を記録し、送信直前に再照合する。変更・消失はSTALE_EVIDENCEで送信しない。ディレクトリは指定できない。";
 const C_EVIDENCE_URLS = "http(s)・codexのURL根拠は参照として記録するだけで、内容の正しさや変更を認定しない。認証情報を含むURLは拒否する。";
-const C_BASED_ON = "--based-onには読み切ったread/statusのcursorを渡す。has_more:trueのcursor、または観測後の新しいユーザー入力・ターン変更はSTALE_OBSERVATIONで送信しない。";
+const C_BASED_ON = "--based-onには読み切ったread/statusのcursorを渡す。has_more:trueのcursor、観測後にcodexteerが送っていない入力（ユーザーの発言、codexteerが開いていないturn）、観測した入力の変更はSTALE_OBSERVATIONで送信しない。担当の進捗とターンの終了では止めない。codexteerの送った発言は本文のsha256で見分ける。";
 const C_JOURNAL_SCOPE = "UI方式以外の送信（Cloud・Desktop Cloud・instructions retractを含む）は送信前にCODEX_HOME/codex-steer/messages/へ記録する。";
 const C_LOCAL_FOR_CLOUD = "CloudタスクIDを指定してもローカルの入力・コマンドだけを扱い、Cloud側のファイルは見ない（結果のexecution_environment:local）。";
 const C_PAIRED_SHELL = "pairedで--exec-backend thread-shell --shell powershell|posixを明示した場合だけ、idleの対象チャットでfull accessのホストシェルを使う。";
@@ -23,7 +23,7 @@ const C_OPT_AFTER_DASH = { name: "-- <COMMAND> [ARGS...]", text: "最初の -- �
 const C_OPT_EXEC_BACKEND = { name: "--exec-backend app-server|thread-shell", default: "app-server", text: "paired専用。thread-shellはidleの対象チャットのホストシェル（full access）を明示的に使う。ローカルでは指定できない。" };
 const C_OPT_SHELL = { name: "--shell powershell|posix", text: "thread-shellで必須。接続先のシェルを明示する。" };
 
-const C_E_STALE_OBSERVATION = { code: "STALE_OBSERVATION", when: "--based-onのcursorがhas_more:trueのまま、観測後に新しいユーザー入力・ターン変更があった、または送信直前の読み取り中にタスク状態が変わった（Desktop Cloudではアクティブターンの不一致もこのcode）", action: "read --since <CURSOR>で読み切り、最新の状況で再判断してから新しいcursorで送る。" };
+const C_E_STALE_OBSERVATION = { code: "STALE_OBSERVATION", when: "--based-onのcursorがhas_more:trueのまま、観測後にcodexteerが送っていない入力（error.eventsに表示）か観測した入力の変更があった、または送信直前の読み取り中にタスク状態が変わった（Desktop Cloudではアクティブターンの不一致もこのcode）", action: "read --since <CURSOR>で読み切り、最新の状況で再判断してから新しいcursorで送る。" };
 const C_E_STALE_CURSOR = { code: "STALE_CURSOR", when: "cursorが壊れている、別タスク・別hostのもの、または履歴が変わった", action: "--sinceなしでreadし直し、新しいcursorを使う。" };
 const C_E_SUPERVISOR_OBSERVATION = { code: "SUPERVISOR_OBSERVATION_REQUIRED", when: "--supervisor付きの送信に--based-onがない", action: "readで差分を読み切り、そのcursorを--based-onに付ける。" };
 const C_E_DESKTOP_READ_ONLY = { code: "DESKTOP_READ_ONLY", when: "--connection desktopで送信・撤回しようとした（観測専用）", action: "接続を自動で切り替えず、監督中に--connectionを外して回避しない。送信はshared接続を明示して別途行う（help connection）。" };
@@ -80,7 +80,9 @@ export const topics = {
       { code: "EXPIRED_DIRECTIVE", when: "--expires-atの期限が送信前に過ぎた", action: "必要なら新しい期限で送り直すか判断する。" },
       SUPERVISOR_PAUSED,
       SUPERVISOR_STOPPED,
-      { code: "TASK_IDLE", when: "通常sendで、送れる実行中ターンがない（タスクがidle・停止中など）。未送信", action: "readで状態を読み直す。idleのタスクの再開はユーザーの依頼がある場合だけ--new-turnで送る。" },
+      { code: "TASK_IDLE", when: "通常sendで、送れる実行中ターンがない（タスクがidle・停止中など）。未送信。error.observed_actionはそのとき送れた種類（new-turn・なければnull）", action: "readで状態を読み直す。idleのタスクの再開はユーザーの依頼がある場合だけ--new-turnで送る。" },
+      { code: "MANAGED_INTERVENTION_REQUIRED", when: "project管理下の担当へsendした。未送信", action: "最新のproject syncで対象を確認し、error.messageのcodexteer work tell THREAD <INSTRUCTION>で送る。--backend uiなど別の経路に切り替えない。" },
+      { code: "MANAGED_UI_UNSUPPORTED", when: "project管理下の担当へ--backend uiで送ろうとした。未送信", action: "最新のproject syncで対象を確認し、error.messageのcodexteer work tell THREAD <INSTRUCTION>で送る。" },
       { code: "TASK_BUSY", when: "--new-turnで、タスクがidleでない、または再開処理中に実行中になった。未送信", action: "--new-turnを外す。readで実行中のターンを確かめてから通常sendで送るか判断する。" },
       { code: "NOT_SENT", when: "他のコードのない送信前の失敗（同じタスクの送信ロックが残っている等）。未送信", action: "error.messageの理由を確認し、readで状態を読み直してから判断する。送信ロックが残るなら、配送をhistory checkで確かめてからユーザーに報告する。" },
       OPTIONS_INVALID,

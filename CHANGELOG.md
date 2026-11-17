@@ -2,6 +2,85 @@
 
 公開日は日本時間です。
 
+## 0.26.0 — 未公開
+
+### work tellが送れる場面を広げる
+
+`work tell`は、担当がsyncの後に少しでも進むと`WORK_TELL_STALE_SYNC`で拒否していました。担当は数分ごとに進むため、オーケストレーターは実行中の担当をほとんどステアリングできませんでした。idleの担当には`--new-turn`が必要で、送信の種類を呼び出し側が当てる必要もありました。
+
+- 担当自身の進捗とターンの終了では止めずに送り、receiptの`unseen_since_basis`（syncの後のイベント数と、担当の最新の発言を2000文字まで）で返します。送った後に確かめてください。
+- codexteerが送っていない入力（ユーザーや別のセッションの発言、codexteerが開いていないturn）がsyncの後にあれば、`WORK_TELL_FOREIGN_INPUT`で送りません。`error.events`には最初に見つかったその入力が入ります（codexteerが開いていないturnなら、そのturn）。`WORK_TELL_STALE_SYNC`は返さなくなりました。codexteerが送った入力かどうかは、本文のsha256を送信記録と照合して決めます。
+- 質問・承認待ち、監督の停止・一時停止、配送が不明な以前の指示、接続の不一致、不完全なsyncでは、従来どおり送りません。
+- `--new-turn`がなければ、送信の種類を担当の状態から選びます。実行中ならsteer、idleか終了済みなら新しいturnです。receiptは`delivery_action`と`delivery_action_source`（`auto`か`requested`）を持ちます。
+- 送信直前の読み取りでターンが終わっていた・始まっていたと分かり、何も送らずに拒否されたときは、もう一方の種類で1回だけ送り直します。送り直しも同じ確認を全て通り、receiptは`retried_from`を持ちます。配送が不明な指示と`--new-turn`の指定は送り直しません。
+- 同じ指示を`--new-turn`の有無を変えて送っても、届くのは1回です。
+- syncの後に出て、すでに回答された質問（`answered`・`resolved`）では、`WORK_TELL_HUMAN_REQUIRED`で拒否しなくなりました。`project sync`と同じ判定です。これまでは次のsyncまで、質問が残っているとして拒否していました。
+- project全体を`--connection shared`で扱っていても、Desktop Cloudの担当へ、その担当の接続で送ります。担当と矛盾する接続は従来どおり拒否します。
+- `WORK_TELL_SYNC_INCOMPLETE`は`reason`（`no_sync`・`basis_missing`・`target_absent`・`target_incomplete`・`history_gap`）と`target_error`を持ち、次に実行する`project sync`を示します。`work tell`の拒否の詳細は、`--json`でもテキストでも表示します。
+- `send --based-on`も同じ規則で確かめます。担当自身のターンの終了では拒否せず、送っていない入力か、入力の書き換え・削除で拒否します。
+
+### project waitが作業の途中で起こす
+
+
+`project wait`は、担当がターンの途中で目的から外れた作業をしていても、そのターンが終わるまで返りませんでした。オーケストレーターは、ずれた作業がターンの終わりまで続いた後にしか気付けませんでした。
+
+- 実行中の担当が新しく発言すると、waitは最後の基準更新から`--progress-ms`（既定10分）経った時点で`reason:work_progress`で返ります。結果の`progress`は、担当ごとの発言数と最新の発言です。間隔はwaitの開始からではなく最後の基準更新から数えるため、timeoutで返るたびにwaitを再開しても延びません。同じ発言で2回は返りません。
+- Desktop Cloudで実行中のターンを読めない担当は、そのターンにつき1回、同じ間隔の後に`reason:work_unobserved`で返ります。これまでは読めないことを`attention_unobserved`で示すだけで、他に返る理由がなければターンが終わるまで返りませんでした。
+- ターン終了・質問・承認待ちなどは、従来どおり間隔を待たずに返ります。
+
+### 実行中のDesktop Cloudターンを読む（既定で有効、codexteerが開始したターンだけ）
+
+0.25.0の実行中ターンの読み取りは、既定で無効でした。承認をユーザーが行うタスクでは、resumeした接続にも承認要求が届き、その要求を持ったまま接続を閉じるとサービスがターンを中断します。自動レビューのタスクでは、承認は自動レビューが行い、resumeした接続に要求は届きません。
+
+- 既定で有効にし、読むターンを、codexteerが開始し、開始の直前にタスクが自動レビュー（`approvalsReviewer:"auto_review"`）を報告したターンに限りました。`work start`の最初のターンと、`work tell --new-turn`・`send --new-turn`のターンです。
+- 新しいターンの送信の受付記録（`desktop-cloud-sends`）が`approvals_reviewer`を持ちます。`work start`はタスク作成の応答から読み、それ以外はターンを始める直前に送信の接続でidleのタスクをresumeして読みます。読めなかったときは`null`で、そのターンは読みません。
+- それ以外の実行中ターンはresumeせず、従来どおり`attention_coverage`の印を付け、理由の`live_fallback`に`not_codexteer_turn`か`not_auto_review`を返します。
+- resumeの結果が自動レビュー以外を示したときは、その読み取りで読めた項目を返し、以後そのタスクはresumeしません。cursorに残り、`live_fallback:"not_auto_review"`を返します。
+- resumeした接続にサーバー要求が届いたときは、サービスがその要求を全て解決済みと通知するまで接続を閉じません。プロセスは延ばさないため、先にコマンドが終わると接続は閉じ、サービスはターンを中断します。
+- 実行中に読んだ項目のうち、履歴にまだ載っていないものを256から512まで持てるようにしました。履歴は実行中のターンの項目を遅れて載せ、載った項目はcursorから外れるため、上限は1ターンの項目数ではなく履歴の遅れの分です。512を超える項目を見た読み取りは古い順に512個までを返し、以後、履歴が項目を載せて512を下回るまでresumeしません（`live_fallback:"ledger_full"`）。これまでは、上限を超えた後も照会ごとにresumeしていました。512個のcursorは約40 KBです。
+- 0.25.0の説明は、Desktop Cloudの履歴が実行中のターンの項目を開始時の指示しか載せないとしていました。実際の履歴は、実行中のターンの項目を遅れて載せます。codexteerは載った項目を従来どおり返しており、説明だけを直しました。
+- resumeの結果は、ターンの全体ではなく最近の一部です。文脈の圧縮をまたぐと、それより前の項目を含みません。0.25.xは、履歴が並べている項目がresumeの結果になければ`view_mismatch`として、そのタスクを以後resumeしませんでした。長く動くターンほど、途中から読めなくなっていました。この判定をやめ、resumeの結果が、履歴が並べた項目か前の読み取りが返した項目を含めば使います。新しい項目があるのにどちらも含まない結果（文脈の圧縮の直後）は、間にどの読み取りも返していない項目があるかもしれないため使わず、`live_fallback:"view_unconfirmed"`を返して次の読み取りでまたresumeします。項目はターンの順に返るので、質問がその回答より後に届いて、回答済みの質問が開いたまま残ることはありません。`view_mismatch`を残したcursorは、その拒否を捨てます。
+- resumeの結果の文脈の圧縮（`contextCompaction`）は、履歴と別のIDを持ちます。実行中に返すと、ターンの終わりに同じ圧縮が履歴からもう一度返り、そのIDが履歴にないため`mismatch`になって、以後そのタスクはresumeされませんでした。圧縮は実行中には返さず、履歴から返します。
+- `CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=off`で無効にできます。`on`は既定と同じで、どのターンでもresumeする0.25.xの動作はなくなりました。
+- Desktop Cloudの`doctor`の`running_turn_attention`は、有効なら`"codexteer_turns"`、無効なら`"unobserved"`です。
+- `not_auto_review`を持つcursorは0.25.x以前では読めず、`STALE_CURSOR`になります。
+
+### 長いDesktop Cloudターンを読む
+
+1ターンの項目が多いDesktop Cloudの担当は、ターンを1回の応答で受け取るため、受信の上限（16 MiB）か30秒の待ち時間を超えて読めませんでした。`status`・`read`・`project sync`の行・`project wait`・`work tell`のどれも失敗していました。
+
+- ターンは項目なしで一覧し、項目は`thread/items/list`で100件ずつ読みます。cursorは変わりません。
+- 1回の`project sync`・`project wait`の照会・`work tell`の確認の中では、読み込んだ終了済みのターンの項目を32 MiBまで使い回します。
+- 1件の項目だけで受信の上限を超えるときは、従来どおり`PAYLOAD_TOO_LARGE`です。
+
+### project syncの読み残しと競合
+
+新しい履歴が16 MiBを超えた担当を、`project sync`がいつまでも完全に読めず、`work tell`がその担当へ指示できませんでした。
+
+- 1担当1回の全文観測は16 MiBまでで、超えるとcursorを進めずに失敗していました。次のsyncも同じcursorから読み、同じ所で失敗していました。
+- いまは収まる分だけを返し、その担当のcursorを返した分の後ろへ進めます。その回の行は`complete:false`・`error:PROJECT_HISTORY_BACKLOG`です。残りは次のsyncが読み、読み切った回の行が`complete:true`になります。1ページだけで16 MiBを超えるときは、ページを小さくして読み直します。
+- `project wait`は、この担当を読めない担当として報告しません。基準から16 MiBを超えて進んだ担当は変化として返します。そのときwaitは前のsyncが読み終えた所から読み、返した所まで基準とcursorを進めます。waitが返るたびにsyncすれば、読み残しはなくなります。
+- 1件のイベントだけで16 MiBを超えるときは、従来どおり`PROJECT_HISTORY_BATCH_LIMIT`でcursorを進めません。
+
+同じprojectで別の`project sync`か`project wait`が先に公開すると、遅れた`project sync`や`project wait`が、先に公開された側で回答済みになった質問を未解決に戻すことがありました。戻った質問はその後のsyncでも残り、その担当への`work tell`は`WORK_TELL_HUMAN_REQUIRED`で拒否され続けました。
+
+- 遅れたsync・waitは、担当一覧を読んだ後に別の公開がいずれかの担当のcursorを進めていれば、何も公開せず`publication_conflict:"SYNC_CURSOR_CONFLICT"`を返します。これまでは、その担当の行だけを`SYNC_CURSOR_CONFLICT`の不完全な行にして公開していました。waitでは従来の公開競合と同じく`reason:observation_failed`・`changed:false`で返ります。
+- 公開の途中で終了したsyncがcursorだけを進めていた場合も同じです。次のsyncは進んだcursorから読み、headは終了したsyncが読んだ分まで反映した状態から続きます。
+- 間に公開したsyncが新しいイベントを読まずcursorを変えなかった場合は、競合にも`SYNC_CURSOR_CONFLICT`の行にもなりません。これまでは、waitが基準から読み直した回答済みの質問をその行が未解決に戻し、次のwaitが同じ変化をもう一度返していました。
+- waitが基準から読み直した担当を最後まで読めなかったとき（`PROJECT_WAIT_ATTENTION_UNKNOWN`など）は、その読み取りの質問をheadに加えず、前のsyncが反映した状態のままにします。続きは次のsyncが読みます。これまでは、回答済みの質問を未解決に戻すことがありました。
+
+### アップグレード時の注意
+
+- `WORK_TELL_STALE_SYNC`を見て処理していた呼び出し側は、`WORK_TELL_FOREIGN_INPUT`を見るようにしてください。担当自身の進捗では拒否されなくなったので、送った後に`unseen_since_basis`を確かめてください。
+- `--new-turn`なしの`work tell`は、idleの担当に新しいturnを始めます。同じ委任の未完了作業がある場合だけ送ってください。
+- `project wait`は`reason:work_progress`と`reason:work_unobserved`でも返ります。どちらも、結果を確かめてからwaitを再開してください。
+- Desktop Cloudの実行中ターンの読み取りは既定で有効です。`CODEXTEER_DESKTOP_CLOUD_LIVE_TURN=off`で止められます。
+
+### 0.25.x以前へ戻すときの注意
+
+- `not_auto_review`を持つcursorは、0.25.x以前では`STALE_CURSOR`になります。
+- `project wait --progress-ms`は0.25.x以前にはありません。
+
 ## 0.25.1 — 2026-11-13公開
 
 ローカルの`work start`と standalone `thread create` が、Desktop で権限モードを選んであっても `DESKTOP_PERMISSION_UNVERIFIED` で止まることがありました。

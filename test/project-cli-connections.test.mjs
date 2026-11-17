@@ -15,7 +15,7 @@ const calls = {
   "project sync --project ID [--byte-budget N]": ["sync", "--project", "P", "--byte-budget", "8000"],
   "project sync --project ID --exclude-unreadable THREAD --reason TEXT": ["sync", "--project", "P", "--exclude-unreadable", THREAD, "--reason", "gone"],
   "project sync --continue TOKEN --offset N --event-offset N [--byte-budget N]": ["sync", "--continue", TOKEN, "--offset", "0", "--event-offset", "0", "--byte-budget", "8000"],
-  "project wait --project ID [--timeout-ms N] [--json]": ["wait", "--project", "P", "--timeout-ms", "0"],
+  "project wait --project ID [--timeout-ms N] [--progress-ms N] [--json]": ["wait", "--project", "P", "--timeout-ms", "0", "--progress-ms", "0"],
   "project guard --project ID": ["guard", "--project", "P"],
   "project guard --project ID --status [--json]": ["guard", "--project", "P", "--status"],
   "project event TOKEN": ["event", TOKEN],

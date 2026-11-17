@@ -47,7 +47,7 @@ test("thin project membership stores route data without duplicating supervisor s
 test("raw sends reject every managed task until work tell supplies freshness, while unmanaged sends remain compatible", async t => {
   const { home } = await fixture(t), counter = { count: 0 }, send = accepted(counter);
   for (const [thread, body, extra = {}] of [[ACTIVE, "active"], [PAUSED, "paused"], [PAUSED, "paused new turn", { newTurn: true }], [STOPPED, "stopped"]]) {
-    await assert.rejects(sendTrackedMessage(thread, body, { connection: "shared", ...extra }, { home, send }), { code: "MANAGED_INTERVENTION_REQUIRED" });
+    await assert.rejects(sendTrackedMessage(thread, body, { connection: "shared", ...extra }, { home, send }), { code: "MANAGED_INTERVENTION_REQUIRED", thread_id: thread, delivery_status: "not_sent", message: new RegExp(`codexteer work tell ${thread} <INSTRUCTION>`) });
   }
   for (const thread of [ACTIVE, PAUSED, STOPPED]) {
     await assert.rejects(sendTrackedMessage(thread, "supervisor bypass", { connection: "shared", supervisor: sessions[thread], basedOn: "cursor", finding: "finding", internal: true, workTell: true }, { home, send }), { code: "MANAGED_INTERVENTION_REQUIRED" });
@@ -84,7 +84,7 @@ test("pause/stop serialize with managed delivery and acknowledged stop blocks la
 test("Desktop UI delivery rejects managed active paused stopped and new-turn routes before dispatch", async t => {
   const { home } = await fixture(t); let dispatches = 0; const send = async () => { dispatches++; return { sent: true }; };
   for (const [thread, options] of [[ACTIVE, {}], [PAUSED, { newTurn: true }], [STOPPED, {}]]) {
-    await assert.rejects(sendDesktopUiMessage(thread, "message", { connection: "shared", ...options }, { home }, { send }), { code: "MANAGED_UI_UNSUPPORTED" });
+    await assert.rejects(sendDesktopUiMessage(thread, "message", { connection: "shared", ...options }, { home }, { send }), { code: "MANAGED_UI_UNSUPPORTED", thread_id: thread, message: new RegExp(`codexteer work tell ${thread} <INSTRUCTION>`) });
   }
   assert.equal(dispatches, 0);
   await sendDesktopUiMessage(UNMANAGED, "legacy shorthand", { connection: "shared", newTurn: true }, { home }, { send });

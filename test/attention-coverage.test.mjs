@@ -31,6 +31,7 @@ async function fixture(t, { name = "worker" } = {}) {
     if (method === "thread/read") return { thread: { id: uuid, name, status: { type: state.status, activeFlags: state.flags },
       environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: ENV }] } };
     if (method === "thread/turns/list") return { data: state.turns.map(turn => ({ ...turn, itemsView: "full" })), nextCursor: null };
+    if (method === "thread/items/list") return { data: state.turns.find(turn => turn.id === params.turnId).items.map(item => ({ turnId: params.turnId, item })), nextCursor: null };
     if (method === "turn/steer") { state.turns.at(-1).items.push({ id: randomUUID(), type: "userMessage", clientId: params.clientUserMessageId, content: params.input }); return { turnId: state.turns.at(-1).id }; }
     if (method === "turn/start") { state.turns.push({ id: `turn-${state.turns.length}`, status: "inProgress", items: [{ id: randomUUID(), type: "userMessage", clientId: params.clientUserMessageId, content: params.input }] }); return { turn: { id: state.turns.at(-1).id } }; }
     throw new Error(`Unexpected ${method}`);
@@ -145,6 +146,6 @@ test("the orchestrator prompt and help say what a running Desktop Cloud turn hid
   }
   assert.match(helpData("project").returns, /attention_unobserved/);
   assert.match(helpData("project").notes.join(" "), /ターンが終わった後の質問は従来どおり返す/);
-  assert.match(helpData("desktop-cloud").returns, /running_turn_attention:unobserved/);
+  assert.match(helpData("desktop-cloud").returns, /running_turn_attention:codexteer_turns.*offならunobserved/);
   assert.match(helpData("desktop-cloud").notes.join(" "), /ターンが終わると、その間の発言・コマンド・質問がまとめて現れる/);
 });

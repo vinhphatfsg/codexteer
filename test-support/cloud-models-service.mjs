@@ -2,8 +2,8 @@
 // Production exposes no endpoint or credential override for this fixture.
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { DesktopCloudClient, liveTurnEnabled } from "../src/desktop-cloud-api.mjs?actual";
-export { DesktopCloudClient, liveTurnEnabled };
+import { AUTO_REVIEW, DesktopCloudClient, liveTurnEnabled, loadTurn } from "../src/desktop-cloud-api.mjs?actual";
+export { AUTO_REVIEW, DesktopCloudClient, liveTurnEnabled, loadTurn };
 const file = () => `${process.env.CODEX_HOME}/fixture.json`;
 export async function desktopCloudEnvironments() { return { environments: [{ id: "test-config", name: "Fixture" }] }; }
 export async function connectDesktopCloud() {
@@ -20,6 +20,7 @@ export async function connectDesktopCloud() {
       if (method === "thread/name/set") { thread.name = params.name; result = {}; }
       else if (method === "thread/read") result = { thread };
       else if (method === "thread/turns/list") result = { data: thread.turns.map(turn => ({ ...turn, itemsView: "full" })), nextCursor: null };
+      else if (method === "thread/items/list") result = { data: thread.turns.find(turn => turn.id === params.turnId).items.map(item => ({ turnId: params.turnId, item })), nextCursor: null };
       else if (method === "turn/start") {
         const turn = { id: randomUUID(), status: "completed", items: [{ type: "userMessage", id: randomUUID(), clientId: params.clientUserMessageId, content: params.input }] };
         thread.turns.push(turn); result = { turn };

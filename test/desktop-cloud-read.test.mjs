@@ -224,19 +224,36 @@ test("a wait baseline saved by an earlier version returns the change since it on
   assert.ok(f.state.served.turns <= 2 * f.state.calls.filter(call => call.method === "thread/read").length, "the published baseline is read from its newest turn");
 });
 
-test("a --based-on check from a tail cursor refuses new user input in the running turn or a new turn", async () => {
+test("a --based-on check from a tail cursor refuses new user input in the running turn or a new turn", async t => {
+  const journal = { home: await mkdtemp(tempPrefix("ct-cloud-journal-")) }; t.after(() => rm(journal.home, { recursive: true, force: true }));
   const { prepareDirective } = await import("../src/directive.mjs");
   for (const change of ["steer", "turn"]) {
     const f = cloud();
     for (let n = 0; n < 3; n++) f.append(work(n));
     f.append([user("order")], { status: "inProgress" }); f.state.status = "active";
     const { cursor } = await f.read(ID, { limit: 1000 }), client = await f.connect();
-    const directive = await prepareDirective(ID, "Continue.", { basedOn: cursor, source: "test" }, "fixture-message");
+    const directive = await prepareDirective(ID, "Continue.", { basedOn: cursor, source: "test" }, "fixture-message", journal);
     await directive.beforeSend({}, client);
     if (change === "steer") f.state.turns.at(-1).items.push(user("steer"));
     else { f.complete(); f.append([user("next")], { status: "inProgress" }); }
     await assert.rejects(directive.beforeSend({}, client), { code: "STALE_OBSERVATION" }, change);
   }
+});
+
+test("a --based-on check lets the end of the worker's turn and codexteer's own input through, matched by text, and refuses anyone else's", async t => {
+  const { sendTrackedMessage } = await import("../src/journal.mjs");
+  const home = await mkdtemp(tempPrefix("ct-cloud-own-")); t.after(() => rm(home, { recursive: true, force: true }));
+  const f = cloud(), send = (id, text, options) => sendDesktopCloudInput(id, text, options, { home, connect: f.connect });
+  f.state.nullClientId = true;
+  f.append(work(0)); f.append([user("order")], { status: "inProgress" }); f.state.status = "active";
+  const { cursor } = await f.read(ID, { limit: 1000 });
+  f.progress(agent("Working.")); f.complete([agent("Finished.")]);
+  assert.equal((await sendTrackedMessage(ID, "Continue with the tests.", { basedOn: cursor, source: "test", newTurn: true }, { home, send })).delivery_status, "accepted", "the worker ended its own turn");
+  assert.equal(f.state.turns.at(-1).items[0].clientId, null, "the service kept no client id on codexteer's message");
+  assert.equal((await sendTrackedMessage(ID, "Also run the linter.", { basedOn: cursor, source: "test" }, { home, send })).delivery_status, "accepted", "the new turn codexteer opened is its own");
+  f.progress(user("Stop and do something else."));
+  const refused = await sendTrackedMessage(ID, "One more thing.", { basedOn: cursor, source: "test" }, { home, send }).catch(error => error);
+  assert.deepEqual([refused.code, refused.delivery_status, refused.events?.map(event => event.text)], ["STALE_OBSERVATION", "not_sent", ["Stop and do something else."]]);
 });
 
 test("work tell to a long-history member reads its newest turn, not its history", async t => {
@@ -254,7 +271,7 @@ test("a v1 --based-on check still reads the full history before a send", async t
   for (const change of [false, true]) {
     const f = await member(t, 5), v1 = (await f.fullRead(ID, { limit: 1000 })).cursor;
     if (change) f.append(work(5));
-    const directive = await prepareDirective(ID, "Continue.", { basedOn: v1, source: "test" }, "fixture-message");
+    const directive = await prepareDirective(ID, "Continue.", { basedOn: v1, source: "test" }, "fixture-message", f.storage);
     const send = sendDesktopCloudInput(ID, directive.wireText, { newTurn: true, beforeSend: directive.beforeSend }, { ...f.storage, connect: f.connect });
     if (change) await assert.rejects(send, { code: "STALE_OBSERVATION" });
     else assert.equal((await send).delivery_status, "accepted");
@@ -271,12 +288,110 @@ test("--full-history keeps the full read and its v1 cursor; a tail cursor cannot
   await assert.rejects(f.read(ID, { since: tail.cursor, fullHistory: true }), { code: "OPTIONS_INVALID" });
 });
 
-test("a newest turn larger than the receive limit on its own still fails with the receive limit error", async t => {
+test("a turn larger than one response may carry is read in pages, so read, sync and tell reach its task", async t => {
+  const f = await member(t, 3, { receiveLimit: 64 * 1024 });
+  assert.equal((await syncProject("P", {}, f.deps)).complete, true);
+  const long = f.append([user("long order"), ...Array.from({ length: 450 }, (_, n) => command(`step ${n} ${"x".repeat(300)}`)), agent("long report")]);
+  const sync = await syncProject("P", {}, f.deps);
+  assert.equal(sync.works[0].error, null); assert.equal(sync.complete, true);
+  assert.equal(sync.works[0].reason.latest_turn_id, long.id); assert.equal(sync.works[0].group, "検収待ち");
+  const tail = await f.read(ID, {});
+  assert.equal(tail.latest_turn_id, long.id); assert.equal(tail.events.at(-1).id, long.items.at(-1).id);
+  assert.deepEqual((await fetchThread(await f.connect(), ID)).turns.at(-1).items, long.items, "the whole history lists every item of the long turn");
+  const sent = await tellWork(ID, "Review the result.", { newTurn: true }, { storage: f.storage, read: f.read,
+    send: (id, body, options) => sendDesktopCloudInput(id, body, options, { ...f.storage, connect: f.connect }) });
+  assert.equal(sent.delivery_status, "accepted"); assert.equal(f.state.turns.at(-1).status, "inProgress");
+});
+
+test("an item larger than the receive limit on its own still fails with the receive limit error", async t => {
   const f = await member(t, 3, { receiveLimit: 64 * 1024 });
   await syncProject("P", {}, f.deps);
   f.append([user("large"), command("x".repeat(80 * 1024))]);
   const sync = await syncProject("P", {}, f.deps);
   assert.equal(sync.complete, false); assert.equal(sync.works[0].error, "PAYLOAD_TOO_LARGE");
+});
+
+test("a turn's items are read in pages of 100 at every boundary, by the tail and the whole history alike", async () => {
+  const f = cloud();
+  for (const size of [0, 1, 99, 100, 101, 200, 250]) f.append(Array.from({ length: size }, () => agent("step")));
+  const history = (await fetchThread(await f.connect(), ID)).turns;
+  assert.deepEqual(history.map(turn => turn.items), f.state.turns.map(turn => turn.items));
+  f.resetServed();
+  const tail = await f.read(ID, { limit: 1000 });
+  assert.deepEqual(tail.events.map(event => event.id), f.state.turns.flatMap(turn => [turn.id, ...turn.items.map(item => item.id)]));
+  assert.deepEqual([f.state.served.turns, f.state.served.pages], [7, 1 + 1 + 1 + 1 + 2 + 2 + 3]);
+});
+
+// How many times the reads since this call paged `turn` from its start, and how many of its item pages they took.
+function paging(f, turn) {
+  const from = f.state.calls.length;
+  return () => { const pages = f.state.calls.slice(from).filter(call => call.method === "thread/items/list" && call.params.turnId === turn.id); return [pages.filter(call => !call.params.cursor).length, pages.length]; };
+}
+const long = (size, text = "") => [user("long order"), ...Array.from({ length: size - 2 }, (_, n) => command(`step ${n} ${text}`)), agent("long report")];
+
+test("the reads of one sync page a long final turn once; reads in another scope page it again", async t => {
+  const f = await member(t, 3);
+  const before = await f.read(ID, {});
+  await syncProject("P", {}, f.deps);
+  const turn = f.append(long(450)), synced = paging(f, turn);
+  const sync = await syncProject("P", { pageLimit: 100 }, f.deps);
+  assert.equal(sync.complete, true); assert.equal(sync.works[0].error, null); assert.equal(sync.works[0].reason.latest_turn_id, turn.id);
+  assert.deepEqual(synced(), [1, 5], "five reads reach the turn; its 450 items are paged once");
+
+  const pass = async scope => {
+    const events = []; let page = { cursor: before.cursor, has_more: true };
+    while (page.has_more) { page = await f.read(ID, { since: page.cursor, limit: 100, ...(scope ? { liveTurn: scope } : {}) }); events.push(...page.events.map(event => event.id)); }
+    return events;
+  };
+  const shared = paging(f, turn), once = await pass(new Map());
+  assert.deepEqual(once, [turn.id, ...turn.items.map(item => item.id)]); assert.deepEqual(shared(), [1, 5]);
+  const again = paging(f, turn);
+  assert.deepEqual(await pass(new Map()), once); assert.deepEqual(again(), [1, 5], "a new scope, as a new process has, pages the turn again");
+  const alone = paging(f, turn);
+  assert.deepEqual(await pass(), once); assert.deepEqual(alone(), [5, 25], "reads that share nothing page it on every read");
+});
+
+test("a running turn is paged on every read of a sync and of every poll, and once more when it ends", async t => {
+  const f = await member(t, 3);
+  await syncProject("P", {}, f.deps);
+  const turn = f.append(long(250), { status: "inProgress" }); f.state.status = "active";
+  const polls = [];
+  for (const end of [false, false, true, false]) {
+    if (end) f.complete([agent("done")]);
+    const count = paging(f, turn), poll = await syncProject("P", { pageLimit: 100 }, f.deps);
+    assert.equal(poll.complete, true); assert.equal(poll.works[0].error, null); polls.push(count()[0]);
+  }
+  assert.deepEqual(polls, [3 + 1, 1 + 1, 1, 0], "every read of a poll pages the running turn, its head check included; the poll that sees it end pages it once, and none after");
+});
+
+test("a scope keeps at most 32 MiB of final turns and pages again a turn it dropped", async () => {
+  const OTHER = "aaaaaaaa-aaaa-4aaa-8aaa-0000000000c3", a = cloud(), b = desktopCloudService(OTHER, { environment: ENV });
+  const rpc = { close() {}, request: (method, params) => (params?.threadId === OTHER ? b : a).rpc.request(method, params) };
+  const read = (id, options) => observeThread(id, options, { connect: async () => new DesktopCloudClient(rpc) });
+  const first = a.append(long(200, "x".repeat(100 * 1024))), second = b.append(long(200, "y".repeat(100 * 1024)));
+  const scope = new Map(), pagedFirst = paging(a, first), pagedSecond = paging(b, second);
+  for (const [id, turn] of [[ID, first], [ID, first], [`durable_${OTHER}`, second], [ID, first]]) assert.equal((await read(id, { limit: 1000, liveTurn: scope })).latest_turn_id, turn.id);
+  assert.deepEqual([pagedFirst()[0], pagedSecond()[0]], [2, 1], "a repeated read reuses the first turn; the second task's turn pushes it out, so it is paged again");
+});
+
+test("an item page of another turn, too long, with a bad row or a repeated or stalled cursor is rejected", async () => {
+  for (const fault of ["turn", "length", "row", "cursor", "empty"]) {
+    const f = cloud();
+    f.append(work(0)); f.append(Array.from({ length: 150 }, () => agent("step")));
+    const request = f.rpc.request;
+    f.rpc.request = async (method, params) => {
+      const page = await request(method, params);
+      if (method !== "thread/items/list" || params.turnId !== "turn-1") return page;
+      if (fault === "turn") page.data[0].turnId = "turn-0";
+      if (fault === "length") page.data.push(...page.data.slice(0, 1));
+      if (fault === "row") page.data[0].item = null;
+      if (fault === "cursor" && params.cursor) page.nextCursor = params.cursor;
+      if (fault === "empty" && page.nextCursor) page.data = [];
+      return page;
+    };
+    await assert.rejects(f.read(ID, { limit: 1000 }), { code: "DESKTOP_CLOUD_PROTOCOL_ERROR" }, `tail ${fault}`);
+    await assert.rejects(f.fullRead(ID, { limit: 1000 }), { code: "DESKTOP_CLOUD_PROTOCOL_ERROR" }, `history ${fault}`);
+  }
 });
 
 // The full reader is the reference: from the same history and the same reads,

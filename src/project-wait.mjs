@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { performance } from "node:perf_hooks";
-import { syncProject, projectWaitSignal, changedSinceBaseline } from "./project-sync.mjs";
+import { syncProject, projectWaitSignal, changedSinceBaseline, reviewedSignal } from "./project-sync.mjs";
 import { listManagedThreads } from "./project-index.mjs";
 import { getSupervisor } from "./supervision.mjs";
 import { readRecord, listRecords, writeRecord, removeRecord, withStoreLock } from "./store.mjs";
@@ -145,6 +145,15 @@ export async function withStopHook(data) {
 const entryWriter = (baseline, id) => baseline.works[id] && (baseline.works[id].sync_token ?? baseline.sync_token);
 
 const UNREAD_GRACE_MS = 60000;
+// How long after a review a running worker's new words wake the orchestrator.
+const PROGRESS_MS = 600000, DIGEST_CHARS = 600;
+// What a worker said since the last review, as the read from that review's
+// cursor delivers it. A final answer comes with its turn's end.
+const commentary = state => state.events.filter(event => event.type === "agentMessage" && event.phase !== "final_answer" && event.change !== "updated");
+const progressDigest = states => [...states].flatMap(([thread_id, state]) => {
+  const said = state.complete ? commentary(state) : [];
+  return said.length ? [{ thread_id, turn_id: said.at(-1).turn_id ?? null, messages: said.length, latest: String(said.at(-1).text ?? "").slice(-DIGEST_CHARS) }] : [];
+});
 const setStreaks = (observedAttention, unread) => { if (Object.keys(unread).length) observedAttention.unread = unread; else delete observedAttention.unread; };
 
 // A failed read says nothing about its member, and the next full read returns
@@ -171,7 +180,7 @@ function unreadStreaks(previous, observedAttention, failures, graceMs) {
   return { lasting, report };
 }
 
-function probeReason({ previous, membershipDigest, states }, observedAttention, lasting) {
+function probeReason({ previous, membershipDigest, states }, observedAttention, lasting, progressMs) {
   const baseline = previous?.wait_baseline;
   if (!baseline) return "initial_sync";
   if (baseline.membership_digest !== membershipDigest) return "membership_changed";
@@ -185,18 +194,30 @@ function probeReason({ previous, membershipDigest, states }, observedAttention, 
   }
   Object.assign(observedAttention, { baseline: baseline.sync_token, entries });
   for (const [id, state] of states) {
-    if (!state.complete) continue;
+    if (!state.complete && !state.backlog) continue;
     // A member never read in full before is new to the orchestrator once it is.
     const entry = baseline.works[id];
-    if (!entry || changedSinceBaseline(state, entry, observedAttention.flags[id] ?? entry.signal.attention ?? [])) return "work_changed";
+    // More than one batch since the review (a read that held, or one that read
+    // on from the stored cursor): each return reviews what it read, and the
+    // sync that follows it reads on.
+    if (state.backlog || state.restarted || !entry || changedSinceBaseline(state, entry, observedAttention.flags[id] ?? entry.signal.attention ?? [])) return "work_changed";
     observedAttention.flags[id] = projectWaitSignal(state.latest).attention; entries[id] = entryWriter(baseline, id);
+  }
+  // Mid-turn wakes are spaced from the last review, whichever command made it,
+  // so bounded waits rearmed sooner still come due.
+  if (Date.now() - (Date.parse(baseline.reviewed_at ?? "") || 0) >= progressMs) {
+    const complete = [...states].filter(([, state]) => state.complete);
+    if (complete.some(([, state]) => commentary(state).length)) return "work_progress";
+    if (complete.some(([id, state]) => reviewedSignal(state).unobserved_turn !== undefined
+      && reviewedSignal(state).unobserved_turn !== baseline.works[id]?.signal?.unobserved_turn)) return "work_unobserved";
   }
   return lasting ? "observation_failed" : null;
 }
 
-export async function waitProject(projectId, { timeoutMs, connection } = {}, dependencies = {}) {
-  if (typeof projectId !== "string" || !projectId.trim() || (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0))) {
-    throw failure("Use project wait --project ID [--timeout-ms N], with a nonnegative integer timeout.");
+export async function waitProject(projectId, { timeoutMs, connection, progressMs = PROGRESS_MS } = {}, dependencies = {}) {
+  const count = value => value === undefined || (Number.isSafeInteger(value) && value >= 0);
+  if (typeof projectId !== "string" || !projectId.trim() || !count(timeoutMs) || !count(progressMs)) {
+    throw failure("Use project wait --project ID [--timeout-ms N] [--progress-ms N], with nonnegative integers.");
   }
   const storage = dependencies.storage ?? {}, identity = dependencies.processIdentity ?? processIdentity;
   // Nobody is told the result once the command that started this wait is gone.
@@ -233,7 +254,7 @@ export async function waitProject(projectId, { timeoutMs, connection } = {}, dep
             && Number.isFinite(streak.since) && Number.isSafeInteger(streak.polls) && streak.polls > 0))) {
           throw failure("Invalid project wait attention observations. Inspect local state before restarting wait.");
         }
-        let savedAttention = JSON.stringify(observedAttention), failures = {}, reported = new Set(), unobserved = [];
+        let savedAttention = JSON.stringify(observedAttention), failures = {}, reported = new Set(), unobserved = [], progress = [];
         // A recovery that an earlier version recorded is no longer used.
         delete observedAttention.recovered;
         const deadline = timeoutMs === undefined ? Infinity : performance.now() + timeoutMs;
@@ -246,6 +267,7 @@ export async function waitProject(projectId, { timeoutMs, connection } = {}, dep
         // running turn hides questions and approvals, so no return vouches for them.
         const coverage = () => ({ unreadable: Object.entries(failures).map(([thread_id, error]) => ({ thread_id, error, reported: reported.has(thread_id) })),
           ...(unobserved.length ? { attention_unobserved: unobserved } : {}) });
+        const digest = () => progress.length ? { progress } : {};
         // A wait that outlives its session would hold the project lock forever and
         // publish changes nobody reads. An inspection error is not proof of exit.
         const ownerExited = async () => !!owner && await identity(owner.pid).then(start => start !== owner.process_start, () => false);
@@ -263,12 +285,13 @@ export async function waitProject(projectId, { timeoutMs, connection } = {}, dep
           const reading = syncProject(projectId, { connection }, { ...dependencies, waitProbe: snapshot => {
             // The launcher went during this read: leave the change to the next wait.
             if (launcherExited()) return null;
-            failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete ? [] : [[id, state.error]]));
+            failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete || state.backlog ? [] : [[id, state.error]]));
             unobserved = [...snapshot.states].flatMap(([thread_id, state]) => unobservedMember(thread_id, attentionCoverage(state.latest, state.member.connection), state.latest));
             const { lasting, report } = unreadStreaks(snapshot.previous, observedAttention, failures, graceMs);
             // A quiet poll adds no member, so this is also what the head holds.
             reported = report;
-            publishing = !!(reason = probeReason(snapshot, observedAttention, lasting));
+            publishing = !!(reason = probeReason(snapshot, observedAttention, lasting, progressMs));
+            progress = publishing ? progressDigest(snapshot.states) : [];
             return publishing ? report : null;
           } });
           const sync = await new Promise((resolve, reject) => { reading.then(resolve, reject); stopReading = () => resolve(null); });
@@ -284,7 +307,7 @@ export async function waitProject(projectId, { timeoutMs, connection } = {}, dep
           if (observed !== savedAttention) {
             await writeRecord("project-wait-attention", key, observedAttention, storage); savedAttention = observed;
           }
-          if (sync) return { project_id: projectId, changed: reason !== "observation_failed", timed_out: false, reason, ...coverage(), sync };
+          if (sync) return { project_id: projectId, changed: reason !== "observation_failed", timed_out: false, reason, ...coverage(), ...(sync.publication_conflict ? {} : digest()), sync };
           if (launcherExited()) continue;
           if (performance.now() >= deadline) return { project_id: projectId, changed: false, timed_out: true, reason: "timeout", ...coverage(), sync: null };
           const next = Math.min(deadline, performance.now() + pollMs);
