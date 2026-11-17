@@ -801,7 +801,7 @@ test("a full ledger reads live again once the history lists what it delivered", 
   assert.deepEqual(itemIds(rows, [turn]).sort(), [opening, ...burst, ...later, final].map(item => item.id).sort(), "every item arrives exactly once");
 });
 
-test("a live view that starts at a context compaction goes on reading the turn and delivers every item once", async t => {
+test("a live view cut short by a compaction past items no read delivered waits for the history, and every item arrives once and in order", async t => {
   const f = await member(t);
   f.append([user("first order"), agent("first report")]);
   await f.sync();
@@ -809,25 +809,44 @@ test("a live view that starts at a context compaction goes on reading the turn a
   f.progress(agent("before compaction"), command("completed"));
   rows.push(await f.row());
   assert.equal(rows.at(-1).attention_coverage, undefined, "read live before the compaction");
+  const skipped = f.progress(agent("made after that read"));
+  f.compact();
+  f.progress(agent("after compaction"));
+  rows.push(await f.row());
+  assert.equal(rows.at(-1).live_fallback, "view_unconfirmed", "the view no longer shows an item a read delivered, so it may skip one");
+  assert.equal(eventIds(rows.at(-1)).includes(skipped[0].id), false);
   f.catchUp();
+  const later = f.progress(agent("after the history caught up"));
   rows.push(await f.row());
-  assert.equal(rows.at(-1).attention_coverage, undefined, "the history listed what the live view delivered");
-  f.compact();
-  const after = f.progress(agent("after compaction"));
-  rows.push(await f.row());
-  assert.equal(rows.at(-1).live_fallback, undefined, "the history lists the opening, which the view no longer shows");
-  assert.equal(rows.at(-1).attention_coverage, undefined);
-  assert.deepEqual(eventIds(rows.at(-1)), after.map(item => item.id));
-  f.compact();
-  const later = f.progress(agent("after the second compaction"));
-  rows.push(await f.row());
-  assert.equal(rows.at(-1).attention_coverage, undefined, "a view sharing no item with the history goes on once the turn was matched");
-  assert.deepEqual(eventIds(rows.at(-1)), later.map(item => item.id));
+  assert.equal(rows.at(-1).live_fallback, undefined, "the history listed the items up to the view");
+  assert.deepEqual(eventIds(rows.at(-1)).slice(-1), later.map(item => item.id));
   const final = agent("Done.");
   f.complete([final]);
   rows.push(await f.row());
+  const order = f.state.turns.at(-1).items.map(item => item.id), delivered = itemIds(rows, [turn]);
+  assert.deepEqual([...delivered].sort(), [...order].sort(), "every item, the compactions too, arrives exactly once");
+  assert.deepEqual(delivered.filter(id => order.indexOf(id) >= 0), order.filter(id => delivered.includes(id)), "in the order the turn made them");
+});
+
+test("a question the live view would skip at a compaction is not answered out of order, and work tell is not blocked by it", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  await f.sync();
+  const { turn } = f.start("second order"), rows = [];
+  f.progress(agent("Reading the schema."));
+  rows.push(await f.row());
   assert.equal(rows.at(-1).live_fallback, undefined);
-  assert.deepEqual(itemIds(rows, [turn]).sort(), f.state.turns.at(-1).items.map(item => item.id).sort(), "every item, the compactions too, arrives exactly once");
+  const [asked] = f.progress(question("Which database should the service use?"));
+  f.compact();
+  const [answer] = f.progress(user("Use Postgres."));
+  rows.push(await f.row());
+  f.complete([agent("Used Postgres.")]);
+  rows.push(await f.row());
+  const delivered = itemIds(rows, [turn]);
+  assert.ok(delivered.indexOf(asked.id) < delivered.indexOf(answer.id), "the question arrives before its answer");
+  const head = (await f.sync()).works[0];
+  assert.notEqual(head.attention, "human"); assert.notEqual(head.group, "human");
+  assert.equal((await f.tell(ID, "Continue.")).delivery_status, "accepted");
 });
 
 test("a first live read after a compaction that shares no item with the history waits, without refusing the task", async t => {

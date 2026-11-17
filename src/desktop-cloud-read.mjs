@@ -207,11 +207,13 @@ const liveAttention = view => [...new Set([...(Array.isArray(view.status?.active
 // the history lists it and the history cursor passes it, so the ledger holds
 // what the history lags behind, not the turn. The history cursor stays as the
 // history proves it, so a read without the live view still validates. Each item is delivered once, whichever view lists it
-// first; a changed one is an update. A turn's view is used once it has shown
-// an item the history lists, which proves both name the same items; the ledger
-// then stays for the rest of the turn, also when empty, because a later view
-// cut short by a compaction may share no item with a lagging history. Until
-// then a read waits (`view_unconfirmed`). Completed history that does not list
+// first; a changed one is an update. A view is used only when it shows an item
+// the history lists or a read delivered, or nothing new. That item proves both
+// name the same items, and the view, which runs from some point of the turn to
+// its end, then holds every item after what was delivered. A view cut short by a
+// compaction past items no read delivered would deliver the later items first,
+// and an answer read before its question leaves the question open, so such a
+// read waits (`view_unconfirmed`) for the history to list the items between. Completed history that does not list
 // an item the live view delivered refuses live reads of the task from then on:
 // the cursor carries the refusal, and `live_mismatch` marks the read that found it. So does a live view
 // whose task reports a reviewer other than the auto reviewer. `live_fallback`
@@ -246,7 +248,7 @@ async function withLiveTurn(client, threadId, turns, s, old, result, { liveTurn:
     if (view && !view.fallback && view.reviewer !== AUTO_REVIEW) refused = "reviewer";
     if (view?.fallback) stopped = view.fallback;
     else if (!fresh) stopped = "unavailable";
-    else if (!shared && turnId !== running.id) stopped = "view_unconfirmed";
+    else if (!shared && fresh.length && !fresh.some(({ event }) => delivered.has(event.id))) stopped = "view_unconfirmed";
     else {
       const sent = changed.slice(0, Math.max(0, limit - events.length));
       events = [...events, ...sent.map(({ event }) => ({ ...trim(event), change: delivered.has(event.id) ? "updated" : "added" }))];
@@ -258,7 +260,7 @@ async function withLiveTurn(client, threadId, turns, s, old, result, { liveTurn:
   }
   const before = old?.v === 3 ? old.live?.attention ?? [] : [], requests = attention.filter(flag => flag.startsWith(REQUEST)).map(flag => flag.slice(REQUEST.length));
   if (requests.length) fields.pending_requests = requests;
-  return { refused, ledger: turnId !== null ? { turn: turnId, items: [...delivered].map(([id, hash]) => ({ id, hash })), attention } : null,
+  return { refused, ledger: turnId !== null && (delivered.size || attention.length) ? { turn: turnId, items: [...delivered].map(([id, hash]) => ({ id, hash })), attention } : null,
     fields: { ...fields, ...liveFallback(client, fields.live_turn_id ? null : refused, stopped), events, has_more: hasMore, running_commands: [...result.running_commands, ...commands],
       attention: Array.isArray(result.attention) ? [...new Set([...result.attention, ...attention])] : result.attention,
       changed: !old || events.length > 0 || old.state !== result.cursor.state || JSON.stringify(before) !== JSON.stringify(attention) } };
