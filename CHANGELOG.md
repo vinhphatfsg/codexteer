@@ -9,7 +9,7 @@
 `work tell`は、担当がsyncの後に少しでも進むと`WORK_TELL_STALE_SYNC`で拒否していました。担当は数分ごとに進むため、オーケストレーターは実行中の担当をほとんどステアリングできませんでした。idleの担当には`--new-turn`が必要で、送信の種類を呼び出し側が当てる必要もありました。
 
 - 担当自身の進捗とターンの終了では止めずに送り、receiptの`unseen_since_basis`（syncの後のイベント数と、担当の最新の発言を2000文字まで）で返します。送った後に確かめてください。
-- codexteerが送っていない入力（ユーザーや別のセッションの発言、codexteerが開いていないturn）がsyncの後にあれば、`WORK_TELL_FOREIGN_INPUT`で送りません。`error.events`にその入力が入ります。`WORK_TELL_STALE_SYNC`は返さなくなりました。codexteerが送った入力かどうかは、本文のsha256を送信記録と照合して決めます。
+- codexteerが送っていない入力（ユーザーや別のセッションの発言、codexteerが開いていないturn）がsyncの後にあれば、`WORK_TELL_FOREIGN_INPUT`で送りません。`error.events`には最初に見つかったその入力が入ります（codexteerが開いていないturnなら、そのturn）。`WORK_TELL_STALE_SYNC`は返さなくなりました。codexteerが送った入力かどうかは、本文のsha256を送信記録と照合して決めます。
 - 質問・承認待ち、監督の停止・一時停止、配送が不明な以前の指示、接続の不一致、不完全なsyncでは、従来どおり送りません。
 - `--new-turn`がなければ、送信の種類を担当の状態から選びます。実行中ならsteer、idleか終了済みなら新しいturnです。receiptは`delivery_action`と`delivery_action_source`（`auto`か`requested`）を持ちます。
 - 送信直前の読み取りでターンが終わっていた・始まっていたと分かり、何も送らずに拒否されたときは、もう一方の種類で1回だけ送り直します。送り直しも同じ確認を全て通り、receiptは`retried_from`を持ちます。配送が不明な指示と`--new-turn`の指定は送り直しません。
