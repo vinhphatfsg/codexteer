@@ -14,6 +14,7 @@
 - `--new-turn`がなければ、送信の種類を担当の状態から選びます。実行中ならsteer、idleか終了済みなら新しいturnです。receiptは`delivery_action`と`delivery_action_source`（`auto`か`requested`）を持ちます。
 - 送信直前の読み取りでターンが終わっていた・始まっていたと分かり、何も送らずに拒否されたときは、もう一方の種類で1回だけ送り直します。送り直しも同じ確認を全て通り、receiptは`retried_from`を持ちます。配送が不明な指示と`--new-turn`の指定は送り直しません。
 - 同じ指示を`--new-turn`の有無を変えて送っても、届くのは1回です。
+- syncの後に出て、すでに回答された質問（`answered`・`resolved`）では、`WORK_TELL_HUMAN_REQUIRED`で拒否しなくなりました。`project sync`と同じ判定です。これまでは次のsyncまで、質問が残っているとして拒否していました。
 - project全体を`--connection shared`で扱っていても、Desktop Cloudの担当へ、その担当の接続で送ります。担当と矛盾する接続は従来どおり拒否します。
 - `WORK_TELL_SYNC_INCOMPLETE`は`reason`（`no_sync`・`basis_missing`・`target_absent`・`target_incomplete`・`history_gap`）と`target_error`を持ち、次に実行する`project sync`を示します。`work tell`の拒否の詳細は、`--json`でもテキストでも表示します。
 - `send --based-on`も同じ規則で確かめます。担当自身のターンの終了では拒否せず、送っていない入力か、入力の書き換え・削除で拒否します。

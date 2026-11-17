@@ -67,7 +67,7 @@ async function otherWork(threadId, member, head, storage) {
 }
 
 function assertNoHumanAttention(observation) {
-  const questions = (observation.events ?? []).some(event => Array.isArray(event.questions) && event.questions.length > 0);
+  const questions = (observation.events ?? []).some(event => Array.isArray(event.questions) && event.questions.length > 0 && !["answered", "resolved"].includes(event.status));
   if (!Array.isArray(observation.attention)) throw fail("The backend cannot prove that no question or approval is pending.", "WORK_TELL_ATTENTION_UNKNOWN");
   if (observation.attention.length || questions) throw fail("The task is waiting for a human question or approval. work tell cannot answer it.", "WORK_TELL_HUMAN_REQUIRED", { attention: observation.attention, events: observation.events ?? [] });
 }

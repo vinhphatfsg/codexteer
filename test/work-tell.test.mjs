@@ -335,3 +335,11 @@ test("an instruction is delivered once whether it was sent as a steer, an automa
     metadata: { finding_id: legacy.id, finding_revision: 1 }, delivery_status: "accepted", sent: true }, f);
   await assert.rejects(tellWork(THREAD, "continue", {}, { storage: f, read: f.read, send: async () => assert.fail("dispatch") }), { code: "DUPLICATE_INTERVENTION" });
 });
+
+test("a question asked and answered after the sync does not stop the tell", async t => {
+  const f = await fixture(t); let dispatches = 0;
+  f.current = task([{ id: "ask", type: "agentMessage", text: "Which one?", questions: ["A or B?"], status: "answered" }, { id: "agent-after", type: "agentMessage", text: "Went with A." }]);
+  const outcome = await tellWork(THREAD, "Keep A.", {}, { storage: f, read: f.read, send: async (id, wire, options) => { dispatches++; return delivering(f)(id, wire, options); } }).then(r => r.delivery_status, e => e.code);
+  assert.equal(outcome, "accepted", "the question was already answered");
+  assert.equal(dispatches, 1);
+});
