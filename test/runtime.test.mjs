@@ -108,3 +108,28 @@ desktopRuntimeTest("concurrent recovery cannot replace a newly acquired lease", 
   assert.equal(current.pid, process.pid);
   await winners[0].value.release();
 });
+
+desktopRuntimeTest("a long-lived runtime writes its state again, so a removed state file comes back", async t => {
+  const { home, paths } = await setup(t);
+  const lease = await claimRuntime(home, {}, { refreshMs: 20 });
+  t.after(() => lease.release());
+  await lease.update({ server_pid: process.pid, desktop_connected: true });
+  const { instance } = await readRuntime(paths);
+  await rm(paths.state);
+  await new Promise(resolve => setTimeout(resolve, 120));
+  const state = await readRuntime(paths);
+  assert.equal(state.instance, instance);
+  assert.equal(state.desktop_connected, true);
+});
+
+desktopRuntimeTest("a failed state write does not stop the writes after it", async t => {
+  const { home, paths } = await setup(t);
+  const lease = await claimRuntime(home, {}, { refreshMs: 60 * 60 * 1000 });
+  t.after(() => lease.release());
+  await chmod(paths.lease, 0o500);
+  await assert.rejects(lease.update({ desktop_connected: true }));
+  await chmod(paths.lease, 0o700);
+  await lease.update({ server_pid: process.pid });
+  const state = await readRuntime(paths);
+  assert.equal(state.server_pid, process.pid); assert.equal(state.desktop_connected, true);
+});

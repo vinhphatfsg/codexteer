@@ -5,6 +5,9 @@ import path from "node:path";
 import { inspectAppServerSocket } from "./socket-endpoint.mjs";
 
 const runtimeFailure = (message, code) => Object.assign(new Error(message), { code });
+// macOS removes files in /tmp that nothing touched for three days (com.apple.tmp_cleaner,
+// daily at midnight), so a runtime that runs for days rewrites its state well within that.
+const REFRESH_MS = 60 * 60 * 1000;
 
 export function codexHome() {
   return path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
@@ -86,7 +89,7 @@ export async function discoverRuntime(home) {
   }
 }
 
-export async function claimRuntime(home, details = {}) {
+export async function claimRuntime(home, details = {}, { refreshMs = REFRESH_MS } = {}) {
   const paths = await runtimePaths(home);
   for (const dir of [paths.root, paths.directory]) {
     await mkdir(dir, { mode: 0o700 }).catch(error => { if (error.code !== "EEXIST") throw error; });
@@ -113,7 +116,7 @@ export async function claimRuntime(home, details = {}) {
   const update = patch => {
     state = { ...state, ...patch };
     const snapshot = JSON.stringify(state);
-    writes = writes.then(async () => {
+    writes = writes.catch(() => {}).then(async () => {
       const temp = `${paths.state}.${state.instance}.tmp`;
       await writeFile(temp, snapshot, { mode: 0o600 });
       await rename(temp, paths.state);
@@ -121,9 +124,12 @@ export async function claimRuntime(home, details = {}) {
     return writes;
   };
   await update({});
+  const refresh = setInterval(() => update({}).catch(() => {}), refreshMs);
+  refresh.unref();
   return {
     paths, update,
     async release() {
+      clearInterval(refresh);
       await writes.catch(() => {});
       const current = await readRuntime(paths).catch(() => null);
       if (current?.instance === state.instance) await rm(paths.lease, { recursive: true, force: true });
