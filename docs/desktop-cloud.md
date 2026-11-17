@@ -35,7 +35,7 @@ codexteerは、自分が開始した実行中のターンを、別の接続で�
   - `not_codexteer_turn`：実行中のターンを、codexteerが開始していません。resumeしません。
   - `not_auto_review`：実行中のターンが、自動レビュー以外か不明のレビュー担当で始まりました。resumeしません。resumeの結果のレビュー担当が自動レビューでなかったときも、この値です。その読み取りは読めた項目を返し、以後そのタスクはresumeせず履歴だけで読みます。
   - `unavailable`：resumeが失敗した、10秒以内に終わらなかった、resumeした時点でターンが終わっていた、resumeの結果に形の崩れた項目か同じIDの項目があった、のいずれかです。次の読み取りでまたresumeします。
-  - `ledger_full`：実行中に読んだ項目が1ターンで512に達しました。512を超える項目を見た読み取りは、古い順に512個までを返し、残りは履歴に任せます。以後、そのターンが終わるまでresumeしません。ターンが終わると、まだ返していない項目が1回ずつ返ります。次のターンはまた読みます。
+  - `ledger_full`：実行中に読んだ項目のうち、履歴にまだ載っていないものが512に達しました。履歴は実行中のターンの項目を遅れて載せます。載った項目はcursorから外れるため、512は1ターンの項目数ではなく、履歴の遅れの分です。512を超える項目を見た読み取りは、古い順に512個までを返し、残りは履歴に任せます。以後、履歴が返した項目を載せて512を下回るまでresumeしません。その間とターンが終わった後に、まだ返していない項目が履歴から1回ずつ返ります。次のターンはまた読みます。
   - `view_mismatch`：resumeで得たターンに、履歴が並べている項目（実行中は開始時の指示）のIDがありませんでした。その結果は`live_mismatch`（`turn_id`・`absent`）を持ち、resumeで得た項目は返しません。以後そのタスクはresumeせず履歴だけで読みます。
   - `mismatch`：ターンが終わった後の履歴に、実行中に読んだ項目のIDがありませんでした。その結果は`live_mismatch`（`turn_id`・`unlisted`）を持ち、以後そのタスクはresumeせず履歴だけで読みます。
 - resumeの結果から決まった`not_auto_review`と、`view_mismatch`・`mismatch`はcursorに残ります。そのcursorから読む`read`・`project sync`・`project wait`は、ターンが実行中でなくても`live_fallback`を返し続け、後のターンもresumeしません。`--since`なしの`read`はcursorを持たないため、またresumeします。`project wait`は、担当が`view_mismatch`・`mismatch`になった照会で1回返り（`reason:"work_changed"`）、以後の照会ではresumeしません。
@@ -49,7 +49,7 @@ codexteerは、自分が開始した実行中のターンを、別の接続で�
 - `work tell`は、送信直前に実行中のターンを読めなかったとき（`live_fallback`のどの値でも。最初の確認では読めていた場合を含みます）、設定が無効のときと同じく送信の可否を変えず、receiptに`attention_coverage`を付けます。
 - syncの後に実行中のターンが新しい項目を出していても、localの担当と同じく送ります。その項目は`unseen_since_basis`で返り、次の`project sync`も1回ずつ返します。
 - `doctor`は、この設定が有効なら`running_turn_attention:"codexteer_turns"`を、無効なら`"unobserved"`を返します。
-- cursorには、実行中に読んだ項目のIDと内容のhashが入ります。512個で約40 KBです。設定を無効にしても、そのcursorは続きから読めます。0.24.x以前では読めません。`not_auto_review`を持つcursorは0.25.x以前では読めません（[CHANGELOG](../CHANGELOG.md)を参照）。
+- cursorには、実行中に読んだ項目のうち履歴にまだ載っていないもののIDと内容のhashが入ります。512個で約40 KBです。設定を無効にしても、そのcursorは続きから読めます。0.24.x以前では読めません。`not_auto_review`を持つcursorは0.25.x以前では読めません（[CHANGELOG](../CHANGELOG.md)を参照）。
 
 ## スレッドの`status`と`execution`
 

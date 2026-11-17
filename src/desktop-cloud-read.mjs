@@ -195,10 +195,12 @@ function liveEvents(view, turn, s) {
 const liveAttention = view => [...new Set([...(Array.isArray(view.status?.activeFlags) ? view.status.activeFlags.filter(flag => typeof flag === "string") : []),
   ...view.requests.map(method => REQUEST + method)])].sort();
 
-// Desktop Cloud lists a running turn's items only when it ends. The cursor's
-// ledger records what a read delivered from the live view of that turn, so the
-// history cursor stays as the history proves it and a read without the live
-// view still validates. Each item is delivered once, whichever view lists it
+// Desktop Cloud lists a running turn's items late, and all of them only when it
+// ends. The cursor's ledger records what a read delivered from the live view of
+// that turn and the history has not listed yet: an item leaves the ledger once
+// the history lists it and the history cursor passes it, so the ledger holds
+// what the history lags behind, not the turn. The history cursor stays as the
+// history proves it, so a read without the live view still validates. Each item is delivered once, whichever view lists it
 // first; a changed one is an update. Completed history that does not list an
 // item the live view delivered, or a live view that lacks an item the history
 // lists, refuses live reads of the task from then on: the cursor carries the

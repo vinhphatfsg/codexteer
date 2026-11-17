@@ -111,7 +111,8 @@ async function openDesktopCloud(options, { credentials, Socket }) {
   } finally { if (auth) auth.token = ""; }
 }
 // The task as a resuming client sees it, which includes the items of a running
-// turn that the history lists only when the turn ends. A separate connection
+// turn that the history has not listed yet: the history lists a running turn's
+// items late, and lists them all only when the turn ends. A separate connection
 // resumes the task, records every server request it is sent, never answers
 // one and closes. Returns the thread status, its newest turn, the requests'
 // methods and the approvals reviewer the task reported.
