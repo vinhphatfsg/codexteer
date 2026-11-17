@@ -145,7 +145,7 @@ function takeOptions(args, name) {
 
 function routingThread(probe) {
   const valued = new Set(["--backend", "--source", "--kind", "--evidence", "--based-on", "--supersedes", "--expires-at", "--checkpoint", "--finding",
-    "--wait-ms", "--limit", "--max-chars", "--since", "--until", "--timeout-ms", "--poll-ms", "--notify", "--settle-ms", "--max-hold-ms",
+    "--wait-ms", "--limit", "--max-chars", "--since", "--until", "--timeout-ms", "--progress-ms", "--poll-ms", "--notify", "--settle-ms", "--max-hold-ms",
     "--owner", "--agent", "--status", "--note", "--by", "--reason", "--condition", "--ttl-ms", "--token", "--cwd", "--exec-backend", "--shell", "--key", "--title", "--rating", "--path", "--exclude", "--artifact"]);
   const positional = [];
   for (let i = 0; i < probe.length; i++) {

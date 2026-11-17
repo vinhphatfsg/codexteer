@@ -101,11 +101,11 @@ export async function mainCloud(argv) {
     const action = args.shift();
     if (action === "guard" || action === "wait") {
       if (supervisor) throw failure("A bound supervisor cannot wait for or guard an entire project.", "SUPERVISOR_CONTROL_FORBIDDEN");
-      const project = option(args, "--project"), timeout = action === "wait" ? option(args, "--timeout-ms") : undefined;
+      const project = option(args, "--project"), timeout = action === "wait" ? option(args, "--timeout-ms") : undefined, progress = action === "wait" ? option(args, "--progress-ms") : undefined;
       const status = action === "guard" && flag(args, "--status"); exact(args, 0);
       if (status) { output("project.guard.status", await projectGuardStatus(project)); return; }
       if (action === "guard") { console.log(JSON.stringify(await guardProject(project))); return; }
-      const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout), connection }, {
+      const data = await withStopHook(await waitProject(project, { timeoutMs: timeout === undefined ? undefined : Number(timeout), ...(progress === undefined ? {} : { progressMs: Number(progress) }), connection }, {
         read: (threadId, options) => observeThread(threadId, options, observationConnection(options.connection)),
       }));
       output("project.wait", data); if (["observation_failed", "owner_exited", "launcher_exited"].includes(data.reason)) process.exitCode = 1; return;
