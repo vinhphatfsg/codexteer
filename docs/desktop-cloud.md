@@ -31,20 +31,22 @@ codexteerは、自分が開始した実行中のターンを、別の接続で�
 - 読めた項目は、履歴が返すものと同じ形のイベントとして返ります。ターン中の質問は、ターンの実行中に`read`で読め、`project wait`が返します。その読み取りの結果は`live_turn_id`（読んだターンのID）を持ち、`attention_coverage`は付きません。読んだ項目は、ターンが終わって履歴に現れても、内容が同じなら再び返しません。内容が変わった項目は`change:"updated"`で返ります。
 - resumeした接続に届いたサーバー要求（承認や入力の要求）は、`attention`に`pendingRequest:<メソッド名>`として加わり、結果の`pending_requests`にメソッド名が並びます。担当行は「対応が必要」になり、`work tell`は`WORK_TELL_HUMAN_REQUIRED`で送りません。回答はCodexの画面で行います。次の読み取りでresumeできなくても、最後に見た要求を残します。同じターンを読めて要求がなくなったとき、またはターンが終わったときに外します。
 - resumeが失敗するか10秒以内に終わらない場合、その担当は従来どおり履歴だけで読み、`attention_coverage:"running_turn_unobserved"`が付きます。読めない担当にはなりません。
-- 実行中のターンを読めずに履歴だけで読んだ結果は、理由を`live_fallback`で返します。`project sync`の担当行（詳細を省いた行を含みます）と、`attention_unobserved`のその担当も同じ値を持ちます。値は次の6つです。
+- 実行中のターンを読めずに履歴だけで読んだ結果は、理由を`live_fallback`で返します。`project sync`の担当行（詳細を省いた行を含みます）と、`attention_unobserved`のその担当も同じ値を持ちます。値は次の6つです（0.25.xの`view_mismatch`は返さなくなりました）。
   - `not_codexteer_turn`：実行中のターンを、codexteerが開始していません。resumeしません。
   - `not_auto_review`：実行中のターンが、自動レビュー以外か不明のレビュー担当で始まりました。resumeしません。resumeの結果のレビュー担当が自動レビューでなかったときも、この値です。その読み取りは読めた項目を返し、以後そのタスクはresumeせず履歴だけで読みます。
   - `unavailable`：resumeが失敗した、10秒以内に終わらなかった、resumeした時点でターンが終わっていた、resumeの結果に形の崩れた項目か同じIDの項目があった、のいずれかです。次の読み取りでまたresumeします。
   - `ledger_full`：実行中に読んだ項目のうち、履歴にまだ載っていないものが512に達しました。履歴は実行中のターンの項目を遅れて載せます。載った項目はcursorから外れるため、512は1ターンの項目数ではなく、履歴の遅れの分です。512を超える項目を見た読み取りは、古い順に512個までを返し、残りは履歴に任せます。以後、履歴が返した項目を載せて512を下回るまでresumeしません。その間とターンが終わった後に、まだ返していない項目が履歴から1回ずつ返ります。次のターンはまた読みます。
-  - `view_mismatch`：resumeで得たターンに、履歴が並べている項目（実行中は開始時の指示）のIDがありませんでした。その結果は`live_mismatch`（`turn_id`・`absent`）を持ち、resumeで得た項目は返しません。以後そのタスクはresumeせず履歴だけで読みます。
+  - `view_unconfirmed`：resumeで得たターンに、履歴が並べている項目が1つもありませんでした。そのターンのresumeの結果をまだ一度も使っていないときだけの値です。resumeで得た項目は返さず、次の読み取りでまたresumeします。
   - `mismatch`：ターンが終わった後の履歴に、実行中に読んだ項目のIDがありませんでした。その結果は`live_mismatch`（`turn_id`・`unlisted`）を持ち、以後そのタスクはresumeせず履歴だけで読みます。
-- resumeの結果から決まった`not_auto_review`と、`view_mismatch`・`mismatch`はcursorに残ります。そのcursorから読む`read`・`project sync`・`project wait`は、ターンが実行中でなくても`live_fallback`を返し続け、後のターンもresumeしません。`--since`なしの`read`はcursorを持たないため、またresumeします。`project wait`は、担当が`view_mismatch`・`mismatch`になった照会で1回返り（`reason:"work_changed"`）、以後の照会ではresumeしません。
+- resumeの結果から決まった`not_auto_review`と`mismatch`はcursorに残ります。そのcursorから読む`read`・`project sync`・`project wait`は、ターンが実行中でなくても`live_fallback`を返し続け、後のターンもresumeしません。`--since`なしの`read`はcursorを持たないため、またresumeします。`project wait`は、担当が`mismatch`になった照会で1回返り（`reason:"work_changed"`）、以後の照会ではresumeしません。0.25.xと0.26.0の未公開版が`view_mismatch`を残したcursorは、その拒否を捨て、またresumeします。
+- resumeの結果は、ターンの全体ではなく最近の一部です。文脈の圧縮（`contextCompaction`）をまたぐと、それより前の項目を含まないことがあります。このため、履歴が並べている項目がresumeの結果になくても、食い違いとは扱いません。あるターンでresumeの結果を一度使うと、そのターンが終わるまで、履歴と重なる項目がない結果も使います。
+- resumeの結果の`contextCompaction`は、履歴と別のIDを持ちます。実行中には返さず、履歴が並べたときに返します。
 - 履歴が並べている項目は、IDだけでresumeの結果と照合します。その項目は常に履歴から返し、resumeの結果からは返さないため、内容の違いは結果を変えません。resumeで読んだ項目は、ターンが終わったときに履歴の同じIDの項目と内容を照合します。
 - 中断・失敗で終わったターンの履歴は、実行中に読んだ項目（終わらなかったコマンドなど）を並べないことがあります。そのターンは`mismatch`になります。履歴にある項目のうち、実行中に同じ内容で返したものは再び返さず、残りを全て返します。履歴にない項目は、実行中に返した1回だけです。読み飛ばす項目も、同じ内容で2回返る項目もありません。以後そのタスクは履歴だけで読むため、後のターンの質問はターンが終わってから返ります。
 - `work tell`のresume：`work tell`は実行中のターンを2回読みます。最初の確認で1回、送信の直前にもう1回、別のresumeで読み直します。最初の確認の後に出た質問・サーバー要求は`WORK_TELL_HUMAN_REQUIRED`、新しい項目は`WORK_TELL_STALE_SYNC`になり、送りません。質問を見落とす間は、localの担当と同じく、送信直前の読み取りから送信までです。
   - 実行中のターンへ送った`work tell`、送信直前の確認で拒否した`work tell`：resumeは2回です。
-  - 最初の確認で拒否した`work tell`、最初の確認で`view_mismatch`になった`work tell`：1回です。
-  - 実行中のターンがない担当への`work tell`、sync結果の質問やcursorの不一致で拒否した`work tell`、resumeしないターン（`not_codexteer_turn`・`not_auto_review`・`ledger_full`）の担当への`work tell`、cursorが`view_mismatch`・`mismatch`・`not_auto_review`を持つ担当への`work tell`：0回です。`--new-turn`は、ターンを始める直前にレビュー担当を読むため、送信の接続でidleのタスクを1回resumeします。
+  - 最初の確認で拒否した`work tell`：1回です。
+  - 実行中のターンがない担当への`work tell`、sync結果の質問やcursorの不一致で拒否した`work tell`、resumeしないターン（`not_codexteer_turn`・`not_auto_review`・`ledger_full`）の担当への`work tell`、cursorが`mismatch`・`not_auto_review`を持つ担当への`work tell`：0回です。`--new-turn`は、ターンを始める直前にレビュー担当を読むため、送信の接続でidleのタスクを1回resumeします。
   - 送信直前の読み取りは、担当のcursorも履歴も変えません。そこで見た項目は、次の`project sync`が1回ずつ返します。
 - `work tell`は、送信直前に実行中のターンを読めなかったとき（`live_fallback`のどの値でも。最初の確認では読めていた場合を含みます）、設定が無効のときと同じく送信の可否を変えず、receiptに`attention_coverage`を付けます。
 - syncの後に実行中のターンが新しい項目を出していれば、localの担当と同じく`WORK_TELL_STALE_SYNC`で送りません。syncからやり直してください。項目を出し続けるターンには、送れる機会が少なくなります。

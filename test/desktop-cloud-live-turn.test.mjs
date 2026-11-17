@@ -7,6 +7,7 @@ import { writeRecord } from "../src/store.mjs";
 import { desktopCloudService } from "../test-support/desktop-cloud-service.mjs";
 import { DesktopCloudClient, connectDesktopCloud, startedTurns } from "../src/desktop-cloud-api.mjs";
 import { observeThread } from "../src/observe.mjs";
+import { encodeCursor, parseCursor } from "../src/cursor.mjs";
 import { getManagedThread, registerManagedThread } from "../src/project-index.mjs";
 import { registerSupervisor } from "../src/supervision.mjs";
 import { syncProject } from "../src/project-sync.mjs";
@@ -248,10 +249,13 @@ test("a live view whose item ids differ from the history fails closed to the his
   const first = await opening.read(ID, {});
   opening.start(); opening.progress(agent("Working."));
   opening.state.live.itemId = id => `live-${id}`;
-  const refused = await opening.read(ID, { since: first.cursor });
-  assert.equal(refused.events.length, 2, "the opening message has another id in the live view, so the snapshot is not used");
-  assert.equal(refused.attention_coverage, UNOBSERVED); assert.equal(refused.live_fallback, "view_mismatch");
-  assert.deepEqual(refused.live_mismatch, { turn_id: opening.state.turns.at(-1).id, absent: 1 });
+  const unmatched = await opening.read(ID, { since: first.cursor });
+  assert.equal(unmatched.events.length, 2, "the view shows no item the history lists, so the snapshot is not used");
+  assert.equal(unmatched.attention_coverage, UNOBSERVED); assert.equal(unmatched.live_fallback, "view_unconfirmed");
+  assert.equal(unmatched.live_mismatch, undefined);
+  opening.state.live.itemId = id => id;
+  const matched = await opening.read(ID, { since: unmatched.cursor });
+  assert.equal(matched.attention_coverage, undefined, "an unmatched view does not refuse the task");
 
   const f = await member(t);
   f.append([user("first order"), agent("first report")]);
@@ -297,39 +301,17 @@ test("the member row says why a member went back to the history view after a mis
   assert.equal(status.live_fallback, undefined, "a read without a cursor does not know the refusal");
 });
 
-test("a live view that lacks an item the history lists refuses live reads of the task, once and visibly", async t => {
+test("a cursor an earlier version refused because its live view lacked a listed item is read live again", async t => {
   const f = await member(t);
   f.append([user("first order"), agent("first report")]);
-  assert.equal((await f.wait()).reason, "initial_sync");
-  const { turn } = f.start(), note = agent("Working.");
-  f.progress(note);
-  assert.deepEqual(eventIds(await f.row()).slice(2), [note.id], "the live view delivers the item");
-  f.state.live.itemId = id => `live-${id}`;
-  let resumes = f.resumes();
-  const returned = await f.wait(), row = returned.sync.works[0];
-  assert.equal(returned.reason, "work_changed", "the orchestrator is told once that the member is no longer read live");
-  assert.equal(row.live_fallback, "view_mismatch"); assert.equal(row.attention_coverage, UNOBSERVED); assert.equal(row.complete, true);
-  assert.deepEqual(returned.attention_unobserved, FALLBACK(ID, "view_mismatch"));
-  assert.equal(eventIds(row).some(id => id.startsWith("live-")), false, "nothing of the refused view is delivered");
-  assert.equal(f.resumes() - resumes, 1);
-
-  resumes = f.resumes();
-  f.state.live.itemId = id => id;
-  for (let n = 0; n < 3; n++) {
-    const quiet = await f.wait();
-    assert.equal(quiet.timed_out, true); assert.deepEqual(quiet.attention_unobserved, FALLBACK(ID, "view_mismatch"));
-  }
-  assert.equal((await f.row()).live_fallback, "view_mismatch");
-  assert.equal(f.resumes(), resumes, "later polls and syncs do not resume the task");
-
-  const final = agent("Done.");
-  f.complete([final]);
-  const ended = await f.wait(), endedRow = ended.sync.works[0];
-  assert.deepEqual(eventIds(endedRow), [turn, final.id], "what the live view delivered before the refusal is not delivered again");
-  assert.equal(endedRow.live_fallback, "view_mismatch");
-  f.start("third order");
-  resumes = f.resumes();
-  assert.equal((await f.row()).attention_coverage, UNOBSERVED); assert.equal(f.resumes(), resumes);
+  const base = await f.read(ID, {});
+  f.start();
+  const note = f.progress(agent("Working."));
+  const claim = parseCursor(base.cursor, ID), refused = encodeCursor({ ...claim, live_refused: "view" }, ID);
+  const read = await f.read(ID, { since: refused, liveTurn: new Map() });
+  assert.equal(read.live_fallback, undefined); assert.equal(read.attention_coverage, undefined);
+  assert.deepEqual(read.events.map(event => event.id).slice(-1), note.map(item => item.id));
+  assert.equal(parseCursor(read.cursor, ID).live_refused, undefined, "the cursor drops the refusal");
 });
 
 test("a listed item whose content differs in the live view is read from the history, and the live read goes on", async t => {
@@ -364,15 +346,15 @@ test("an item whose content differs between the live view and the ended history 
   assert.equal(ended.events[1].text, "Working."); assert.equal(ended.live_mismatch, undefined); assert.equal(ended.live_fallback, undefined);
 });
 
-test("work tell that is first to meet a refused live view sends as on an unread turn, and its receipt says so", async t => {
+test("work tell that meets a live view it cannot match sends as on an unread turn, and its receipt says so", async t => {
   const f = await member(t);
   f.append([user("first order"), agent("first report")]);
-  f.start(); f.progress(agent("Working."));
-  await f.sync();
   f.state.live.itemId = id => `live-${id}`;
+  f.start(); f.progress(agent("Working."));
+  assert.equal((await f.row()).live_fallback, "view_unconfirmed");
   const resumes = f.resumes(), receipt = await f.tell(ID, "Also update the changelog.");
   assert.equal(receipt.delivery_status, "accepted"); assert.equal(receipt.attention_coverage, UNOBSERVED);
-  assert.equal(f.resumes() - resumes, 1, "the refusal found by the first read holds for the check before sending");
+  assert.equal(f.resumes() - resumes, 2, "an unmatched view refuses nothing, so the check before sending reads again");
 });
 
 test("a turn's live items fill 512 places, and the reads after that neither resume nor deliver until the turn ends", async t => {
@@ -520,7 +502,6 @@ test("work tell does not steer a turn that ends after its first read", async t =
 
 test("work tell that cannot take its second live view sends as on an unread turn, and its receipt says so", async t => {
   const blind = { error: f => { f.state.live.failure = "error"; }, timeout: f => { f.state.live.failure = "timeout"; },
-    view: f => { f.state.live.itemId = id => `live-${id}`; },
     ended: f => { f.state.live.beforeResume = () => { f.complete([agent("Finished.")]); f.state.live.beforeResume = null; }; } };
   for (const [name, change] of Object.entries(blind)) {
     const f = await member(t);
@@ -797,4 +778,56 @@ test("a full ledger reads live again once the history lists what it delivered", 
   f.complete([final]);
   rows.push(await row());
   assert.deepEqual(itemIds(rows, [turn]).sort(), [opening, ...burst, ...later, final].map(item => item.id).sort(), "every item arrives exactly once");
+});
+
+test("a live view that starts at a context compaction goes on reading the turn and delivers every item once", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  await f.sync();
+  const { turn } = f.start(), rows = [];
+  f.progress(agent("before compaction"), command("completed"));
+  rows.push(await f.row());
+  assert.equal(rows.at(-1).attention_coverage, undefined, "read live before the compaction");
+  f.catchUp();
+  rows.push(await f.row());
+  assert.equal(rows.at(-1).attention_coverage, undefined, "the history listed what the live view delivered");
+  f.compact();
+  const after = f.progress(agent("after compaction"));
+  rows.push(await f.row());
+  assert.equal(rows.at(-1).live_fallback, undefined, "the history lists the opening, which the view no longer shows");
+  assert.equal(rows.at(-1).attention_coverage, undefined);
+  assert.deepEqual(eventIds(rows.at(-1)), after.map(item => item.id));
+  f.compact();
+  const later = f.progress(agent("after the second compaction"));
+  rows.push(await f.row());
+  assert.equal(rows.at(-1).attention_coverage, undefined, "a view sharing no item with the history goes on once the turn was matched");
+  assert.deepEqual(eventIds(rows.at(-1)), later.map(item => item.id));
+  const final = agent("Done.");
+  f.complete([final]);
+  rows.push(await f.row());
+  assert.equal(rows.at(-1).live_fallback, undefined);
+  assert.deepEqual(itemIds(rows, [turn]).sort(), f.state.turns.at(-1).items.map(item => item.id).sort(), "every item, the compactions too, arrives exactly once");
+});
+
+test("a first live read after a compaction that shares no item with the history waits, without refusing the task", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  await f.sync();
+  const { turn } = f.start(), rows = [];
+  f.progress(agent("before compaction"));
+  f.compact();
+  f.progress(agent("after compaction"));
+  rows.push(await f.row());
+  assert.equal(rows.at(-1).live_fallback, "view_unconfirmed");
+  assert.equal(rows.at(-1).attention_coverage, UNOBSERVED);
+  assert.equal(rows.at(-1).live_mismatch, undefined);
+  f.catchUp();
+  const more = f.progress(agent("more"));
+  rows.push(await f.row());
+  assert.equal(rows.at(-1).live_fallback, undefined, "the history caught up with the view, so the view is matched");
+  assert.deepEqual(eventIds(rows.at(-1)).slice(-1), more.map(item => item.id));
+  const final = agent("Done.");
+  f.complete([final]);
+  rows.push(await f.row());
+  assert.deepEqual(itemIds(rows, [turn]).sort(), f.state.turns.at(-1).items.map(item => item.id).sort(), "every item, the compactions too, arrives exactly once");
 });
