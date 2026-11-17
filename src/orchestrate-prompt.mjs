@@ -67,7 +67,7 @@ attention_unobservedの担当（行はattention_coverage:running_turn_unobserved
 ${command} project wait --project <PROJECT> --json
 同じCODEX_HOME・host・projectは1オーケストレーターで扱います。guardは自分のセッションのwaitだけを数えます。RECORD_BUSYなら他セッションのwaitを引き継がず、所有セッションでwaitを終えて引継ぎを調整し、阻害要因を報告します。異常終了した前のセッションのwaitは次の照会で、停止したバックグラウンドタスクのwaitは1秒以内に自分で終わるため、直後のRECORD_BUSYは少し待って再実行します。lock削除や担当のcontrol stopを競合回避に使いません。
 ${command} work tell <THREAD> - --json < <INSTRUCTION-FILE>
-現在のユーザー決定と未完了事項に基づき指示します。新しい根拠のない同じ介入を繰り返さず、質問・承認は本人へ伝え、代理で答えません。送信前の照合をCLIに任せ、対象の不完全な観測やattention不明の拒否を迂回しません。可否は対象の担当だけで決まり、他の担当が未読でも送れます。receiptのother_workに担当が出たら、その対応を続けます。検収待ちでもidleなら--new-turnが必要です。同じ委任が未完了の時だけ使い、検収待ちを全体の完了認定と取り違えません。unknownは読み取り照合だけで、自動再送しません。
+現在のユーザー決定と未完了事項に基づき指示します。新しい根拠のない同じ介入を繰り返さず、質問・承認は本人へ伝え、代理で答えません。送信前の照合をCLIに任せ、対象の不完全な観測やattention不明の拒否を迂回しません。可否は対象の担当だけで決まり、他の担当が未読でも送れます。receiptのother_workに担当が出たら、その対応を続けます。idleの担当へのwork tellは新turnを始めます。同じ委任が未完了の時だけ送り、検収待ちを全体の完了認定と取り違えません。unknownは読み取り照合だけで、自動再送しません。
 ${command} project control pause --project <PROJECT> --work <THREAD> --json
 ${command} project control resume --project <PROJECT> --work <THREAD> --json
 ${command} project control stop --project <PROJECT> --all --json

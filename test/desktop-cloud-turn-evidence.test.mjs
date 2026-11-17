@@ -40,7 +40,7 @@ test("a member whose thread stays active after its last turn ended takes a new t
   const f = await member(t); f.endedButActive();
   const work = (await f.sync()).works[0];
   assert.equal(work.execution, "idle"); assert.equal(work.group, "検収待ち"); assert.equal(work.reason.backend_status, "active");
-  await assert.rejects(f.send(ID, "Steer the finished turn."), { code: "STALE_OBSERVATION" });
+  await assert.rejects(f.send(ID, "Steer the finished turn."), { code: "STALE_OBSERVATION", observed_action: "new-turn" });
   assert.equal(f.methods().includes("turn/steer"), false);
   const told = await tellWork(ID, "Continue the same delegation.", { newTurn: true }, { storage: f.storage, read: f.read, send: f.send });
   assert.equal(told.delivery_status, "accepted"); assert.equal(f.methods().filter(method => method === "turn/start").length, 1);
@@ -50,7 +50,7 @@ test("a member whose thread stays active after its last turn ended takes a new t
 test("a running turn refuses a new turn and takes a steer, whatever the thread status says", async t => {
   for (const status of ["active", "idle"]) {
     const f = await member(t); f.running(); f.state.status = status;
-    await assert.rejects(f.send(ID, "Start another turn.", { newTurn: true }), { code: "STALE_OBSERVATION" });
+    await assert.rejects(f.send(ID, "Start another turn.", { newTurn: true }), { code: "STALE_OBSERVATION", observed_action: "steer" });
     assert.equal(f.methods().includes("turn/start"), false, status);
     const steered = await f.send(ID, "Steer the running turn.");
     assert.equal(steered.delivery_status, "accepted"); assert.equal(steered.turn_id, f.state.turns.at(-1).id);
@@ -59,10 +59,10 @@ test("a running turn refuses a new turn and takes a steer, whatever the thread s
 
 test("turns that do not prove their state, and a thread status that is neither idle nor active, refuse as before", async t => {
   const unknown = await member(t); unknown.endedButActive("mystery");
-  await assert.rejects(unknown.send(ID, "Start a turn.", { newTurn: true }), { code: "STALE_OBSERVATION" });
-  await assert.rejects(unknown.send(ID, "Steer."), { code: "STALE_OBSERVATION" });
+  await assert.rejects(unknown.send(ID, "Start a turn.", { newTurn: true }), { code: "STALE_OBSERVATION", observed_action: null });
+  await assert.rejects(unknown.send(ID, "Steer."), { code: "STALE_OBSERVATION", observed_action: null });
   const failed = await member(t); failed.endedButActive(); failed.state.status = "systemError";
-  await assert.rejects(failed.send(ID, "Start a turn.", { newTurn: true }), { code: "STALE_OBSERVATION" });
+  await assert.rejects(failed.send(ID, "Start a turn.", { newTurn: true }), { code: "STALE_OBSERVATION", observed_action: null });
   assert.deepEqual([...unknown.methods(), ...failed.methods()].filter(method => method.startsWith("turn/s")), []);
   const idle = await member(t); idle.endedButActive(); idle.state.status = "idle";
   assert.equal((await idle.send(ID, "Start a turn.", { newTurn: true })).delivery_status, "accepted");

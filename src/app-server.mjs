@@ -16,7 +16,7 @@ import { isCloudTask } from "./task-id.mjs";
 import { sendCloudInput } from "./cloud-send.mjs";
 
 export class SendFailure extends Error {
-  constructor(message, { code = "NOT_SENT", uncertain = false, threadId, rpcCode, rpcMessage, rpcReason, capability, operation, remoteControlAuth } = {}) {
+  constructor(message, { code = "NOT_SENT", uncertain = false, threadId, rpcCode, rpcMessage, rpcReason, capability, operation, remoteControlAuth, observedAction } = {}) {
     super(message);
     this.code = code;
     this.delivery_status = uncertain ? "unknown" : "not_sent";
@@ -28,6 +28,7 @@ export class SendFailure extends Error {
     this.capability = capability;
     this.operation = operation;
     this.remote_control_auth = remoteControlAuth;
+    if (observedAction !== undefined) this.observed_action = observedAction;
   }
 }
 
@@ -44,6 +45,11 @@ function activeTurn(thread) {
   const turns = thread.turns?.filter(turn => turn.status === "inProgress") ?? [];
   return turns.length === 1 ? turns[0] : null;
 }
+
+// The delivery the read state allows: a steer into the one eligible running
+// turn, or a new turn on an idle task. A refusal names it for its caller.
+const sendableAction = thread => activeTurn(thread) ? "steer"
+  : ["idle", "notLoaded"].includes(thread.status?.type) && !thread.turns.some(turn => turn.status === "inProgress") ? "new-turn" : null;
 
 function verifyThread(thread, threadId) {
   if (thread?.id !== threadId) throw new Error("App Server returned a different task ID. Nothing was sent.");
@@ -76,7 +82,7 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
   const input = [{ type: "text", text: message }];
   if (!newTurn) {
     const turn = activeTurn(thread);
-    if (!turn) throw Object.assign(new Error("The task has no eligible active turn. Read it again before sending; use --new-turn only for an idle task."), { code: "TASK_IDLE" });
+    if (!turn) throw Object.assign(new Error("The task has no eligible active turn. Read it again before sending; use --new-turn only for an idle task."), { code: "TASK_IDLE", observed_action: sendableAction(thread) });
     await beforeSend?.(thread, client);
     // Desktop uses clientId on the resulting userMessage to render external
     // steering as a user bubble instead of just an anonymous "steered" marker.
@@ -86,7 +92,7 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
     if (accepted?.turnId !== turn.id) throw new RpcFailure("App Server returned an unexpected turn ID. Do not retry automatically.", { code: "PROTOCOL_ERROR", uncertain: true });
     return { turn_id: accepted.turnId, client_message_id: clientUserMessageId };
   }
-  if (!["idle", "notLoaded"].includes(thread.status?.type) || thread.turns.some(turn => turn.status === "inProgress")) throw Object.assign(new Error("--new-turn requires an idle task. Nothing was sent."), { code: "TASK_BUSY" });
+  if (sendableAction(thread) !== "new-turn") throw Object.assign(new Error("--new-turn requires an idle task. Nothing was sent."), { code: "TASK_BUSY", observed_action: sendableAction(thread) });
   // Resume through Desktop's long-lived connection so approval ownership
   // survives the short-lived sender. Never resume only on the sender connection.
   if (!subscribe) throw new Error("Desktop subscription support is required for --new-turn.");
@@ -95,7 +101,7 @@ export async function sendOnClient(client, threadId, message, { newTurn = false,
   await beforeSend?.(thread, client);
   await subscribe(threadId);
   const resumed = await readSendState(client, threadId);
-  if (resumed.status?.type !== "idle" || resumed.turns.some(turn => turn.status === "inProgress")) throw Object.assign(new Error("Task became active while resuming. Nothing was sent."), { code: "TASK_BUSY" });
+  if (resumed.status?.type !== "idle" || resumed.turns.some(turn => turn.status === "inProgress")) throw Object.assign(new Error("Task became active while resuming. Nothing was sent."), { code: "TASK_BUSY", observed_action: activeTurn(resumed) ? "steer" : null });
   const clientUserMessageId = clientMessageId;
   await beforeSend?.(resumed, client);
   // Existing threads own their permission settings. Omit overrides so a host
@@ -150,7 +156,9 @@ export async function sendAppServerMessage(threadInput, message, { dryRun = fals
   } catch (error) {
     throw new SendFailure(error.uncertain
       ? "Delivery is unknown because App Server did not confirm receipt. Check the target task before retrying."
-      : error.message, { code: error.code ?? "NOT_SENT", uncertain: error.uncertain, threadId, rpcCode: error.rpcCode, rpcMessage: error.rpcMessage, rpcReason: error.rpcReason, capability: error.capability, operation: error.operation, remoteControlAuth: error.remote_control_auth });
+      : error.message, { code: error.code ?? "NOT_SENT", uncertain: error.uncertain, threadId, rpcCode: error.rpcCode, rpcMessage: error.rpcMessage, rpcReason: error.rpcReason, capability: error.capability, operation: error.operation, remoteControlAuth: error.remote_control_auth,
+      // The control transport cannot start a turn, so it never names one as allowed.
+      observedAction: remote && remoteTransport() !== "paired" && error.observed_action === "new-turn" ? null : error.observed_action });
   } finally {
     // Cleanup failure must never turn an acknowledged send into a retryable
     // error. Keep its acceptance receipt and leave any stale lock fail-closed.

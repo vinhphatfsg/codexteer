@@ -47,7 +47,7 @@ for (const status of ["idle", "notLoaded", "systemError"]) {
   test(`steer rejects ${status} without mutating`, async () => {
     const calls = [];
     const client = { async request(method) { calls.push(method); return { thread: thread(status) }; } };
-    await assert.rejects(sendOnClient(client, ID, "test"), { code: "TASK_IDLE" });
+    await assert.rejects(sendOnClient(client, ID, "test"), { code: "TASK_IDLE", observed_action: status === "systemError" ? null : "new-turn" });
     assert.deepEqual(calls, ["thread/read", "thread/read"]);
   });
 }
@@ -414,10 +414,11 @@ test("paged new-turn validates both sides of Desktop subscription without full h
     assert.deepEqual(calls.filter(call => call.method.startsWith("turn/")).map(call => call.method), ["turn/start"]);
   }
   const { client, metadata, calls } = pagedServer({ status: "idle", turns: [] });
-  await assert.rejects(sendOnClient(client, ID, "must not start", { newTurn: true, subscribe: async () => { metadata.status.type = "active"; } }), { code: "TASK_BUSY" });
+  await assert.rejects(sendOnClient(client, ID, "must not start", { newTurn: true, subscribe: async () => { metadata.status.type = "active"; } }), { code: "TASK_BUSY", observed_action: null });
   assert.equal(calls.filter(call => call.method.startsWith("turn/")).length, 0);
   const inconsistent = pagedServer({ status: "idle" });
   await assert.rejects(sendOnClient(inconsistent.client, ID, "must not resume", { newTurn: true, subscribe: () => assert.fail("active turn must prevent resume") }), { code: "TASK_BUSY" });
+  await assert.rejects(sendOnClient(pagedServer().client, ID, "must not start", { newTurn: true, subscribe: () => assert.fail("a running turn must prevent resume") }), { code: "TASK_BUSY", observed_action: "steer" }, "the refusal names the delivery the running turn allows");
 });
 
 test("paged sends require pagination capability and stop on rejected page reads", async t => {
