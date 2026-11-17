@@ -169,7 +169,7 @@ macOSの起動識別は、起動日時とcommandのSHA-256だけを保存・比�
 
 ## 保存量と整理
 
-履歴（`project-sync-events`・`project-sync-results`・`work-starts`のJSONファイル）は、projectごとに別の場所へ保存し、総量をprojectごとに256 MiBまでに制限します。work-startのreceipt・方針本文も含みます。上限の確認、保存と整理の排他、整理はprojectごとに独立しています。同じ`CODEX_HOME`の他projectの履歴が、そのprojectのsync・wait・work start・work tellを拒否・待機・失敗させることはありません。最新headなど他の管理メタデータ、ジャーナルやバックエンド履歴はこの上限の対象外です。表示byte予算とは別の制限です。1担当1回の全文観測は16 MiBまでで、超過は`PROJECT_HISTORY_BATCH_LIMIT`としてcursorを進めません。
+履歴（`project-sync-events`・`project-sync-results`・`work-starts`のJSONファイル）は、projectごとに別の場所へ保存し、総量をprojectごとに256 MiBまでに制限します。work-startのreceipt・方針本文も含みます。上限の確認、保存と整理の排他、整理はprojectごとに独立しています。同じ`CODEX_HOME`の他projectの履歴が、そのprojectのsync・wait・work start・work tellを拒否・待機・失敗させることはありません。最新headなど他の管理メタデータ、ジャーナルやバックエンド履歴はこの上限の対象外です。表示byte予算とは別の制限です。1担当1回の全文観測は16 MiBまでです。超える分は次のsyncが読みます。その回の行は`complete:false`・`error:PROJECT_HISTORY_BACKLOG`で、cursorは返した分の後ろへ進みます。1件のイベントだけで16 MiBを超えるときは`PROJECT_HISTORY_BATCH_LIMIT`とし、cursorを進めません。
 
 保存の前に、今回書くrecord（イベント・sync結果・担当詳細）の保存後のサイズを合計し、置き換えるrecordの分を引いて、上限に収まるかを確認します。recordが空きに収まるpublicationは保存されます。sync結果と担当詳細はcursorの更新後に確定するため、完全に読めた担当の行は、cursorを進めた場合と更新が拒否された場合の大きい方で数えます。確認する量は実際に保存する量と同じか、その差の分だけ大きくなります。確認を通ったpublicationが途中で容量不足になることはありません。
 

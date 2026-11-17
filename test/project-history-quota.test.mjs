@@ -3,18 +3,18 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { tempPrefix } from "../test-support/temp.mjs";
-import { registerManagedThread, getManagedThread, updateManagedThreadCursor } from "../src/project-index.mjs";
+import { registerManagedThread, getManagedThread } from "../src/project-index.mjs";
 import { syncProject, projectEvent, continueProjectSync } from "../src/project-sync.mjs";
 import { waitProject } from "../src/project-wait.mjs";
 import { startWork } from "../src/work-start.mjs";
 import { readSnapshot } from "../src/observe.mjs";
-import { readRecord, writeRecord, recordStats } from "../src/store.mjs";
+import { readRecord, writeRecord, recordStats, withStoreLock } from "../src/store.mjs";
 import { historyBucket } from "../src/project-history.mjs";
 
 const MiB = 1024 * 1024, A = "11111111-1111-4111-8111-000000000001", B = "22222222-2222-4222-8222-000000000002", project = "P";
 const headKey = createHash("sha256").update(project).digest("hex").slice(0, 40);
 const buckets = ["project-sync-events", "project-sync-results", "work-starts"].map(bucket => historyBucket(bucket, project));
-// A member whose cursor another sync advances mid-publication keeps a row that
+// A member whose cursor update is refused mid-publication keeps a row that
 // differs from the advanced one by a few fields; the check allows for either.
 const SLACK = 256;
 const shapes = {
@@ -93,18 +93,19 @@ for (const [shape, events] of Object.entries(shapes)) {
   });
 }
 
-test("a publication is published in full or not at all when another sync moves a cursor while it publishes", async t => {
+test("a publication is published in full or not at all when its cursor update is refused", async t => {
   const questions = Array.from({ length: 30 }, (_, i) => ({ id: `q-${i}`, turn_id: "turn-1", type: "agentMessage", text: "Which one? ".repeat(40), questions: ["Which?"] }));
   // The answer resolves every question, unless the cursor is refused: then the
   // row keeps them all and is larger than the row of an advanced cursor.
-  const prepare = move => async f => {
+  const prepare = refuse => async f => {
     f.events = [...questions]; await f.sync();
     f.events.push({ id: "answer", turn_id: "turn-1", type: "userMessage", text: "The first." });
     let reads = 0;
-    if (move) f.onRead = async () => {
+    // The member's own record lock, held until the test ends, refuses the update with RECORD_BUSY.
+    if (refuse) f.onRead = async () => {
       if (++reads !== 2) return;
-      const member = await getManagedThread(A, f.storage);
-      await updateManagedThreadCursor(A, member.sync_cursor, "moved", f.storage, member.sync_revision);
+      let release; const held = new Promise(resolve => { release = resolve; }); t.after(() => release());
+      await new Promise(locked => withStoreLock(`project-index-${createHash("sha256").update(A).digest("hex").slice(0, 40)}`, () => { locked(); return held; }, f.storage));
     };
   };
   const advanced = await growth(t, prepare(false)), refused = await growth(t, prepare(true));
@@ -115,11 +116,9 @@ test("a publication is published in full or not at all when another sync moves a
     const before = await f.state(), page = await f.sync().catch(error => error);
     if (page instanceof Error) {
       assert.equal(page.code, "PROJECT_HISTORY_LIMIT", `${free - advanced} bytes over the smaller size`);
-      const after = await f.state();
-      assert.deepEqual({ ...after, member: null }, { ...before, member: null }, "a refused publication wrote no record and no head");
-      assert.equal(after.member.sync_revision, before.member.sync_revision + 1, "only the other sync moved the cursor");
+      assert.deepEqual(await f.state(), before, "a refused publication wrote no record, cursor or head");
     } else {
-      fits++; assert.equal(page.works[0].error, "SYNC_CURSOR_CONFLICT"); assert.equal(page.omitted_events + page.works[0].events.length, questions.length + 1);
+      fits++; assert.equal(page.works[0].error, "RECORD_BUSY"); assert.equal(page.omitted_events + page.works[0].events.length, questions.length + 1);
       await published(f, page, free, before);
     }
   }

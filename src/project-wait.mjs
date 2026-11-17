@@ -185,10 +185,13 @@ function probeReason({ previous, membershipDigest, states }, observedAttention, 
   }
   Object.assign(observedAttention, { baseline: baseline.sync_token, entries });
   for (const [id, state] of states) {
-    if (!state.complete) continue;
+    if (!state.complete && !state.backlog) continue;
     // A member never read in full before is new to the orchestrator once it is.
     const entry = baseline.works[id];
-    if (!entry || changedSinceBaseline(state, entry, observedAttention.flags[id] ?? entry.signal.attention ?? [])) return "work_changed";
+    // More than one batch since the review (a read that held, or one that read
+    // on from the stored cursor): each return reviews what it read, and the
+    // sync that follows it reads on.
+    if (state.backlog || state.restarted || !entry || changedSinceBaseline(state, entry, observedAttention.flags[id] ?? entry.signal.attention ?? [])) return "work_changed";
     observedAttention.flags[id] = projectWaitSignal(state.latest).attention; entries[id] = entryWriter(baseline, id);
   }
   return lasting ? "observation_failed" : null;
@@ -263,7 +266,7 @@ export async function waitProject(projectId, { timeoutMs, connection } = {}, dep
           const reading = syncProject(projectId, { connection }, { ...dependencies, waitProbe: snapshot => {
             // The launcher went during this read: leave the change to the next wait.
             if (launcherExited()) return null;
-            failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete ? [] : [[id, state.error]]));
+            failures = Object.fromEntries([...snapshot.states].flatMap(([id, state]) => state.complete || state.backlog ? [] : [[id, state.error]]));
             unobserved = [...snapshot.states].flatMap(([thread_id, state]) => unobservedMember(thread_id, attentionCoverage(state.latest, state.member.connection), state.latest));
             const { lasting, report } = unreadStreaks(snapshot.previous, observedAttention, failures, graceMs);
             // A quiet poll adds no member, so this is also what the head holds.

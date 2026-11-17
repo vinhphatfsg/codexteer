@@ -1,5 +1,5 @@
 import { parseCursor } from "./cursor.mjs";
-import { withHistoryReservation, assertHistoryBatch, readHistoryRecord, listHistoryRecords, lockDeadline, untilFree } from "./project-history.mjs";
+import { withHistoryReservation, assertHistoryBatch, fitsHistoryBatch, readHistoryRecord, listHistoryRecords, lockDeadline, untilFree } from "./project-history.mjs";
 import { validateSyncPage } from "./sync-page.mjs";
 export { validateSyncPage } from "./sync-page.mjs";
 import { createHash, randomUUID } from "node:crypto";
@@ -200,6 +200,11 @@ export async function continueProjectSync(token, options = {}, storage = {}) {
 // Attention is a reducer over the entire delta, not a property of its last page.
 // Current backend flags and durable question/failure evidence resolve separately.
 function reduceAttention(state, prior, summaries) {
+  // A read the cursor moves past is never read again, so its own events resolve.
+  const final = state.complete || state.backlog;
+  // A wait read from a baseline behind the stored cursor that moves no cursor
+  // re-reads events the head already resolved; only a final read may fold them.
+  const reread = !final && state.stored === false;
   // Reclassify only persisted evidence that proves the old command-level false
   // positive. Opaque legacy evidence, real turn failures and questions survive.
   const priorEntries = (prior?.entries ?? (prior ? [["legacy", prior]] : [])).filter(([, entry]) => !commandOnlyFailure(entry)).map(([id, entry]) => [id, entry.attention === "failure" && !provenWorkFailure(entry)
@@ -209,12 +214,12 @@ function reduceAttention(state, prior, summaries) {
   for (const page of state.observations) {
     if (["failed", "systemError"].includes(page.status)) entries.set("backend:failure", { attention: "failure", reason: { backend_status: page.status }, events: [] });
     for (const flag of page.attention ?? []) entries.set(`flag:${flag}`, { attention: "human", reason: { attention_flags: [flag] }, events: [] });
-    for (const event of page.events) {
-      if (["answered", "resolved"].includes(event.status)) { if (state.complete) entries.delete(event.id); continue; }
-      if (state.complete && event.type === "userMessage" && event.change !== "updated") {
+    for (const event of reread ? [] : page.events) {
+      if (["answered", "resolved"].includes(event.status)) { if (final) entries.delete(event.id); continue; }
+      if (final && event.type === "userMessage" && event.change !== "updated") {
         for (const [id, entry] of entries) if (entry.reason?.question_event) entries.delete(id);
       }
-      if (state.complete && event.type === "turn" && ["completed", "cancelled", "interrupted"].includes(event.status)) entries.delete(event.id);
+      if (final && event.type === "turn" && ["completed", "cancelled", "interrupted"].includes(event.status)) entries.delete(event.id);
       const question = Array.isArray(event.questions) && event.questions.length;
       const failed = failedTurn(event);
       if (question || failed) entries.set(event.id, { attention: question ? "human" : "failure", reason: { question_event: !!question, failure_event: failed }, events: [summaryById.get(event.id)] });
@@ -226,7 +231,7 @@ function reduceAttention(state, prior, summaries) {
   }
   if (["failed", "systemError"].includes(state.latest?.status) || state.latest?.latest_turn_status === "failed") entries.set("backend:failure", { attention: "failure", reason: { backend_status: state.latest.status, latest_turn_status: state.latest.latest_turn_status }, events: [] });
   // Incomplete observations cannot erase any previous unresolved evidence.
-  if (!state.complete && prior) for (const [id, entry] of priorEntries) if (!entries.has(id)) entries.set(id, entry);
+  if (!final && prior) for (const [id, entry] of priorEntries) if (!entries.has(id)) entries.set(id, entry);
   if (state.complete && state.latest?.latest_turn_status === "completed" && !["failed", "systemError"].includes(state.latest.status)) {
     entries.delete("backend:failure");
     for (const [id, entry] of entries) if (entry.attention === "failure" && entry.events?.every(e => e.type === "turn" && typeof e.event_id === "string" && e.event_id !== state.latest.latest_turn_id)) entries.delete(id);
@@ -316,7 +321,7 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
     // Wait probes start where each member was last reviewed, even if a later
     // partial sync advanced its membership cursor.
     const cursor = dependencies.waitProbe ? previous?.wait_baseline?.works?.[member.thread_id]?.cursor ?? member.sync_cursor : member.sync_cursor;
-    states.set(member.thread_id, { member, cursor, events: [], observations: [], seen: new Set([cursor]), pages: 0, complete: false, history_gap: false, retry_after_ms: null, error: null, unreadable: false });
+    states.set(member.thread_id, { member, cursor, stored: cursor === member.sync_cursor, events: [], observations: [], seen: new Set([cursor]), pages: 0, complete: false, backlog: false, history_gap: false, retry_after_ms: null, error: null, unreadable: false });
   }
   // A successful start observed these events but has not presented them yet.
   // Keep them until membership publication commits the first sync cursor.
@@ -332,9 +337,24 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   const liveTurn = new Map();
   const readPage = async state => {
     try {
-      const page = validateSyncPage(await read(state.member.thread_id, { connection: state.member.connection, since: state.cursor, limit: pageLimit, fullEvents: true, liveTurn }), state.member.thread_id, state.cursor, state.seen);
-      if (page.omitted_older_events > 0 || (!state.cursor && page.omitted_older_events !== 0)) throw failure("Initial history boundary is unproven.", "WORK_INITIAL_HISTORY_GAP");
-      assertHistoryBatch(state.events, page.events);
+      let page;
+      for (let limit = pageLimit; ;) {
+        page = validateSyncPage(await read(state.member.thread_id, { connection: state.member.connection, since: state.cursor, limit, fullEvents: true, liveTurn }), state.member.thread_id, state.cursor, state.seen);
+        if (page.omitted_older_events > 0 || (!state.cursor && page.omitted_older_events !== 0)) throw failure("Initial history boundary is unproven.", "WORK_INITIAL_HISTORY_GAP");
+        if (fitsHistoryBatch(state.events, page.events)) break;
+        // One batch is published at a time: the cursor moves past what was read,
+        // and the next sync reads on from there.
+        if (state.events.length) {
+          // A wait probe reads from the last review. Past one batch it reads on
+          // from the stored cursor instead, so a backlog is read and folded into
+          // the head once, from where the syncs before it stopped.
+          if (!state.stored) { Object.assign(state, { cursor: state.member.sync_cursor, stored: true, restarted: true, events: [], observations: [], seen: new Set([state.member.sync_cursor]), pages: 0, latest: undefined }); return true; }
+          state.complete = false; state.backlog = true; state.error = "PROJECT_HISTORY_BACKLOG"; return false;
+        }
+        // One event past the batch, or a reader that returned more than asked, cannot be read smaller.
+        if (page.events.length < 2 || page.events.length > limit) assertHistoryBatch(page.events);
+        limit = Math.floor(page.events.length / 2);
+      }
       if (state.member.environment_config_id && page.environment_config_id !== state.member.environment_config_id) throw failure("The task environment differs from its managed route.", "PROJECT_ROUTE_MISMATCH");
       state.seen.add(page.cursor); state.observations.push(page);
       state.pages++; state.cursor = page.cursor; state.events.push(...(page.events ?? [])); state.latest = page; state.complete = !page.has_more; return page.has_more;
@@ -369,8 +389,8 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
 
   // Wait cannot certify "no change" or move its reviewed baseline when the
   // backend has not established the current approval/question flag state.
-  if (dependencies.waitProbe) for (const state of states.values()) if (state.complete && !Array.isArray(state.latest?.attention)) {
-    state.complete = false; state.error = "PROJECT_WAIT_ATTENTION_UNKNOWN";
+  if (dependencies.waitProbe) for (const state of states.values()) if ((state.complete || state.backlog) && !Array.isArray(state.latest?.attention)) {
+    state.complete = false; state.backlog = false; state.error = "PROJECT_WAIT_ATTENTION_UNKNOWN";
   }
   const works = [], unresolved = {}, historical = { ...previous?.historical_attention };
   for (const state of states.values()) {
@@ -427,11 +447,12 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   const eventRecord = record => ["project-sync-events", record.token, { schema: 1, project_id: projectId, sync_token: syncToken, ...record }];
   const detailRecord = (work, row = work) => eventRecord({ token: work.detail_token, thread_id: work.thread_id, event: { type: "workDetails", work: { ...row } } });
   const resultRecord = (rows, fields) => ["project-sync-results", syncToken, { schema: 2, project_id: projectId, membership_digest: membershipDigest, ...fields, works: rows, created_at: createdAt }];
+  const advances = state => state.complete || state.backlog;
   // The row a refused cursor leaves: incomplete, with the attention an
   // incomplete read cannot resolve.
   const refusedRow = (work, state, code) => {
     const prior = previous?.unresolved_attention?.[work.thread_id];
-    const retained = reduceAttention({ ...state, complete: false }, prior, state.eventSummaries);
+    const retained = reduceAttention({ ...state, complete: false, backlog: false }, prior, state.eventSummaries);
     return { retained, row: { ...work, complete: false, cursor: null, error: code, observation: "incomplete",
       ...(retained ? { attention: retained.attention, reason: { ...retained.reason, ...turnBasis(work.reason) }, group: retained.attention === "unknown" ? "未確認" : "対応が必要",
         resolution_unconfirmed: true, attention_repeated: !!prior,
@@ -443,7 +464,8 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
   // `complete` as false, so the reservation is never below what is written.
   const reserved = new Map(observed.map(work => {
     const state = states.get(work.thread_id);
-    const rows = state.complete ? [{ ...work, sync_revision: (state.member.sync_revision ?? 0) + 1 }, refusedRow(work, state, "X".repeat(CURSOR_ERROR_BYTES)).row] : [work];
+    // The revision is read again under the lock, so reserve its longest form.
+    const rows = advances(state) ? [{ ...work, sync_revision: Number.MAX_SAFE_INTEGER }, refusedRow(work, state, "X".repeat(CURSOR_ERROR_BYTES)).row] : [work];
     return [work, rows.map(row => {
       const entry = settlement(plan.get(work.thread_id), row, state, createdAt);
       return entry ? { ...row, settled: settledMarker(entry) } : row;
@@ -462,19 +484,30 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
       entered(); pruned = report;
       const current = await readRecord("project-sync-heads", hash(projectId).slice(0, 40), storage);
       if (hash(current ?? null) !== hash(previous ?? null)) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");
+      // The head says what the stored cursors passed. A cursor that moved after
+      // this run listed it (a publication between that listing and the head
+      // read, or one that died after its cursor update) makes these reads stale:
+      // they would reopen what that head resolved. A revision bumped over an
+      // unchanged cursor (a sync that read nothing new) does not, so the CAS
+      // below expects the revision listed here.
+      const stored = new Map((await listManagedThreads(projectId, storage)).map(member => [member.thread_id, member]));
+      for (const { member } of states.values()) {
+        const now = stored.get(member.thread_id);
+        if (now && (now.sync_cursor ?? null) !== (member.sync_cursor ?? null)) throw failure("A newer project sync was published.", "SYNC_CURSOR_CONFLICT");
+      }
       // Persist attention evidence before advancing any cursor. A crash during
       // publication leaves an incomplete head that the next sync can recover.
       for (const record of eventRecords) await historyWrite(...eventRecord(record), storage);
       await writeRecord("project-sync-heads", hash(projectId).slice(0, 40), { ...head, complete: false, complete_work_ids: [], publication_pending: true }, storage);
-      // CAS uses the snapshot revision even if an empty read returns the same cursor.
-      for (const state of states.values()) if (state.complete) {
+      // CAS even if an empty read returns the same cursor.
+      for (const state of states.values()) if (advances(state)) {
         const work = works.find(w => w.thread_id === state.member.thread_id);
         try {
-          const updated = await updateManagedThreadCursor(state.member.thread_id, state.member.sync_cursor, state.cursor, storage, state.member.sync_revision ?? 0);
+          const updated = await updateManagedThreadCursor(state.member.thread_id, state.member.sync_cursor, state.cursor, storage, stored.get(state.member.thread_id)?.sync_revision ?? 0);
           work.sync_revision = updated.sync_revision;
         } catch (error) {
           const { retained, row } = refusedRow(work, state, cursorError(error));
-          Object.assign(work, row); state.complete = false;
+          Object.assign(work, row); state.complete = false; state.backlog = false;
           if (retained) unresolved[work.thread_id] = retained;
         }
       }
@@ -502,7 +535,8 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
         const entries = {};
         if (dependencies.waitProbe) failures = {};
         for (const [id, state] of states) {
-          if (state.complete) entries[id] = { cursor: state.cursor, signal: projectWaitSignal(state.latest), sync_token: syncToken };
+          // A wait returns what it read of a backlog, and its next probe reads on from there.
+          if (state.complete || state.backlog) entries[id] = { cursor: state.cursor, signal: projectWaitSignal(state.latest), sync_token: syncToken };
           else {
             if (waitReport?.has(id)) failures[id] = works.find(work => work.thread_id === id).error;
             if (baseline?.works?.[id]) entries[id] = { sync_token: baseline.sync_token, ...baseline.works[id] };
