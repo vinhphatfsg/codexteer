@@ -86,9 +86,10 @@ export async function sendTrackedMessage(threadInput, body, options = {}, { send
     await validateReplacement(threadId, options, storage);
     const id = randomUUID(), created = new Date().toISOString();
     const prepared = await prepareDirective(threadId, body, options, id, storage);
+    // A work tell's own guard goes first, so its refusal codes reach the caller rather than the directive's.
     const beforeSend = async (...args) => {
-      await prepared.beforeSend?.(...args);
       await options.guardBeforeSend?.(...args);
+      await prepared.beforeSend?.(...args);
       if (options.supervisor) await assertSupervisor(threadId, options.supervisor, { ...storage, sending: true, connection: options.connection });
     };
     let entry = { schema: 1, id, client_message_id: id, thread_id: threadId, created_at: created, updated_at: created, body, wire_text: prepared.wireText, metadata: prepared.metadata,

@@ -23,10 +23,13 @@ test("unannotated sends preserve exact text; annotated sends distinguish hypothe
   await assert.rejects(prepareDirective(ID, "x", { source: "bad\nname" }, "id"), { code: "OPTIONS_INVALID" });
 });
 
-test("based-on permits progress but rejects new user input or another active turn before mutation", async () => {
+test("based-on permits progress and the end of the turn but rejects new user input or another active turn before mutation", async t => {
+  const home = await mkdtemp(tempPrefix("cs-directive-")); t.after(() => rm(home, { recursive: true, force: true }));
   const initial = state(), cursor = readSnapshot(initial).cursor;
-  const p = await prepareDirective(ID, "check", { basedOn: cursor }, "id");
+  const p = await prepareDirective(ID, "check", { basedOn: cursor }, "id", { home });
   const progress = state(); progress.turns[0].items.push({ id: "a", type: "agentMessage", text: "checking" });
+  await p.beforeSend(progress);
+  progress.turns[0].status = "completed"; progress.status = { type: "idle" };
   await p.beforeSend(progress);
   const changed = state(); changed.turns[0].items.push({ id: "new", type: "userMessage", content: [{ type: "text", text: "new intent" }] });
   let mutations = 0;

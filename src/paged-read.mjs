@@ -1,5 +1,6 @@
 import { digest, project, trimEvent, turnObservation, observationAttention } from "./observe.mjs";
 import { encodeCursor, parseCursor, resolveTurns, invalidCursor } from "./cursor.mjs";
+import { assertNoForeignInput } from "./input-origin.mjs";
 
 const PAGE = 100;
 const running = new Set(["inProgress", "running", "pending"]);
@@ -204,25 +205,24 @@ export async function readPaged(client, thread, { since, limit = 50, maxChars = 
   return finish(state, cursor, events, commands, old, pending, 0);
 }
 
-export async function verifyPagedFreshness(client, threadId, encoded) {
+// The --based-on check for a v2 cursor: no input codexteer did not send after
+// it. Every turn listed after the cursor, an empty one too, was opened by input.
+export async function verifyPagedFreshness(client, threadId, encoded, own) {
   const claim = parseCursor(encoded, threadId);
   if (claim.v !== 2 || claim.pending) throw Object.assign(new Error("Read all pending changes before sending from this observation."), { code: "STALE_OBSERVATION" });
   const { thread } = await client.request("thread/read", { threadId, includeTurns: false });
   if (thread?.id !== threadId) throw invalidCursor();
   const turns = await turnMetadata(client, threadId), old = resolveTurns(claim, turns, threadId);
-  // With orphaned turns both active IDs can be null even when a new turn
-  // started. Pin the chronological tail as well, including empty new turns.
-  if (turns.at(-1)?.id !== old.turns.at(-1)?.id || stateOf(thread, turns).active_turn_id !== old.active_turn_id) {
-    throw Object.assign(new Error("The latest or active turn changed. Read the task again before sending."), { code: "STALE_OBSERVATION" });
-  }
+  const delta = turns.slice(old.turns.length).map(turn => ({ ...turnEvent(turn), change: "added" }));
   let position = old.head.cursor, first = true;
   do {
     const page = await items(client, threadId, { cursor: position });
     if (first && old.head.id && !sameRow(page.data[0], old.head)) throw invalidCursor();
     for (let i = 0; i < page.data.length; i++) {
       const row = page.data[i];
-      if (row.item.type === "userMessage" && (!(first && old.head.id && i === 0) || itemHash(row) !== old.head.hash)) throw Object.assign(new Error("New user input was observed. Read the task again before sending."), { code: "STALE_OBSERVATION" });
+      if (row.item.type === "userMessage" && !(first && old.head.id && i === 0 && itemHash(row) === old.head.hash)) delta.push(itemEvent(row));
     }
     first = false; position = page.nextCursor;
   } while (position);
+  assertNoForeignInput(delta, own);
 }

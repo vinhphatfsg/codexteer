@@ -1,4 +1,4 @@
-import { readOnClient, readSnapshot, observationAttention } from "./observe.mjs";
+import { readOnClient, readSnapshot, observationAttention, trimEvent } from "./observe.mjs";
 import { createHash } from "node:crypto";
 import { getManagedThread, listManagedThreads, managedMembershipDigest } from "./project-index.mjs";
 import { getSupervisor } from "./supervision.mjs";
@@ -8,14 +8,14 @@ import { readRecord, listRecords, withStoreLock } from "./store.mjs";
 import { readHistoryRecord, listHistoryRecords } from "./project-history.mjs";
 import { validateSyncPage } from "./sync-page.mjs";
 import { readRepositoryPolicy } from "./work-start.mjs";
-import { attentionCoverage } from "./attention-coverage.mjs";
+import { attentionCoverage, turnExecution } from "./attention-coverage.mjs";
+import { ownInputs, foreignInput } from "./input-origin.mjs";
 
 const sha = value => createHash("sha256").update(value).digest("hex");
 const fail = (message, code, details = {}) => Object.assign(new Error(message), { code, ...details });
 const projectKey = projectId => sha(projectId).slice(0, 40);
 const syncTokenPattern = /^[0-9a-f-]{36}$/i;
 const otherAction = { steer: "new-turn", "new-turn": "steer" };
-const turnIdentity = observation => observation?.latest_turn_id ?? observation?.current_turn_id ?? observation?.turn_id ?? observation?.active_turn_id ?? null;
 
 async function policyStatus(threadId, member, storage, readPolicy) {
   const starts = (await listHistoryRecords("work-starts", member.project_id, storage)).filter(record => record?.thread_id === threadId).sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -73,20 +73,28 @@ function assertNoHumanAttention(observation) {
 }
 
 // `liveTurn` scopes one live view of a running Desktop Cloud turn: the pages of
-// one check share it, and each check of a tell takes its own.
-async function freshObservation(threadId, member, basis, read, liveTurn) {
+// one check share it, and each check of a tell takes its own. The worker's own
+// progress since the basis, the end of its turn included, is sent over and
+// reported; only input that codexteer did not send refuses.
+async function freshObservation(threadId, member, basis, read, liveTurn, own) {
   let cursor = basis.work.cursor, latest, pages = 0; const seen = new Set([cursor]), events = [];
   do {
-    latest = validateSyncPage(await read(threadId, { connection: member.connection, since: cursor, limit: 1000, liveTurn }), threadId, cursor, seen);
+    latest = validateSyncPage(await read(threadId, { connection: member.connection, since: cursor, limit: 1000, fullEvents: true, liveTurn }), threadId, cursor, seen);
     if (member.environment_config_id && latest.environment_config_id !== member.environment_config_id) throw fail("The task environment differs from its managed route.", "WORK_TELL_ROUTE_MISMATCH");
     assertNoHumanAttention(latest);
     if (!latest?.cursor || ++pages > 1000 || (latest.has_more && seen.has(latest.cursor))) throw fail("Freshness read did not advance its cursor.", "WORK_TELL_FRESHNESS_INCOMPLETE");
     seen.add(latest.cursor); cursor = latest.cursor; events.push(...(latest.events ?? []));
   } while (latest.has_more);
   assertNoHumanAttention(latest);
-  const changedTurn = turnIdentity(latest) !== basis.work.turn_identity;
-  if (events.length || changedTurn) throw fail("The task changed after project sync. Review the returned delta and sync again; nothing was sent.", "WORK_TELL_STALE_SYNC", { events, turn_identity: turnIdentity(latest), sync_turn_identity: basis.work.turn_identity });
-  return { cursor, latest };
+  const foreign = foreignInput(events, own);
+  if (foreign) throw fail("Input that codexteer did not send reached the task after the reviewed sync. Review it and sync again; nothing was sent.", "WORK_TELL_FOREIGN_INPUT", { events: [foreign] });
+  return { cursor, latest, events };
+}
+
+// What the orchestrator has not reviewed: how much happened since its basis and the worker's latest report.
+function unseenSummary(events) {
+  const report = events.findLast(event => event.type === "agentMessage" && typeof event.text === "string");
+  return { events: events.length, latest_agent_message: report ? { id: report.id, turn_id: report.turn_id ?? null, text: trimEvent(report, 2000, false).text } : null };
 }
 
 export async function tellWork(threadInput, body, options = {}, dependencies = {}) {
@@ -96,11 +104,11 @@ export async function tellWork(threadInput, body, options = {}, dependencies = {
   const read = dependencies.read;
   if (typeof read !== "function") throw fail("work tell reader is unavailable.", "WORK_TELL_INVALID");
   return withStoreLock(`work-tell-${sha(member.thread_id).slice(0, 40)}`, async () => {
-    const basis = await syncBasis(member.thread_id, member, options.syncToken, storage);
-    const reviewed = ["idle", "terminal"].includes(basis.work.execution) ? "new-turn" : "steer";
-    if (options.newTurn && reviewed !== "new-turn") throw fail("A new turn requires an idle or terminal task and the same unfinished delegation.", "WORK_TELL_NEW_TURN_INVALID");
-    const choice = options.newTurn ? { action: "new-turn", source: "requested" } : { action: reviewed, source: "auto" };
-    const fresh = await freshObservation(member.thread_id, member, basis, read, new Map());
+    const basis = await syncBasis(member.thread_id, member, options.syncToken, storage), own = await ownInputs(member.thread_id, storage);
+    const fresh = await freshObservation(member.thread_id, member, basis, read, new Map(), own);
+    const observed = ["idle", "terminal"].includes(turnExecution(fresh.latest, member.connection)) ? "new-turn" : "steer";
+    if (options.newTurn && observed !== "new-turn") throw fail("A new turn requires an idle or terminal task and the same unfinished delegation.", "WORK_TELL_NEW_TURN_INVALID");
+    const choice = options.newTurn ? { action: "new-turn", source: "requested" } : { action: observed, source: "auto" };
     const policy = await policyStatus(member.thread_id, member, storage, dependencies.readPolicy ?? readRepositoryPolicy);
     const other = await otherWork(member.thread_id, member, basis.head, storage);
     const supervisor = await getSupervisor(member.thread_id, storage);
@@ -114,11 +122,14 @@ export async function tellWork(threadInput, body, options = {}, dependencies = {
     const finding = await (dependencies.createFinding ?? createFinding)(member.thread_id, { key, title: `work tell: ${body.trim().slice(0, 120)}`,
       condition: `Deliver the reviewed instruction with sha256 ${sha(body)} exactly once and track its response.`, basedOn: fresh.cursor, ...storage });
     // The last read before the send decides what the receipt says was observed.
-    let sentOn = fresh.latest;
+    // Each check reads again from the first read's cursor, so only the last one adds to what was not reviewed.
+    let sentOn = fresh.latest, lastCheck = [];
     const guardBeforeSend = async (thread, client) => {
       if (thread) assertNoHumanAttention({ attention: observationAttention(thread.status), events: [] });
-      ({ latest: sentOn } = await freshObservation(member.thread_id, member, { work: { ...basis.work, cursor: fresh.cursor } },
-        (id, options) => client ? readOnClient(client, id, options) : Promise.resolve(readSnapshot(thread, options)), new Map()));
+      ({ latest: sentOn, events: lastCheck } = await freshObservation(member.thread_id, member, { work: { ...basis.work, cursor: fresh.cursor } },
+        (id, options) => client ? readOnClient(client, id, options) : Promise.resolve(readSnapshot(thread, options)), new Map(), own));
+      // The turn ended after the transport chose to steer it: nothing is dispatched, and an automatic tell starts a new turn instead.
+      if (choice.action === "steer" && ["idle", "terminal"].includes(turnExecution(sentOn, member.connection))) throw fail("The turn ended while the instruction was being sent. Nothing was sent.", "STALE_OBSERVATION", { observed_action: "new-turn" });
       await syncBasis(member.thread_id, member, basis.sync_token, storage);
     };
     const deliver = action => (dependencies.sendTracked ?? sendWorkTellMessage)(member.thread_id, body, { supervisor: supervisor.session_id, connection: member.connection,
@@ -140,7 +151,7 @@ export async function tellWork(threadInput, body, options = {}, dependencies = {
       // not read live would not have shown. The receipt says so; whether to send is unchanged.
       const coverage = attentionCoverage(sentOn, member.connection);
       return { ...delivery(), ...receipt, thread_id: member.thread_id, sync_token: basis.sync_token, finding_id: finding.id, source: "codexteer", kind: "review", policy, other_work: other,
-        ...(coverage ? { attention_coverage: coverage } : {}) };
+        unseen_since_basis: unseenSummary([...fresh.events, ...lastCheck]), ...(coverage ? { attention_coverage: coverage } : {}) };
     } catch (error) {
       if (error.delivery_status === "unknown" && error.message_id) {
         try { error.reconciliation = await (dependencies.reconcile ?? ((id) => reconcileMessages(member.thread_id, id, {}, dependencies.connectionDependencies ?? {})))(error.message_id); }

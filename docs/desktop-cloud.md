@@ -36,13 +36,13 @@ Desktop Cloudのタスクは、ターンの実行中は開始時の指示だけ�
 - `view_mismatch`と`mismatch`はcursorに残ります。そのcursorから読む`read`・`project sync`・`project wait`は、ターンが実行中でなくても`live_fallback`を返し続けます。`--since`なしの`read`はcursorを持たないため、またresumeします。`project wait`は、担当がこのどちらかになった照会で1回返り（`reason:"work_changed"`）、以後の照会ではresumeしません。
 - 履歴が並べている項目は、IDだけでresumeの結果と照合します。その項目は常に履歴から返し、resumeの結果からは返さないため、内容の違いは結果を変えません。resumeで読んだ項目は、ターンが終わったときに履歴の同じIDの項目と内容を照合します。
 - 中断・失敗で終わったターンの履歴は、実行中に読んだ項目（終わらなかったコマンドなど）を並べないことがあります。そのターンは`mismatch`になります。履歴にある項目のうち、実行中に同じ内容で返したものは再び返さず、残りを全て返します。履歴にない項目は、実行中に返した1回だけです。読み飛ばす項目も、同じ内容で2回返る項目もありません。以後そのタスクは履歴だけで読むため、後のターンの質問はターンが終わってから返ります。
-- `work tell`のresume：`work tell`は実行中のターンを2回読みます。最初の確認で1回、送信の直前にもう1回、別のresumeで読み直します。最初の確認の後に出た質問・サーバー要求は`WORK_TELL_HUMAN_REQUIRED`、新しい項目は`WORK_TELL_STALE_SYNC`になり、送りません。質問を見落とす間は、localの担当と同じく、送信直前の読み取りから送信までです。
+- `work tell`のresume：`work tell`は実行中のターンを2回読みます。最初の確認で1回、送信の直前にもう1回、別のresumeで読み直します。最初の確認の後に出た質問・サーバー要求は`WORK_TELL_HUMAN_REQUIRED`、codexteerが送っていない入力は`WORK_TELL_FOREIGN_INPUT`になり、送りません。担当の新しい項目は送信を止めず、receiptの`unseen_since_basis`に入ります。質問を見落とす間は、localの担当と同じく、送信直前の読み取りから送信までです。
   - 実行中のターンへ送った`work tell`、送信直前の確認で拒否した`work tell`：resumeは2回です。
   - 最初の確認で拒否した`work tell`、最初の確認で`view_mismatch`になった`work tell`：1回です。
   - 実行中のターンがない担当への`work tell`（`--new-turn`を含みます）、sync結果の質問やcursorの不一致で拒否した`work tell`、cursorが`view_mismatch`・`mismatch`を持つ担当への`work tell`：0回です。
   - 送信直前の読み取りは、担当のcursorも履歴も変えません。そこで見た項目は、次の`project sync`が1回ずつ返します。
 - `work tell`は、送信直前に実行中のターンを読めなかったとき（`live_fallback`のどの値でも。最初の確認では読めていた場合を含みます）、設定が無効のときと同じく送信の可否を変えず、receiptに`attention_coverage`を付けます。
-- syncの後に実行中のターンが新しい項目を出していれば、localの担当と同じく`WORK_TELL_STALE_SYNC`で送りません。syncからやり直してください。項目を出し続けるターンには、送れる機会が少なくなります。
+- syncの後に実行中のターンが新しい項目を出していても、localの担当と同じく送ります。その項目は`unseen_since_basis`で返り、次の`project sync`も1回ずつ返します。
 - `doctor`は、この設定が有効なら`running_turn_attention:"live"`を返します。
 - cursorには、実行中に読んだ項目のIDと内容のhashが入ります。設定を無効に戻しても、そのcursorは続きから読めます。0.24.x以前では読めません（[CHANGELOG](../CHANGELOG.md)の0.25.0を参照）。
 

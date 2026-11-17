@@ -58,15 +58,54 @@ test("work tell creates internal finding and journal evidence without public sup
   assert.equal(dispatches, 1);
 });
 
-test("stale events, new user input, and human attention all refuse delivery", async t => {
+// A transport that lands the message in the task's history as the service lists it: without codexteer's client id.
+const delivering = f => async (_id, wire, options) => {
+  await options.beforeSend(f.current);
+  f.current.turns.at(-1).items.push({ id: `user-${options.clientMessageId}`, type: "userMessage", clientId: null, content: [{ type: "text", text: wire }] });
+  return accepted(options);
+};
+
+test("progress the worker made after the sync is sent over and reported as not yet reviewed", async t => {
+  const f = await fixture(t), long = "x".repeat(5000);
+  f.current = task([{ id: "cmd-new", type: "commandExecution", command: "npm test", status: "completed", aggregatedOutput: "ok" }, { id: "agent-new", type: "agentMessage", text: `new progress ${long}` }]);
+  const receipt = await tellWork(THREAD, "Keep the scope to the parser.", {}, { storage: f, read: f.read, send: delivering(f) });
+  assert.deepEqual([receipt.delivery_status, receipt.delivery_action], ["accepted", "steer"]);
+  assert.deepEqual([receipt.unseen_since_basis.events, receipt.unseen_since_basis.latest_agent_message.id], [2, "agent-new"]);
+  assert.ok(receipt.unseen_since_basis.latest_agent_message.text.startsWith("new progress x") && receipt.unseen_since_basis.latest_agent_message.text.length < 2100, "the report is bounded");
+});
+
+test("a turn the worker ended after the sync gets the instruction as a new turn", async t => {
+  const f = await fixture(t), calls = [];
+  f.current = idleTask();
+  const receipt = await tellWork(THREAD, "Now add the missing test.", {}, { storage: f, read: f.read, send: recording(f, calls) });
+  assert.deepEqual([receipt.delivery_status, receipt.delivery_action, receipt.delivery_action_source, calls], ["accepted", "new-turn", "auto", ["new-turn"]]);
+  assert.equal(receipt.unseen_since_basis.latest_agent_message.text, "done");
+});
+
+test("a follow-up right after a delivered tell is sent: codexteer's own message is recognized by its text, not its client id", async t => {
+  const f = await fixture(t);
+  const first = await tellWork(THREAD, "Use the existing helper.", {}, { storage: f, read: f.read, send: delivering(f) });
+  assert.equal(f.current.turns[0].items.at(-1).clientId, null);
+  const second = await tellWork(THREAD, "And keep the public API unchanged.", {}, { storage: f, read: f.read, send: delivering(f) });
+  assert.deepEqual([first.delivery_status, second.delivery_status, second.delivery_action], ["accepted", "accepted", "steer"]);
+  assert.equal(second.unseen_since_basis.events, 1, "the first tell's own message is the only change since the sync");
+});
+
+test("input someone else gave after the sync, and a pending question or approval, refuse delivery", async t => {
+  const foreign = { id: "user-new", type: "userMessage", clientId: null, content: [{ type: "text", text: "changed request" }] };
   for (const [name, change, code] of [
-    ["event", () => task([{ id: "agent-new", type: "agentMessage", text: "new progress" }]), "WORK_TELL_STALE_SYNC"],
-    ["user", () => task([{ id: "user-new", type: "userMessage", content: [{ type: "text", text: "changed request" }] }]), "WORK_TELL_STALE_SYNC"],
-    ["approval", () => task([], ["waitingOnApproval"]), "WORK_TELL_HUMAN_REQUIRED"],
+    ["user", f => { f.current = task([foreign]); }, "WORK_TELL_FOREIGN_INPUT"],
+    ["user after an own tell", async f => {
+      await tellWork(THREAD, "earlier instruction", {}, { storage: f, read: f.read, send: delivering(f) }); f.current.turns[0].items.push(foreign);
+    }, "WORK_TELL_FOREIGN_INPUT"],
+    ["question", f => { f.current = task([{ id: "ask", type: "agentMessage", text: "Which one?", questions: ["A or B?"] }]); }, "WORK_TELL_HUMAN_REQUIRED"],
+    ["approval", f => { f.current = task([], ["waitingOnApproval"]); }, "WORK_TELL_HUMAN_REQUIRED"],
   ]) {
-    const f = await fixture(t); f.current = change(); let dispatches = 0;
-    await assert.rejects(tellWork(THREAD, `tell ${name}`, {}, { storage: f, read: f.read, send: async () => { dispatches++; } }), { code });
-    assert.equal(dispatches, 0);
+    const f = await fixture(t); let dispatches = 0;
+    await change(f);
+    const error = await tellWork(THREAD, `tell ${name}`, {}, { storage: f, read: f.read, send: async () => { dispatches++; } }).then(() => assert.fail(name), error => error);
+    assert.equal(error.code, code, name); assert.equal(dispatches, 0, name);
+    if (code === "WORK_TELL_FOREIGN_INPUT") assert.deepEqual(error.events.map(event => [event.id, event.text]), [["user-new", "changed request"]], name);
   }
   const unknown = await fixture(t), observed = await unknown.read(THREAD, { since: (await getManagedThread(THREAD, unknown)).sync_cursor, limit: 1000 });
   await assert.rejects(tellWork(THREAD, "attention unknown", {}, { storage: unknown, read: async () => ({ ...observed, attention: undefined }) }), { code: "WORK_TELL_ATTENTION_UNKNOWN" });
@@ -269,7 +308,7 @@ test("the second attempt keeps every protective refusal: no retry after unknown 
   // Pause and stop refuse before the transport is reached again; the checks before dispatch refuse a question or new input.
   for (const [name, between, code, reached] of [["pause", f => controlSupervisor(THREAD, "pause", f), "SUPERVISOR_PAUSED", 1], ["stop", f => controlSupervisor(THREAD, "stop", f), "SUPERVISOR_STOPPED", 1],
     ["question", f => { f.current = task([], ["waitingOnUserInput"]); }, "WORK_TELL_HUMAN_REQUIRED", 2],
-    ["new input", f => { f.current = task([{ id: "user-new", type: "userMessage", content: [{ type: "text", text: "someone else" }] }]); }, "STALE_OBSERVATION", 2]]) {
+    ["new input", f => { f.current = task([{ id: "user-new", type: "userMessage", content: [{ type: "text", text: "someone else" }] }]); }, "WORK_TELL_FOREIGN_INPUT", 2]]) {
     const f = await fixture(t), calls = []; let first = true;
     const sendTracked = async (...args) => { try { return await sendWorkTellMessage(...args); } catch (error) { if (first) { first = false; await between(f); } throw error; } };
     const error = await tellWork(THREAD, `race then ${name}`, {}, { storage: f, read: f.read, sendTracked, send: refusesFirst(f, calls, "new-turn") }).then(() => assert.fail(name), error => error);

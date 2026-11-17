@@ -1,7 +1,7 @@
 import { listRecords, writeRecord } from "../src/store.mjs";
 import { historyBucket } from "../src/project-history.mjs";
 import { createFinding } from "../src/findings.mjs";
-import { sendTrackedMessage } from "../src/journal.mjs";
+import { sendTrackedMessage, listMessages } from "../src/journal.mjs";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -37,6 +37,8 @@ async function fixture(t, mode, managed = true) {
   return { home, id, thread, server, read, cloud };
 }
 const modes = ["aggregate", "paged", "desktop-cloud", "desktop-cloud-paged"];
+const deliver = async (f, id, wire, options) => f.cloud ? sendDesktopCloudInput(id, wire, options, { home: f.home, connect: async () => f.server.client })
+  : { ...await sendOnClient(f.server.client, id, wire, options), sent: true, delivery_status: "accepted" };
 for (const mode of modes) {
   test(`${mode}: omitted initial history never becomes an observed or complete basis`, async t => {
     const f = await fixture(t, mode, false); let creates = 0;
@@ -85,25 +87,39 @@ for (const mode of modes) {
     assert.equal(f.server.calls.some(c => c.method.startsWith("turn/")), false);
   });
 
-  for (const change of ["event", "updated", "question", "approval"]) test(`${mode}: delivery-boundary ${change} refuses mutation`, async t => {
+  for (const [change, refusal] of [["event", null], ["updated", null], ["own input", null], ["foreign input", "WORK_TELL_FOREIGN_INPUT"], ["question", "WORK_TELL_HUMAN_REQUIRED"], ["approval", "WORK_TELL_HUMAN_REQUIRED"]]) test(`${mode}: delivery-boundary ${change} ${refusal ? "refuses" : "does not refuse"} mutation`, async t => {
     const f = await fixture(t, mode);
     if (change === "updated") f.thread.turns[0].items.push(msg("tail", "before"));
     await syncProject("adapter", {}, { storage: f, read: f.read });
+    if (change === "own input") {
+      const earlier = await tellWork(f.id, "earlier instruction", {}, { storage: f, read: f.read, send: (id, wire, options) => deliver(f, id, wire, options) });
+      assert.equal(earlier.delivery_status, "accepted");
+      // The scripted server does not list what it accepts; list the earlier message as the service would, without its client id.
+      const { wire_text } = (await listMessages(f.id, { home: f.home, includeText: true })).find(entry => entry.id === earlier.message_id);
+      f.thread.turns[0].items.push({ id: "own-earlier", type: "userMessage", clientId: null, content: [{ type: "text", text: wire_text }] });
+      f.server.calls.length = 0;
+    }
     let mutated = false;
     const send = async (id, wire, options) => {
       // This runs after tell's initial freshness observation and finding creation,
       // immediately before the real delivery adapter obtains its send state.
       if (change === "updated") f.thread.turns[0].items.at(-1).text = "after";
       else if (change === "approval") f.thread.status.activeFlags = ["waitingOnApproval"];
+      else if (change === "foreign input") f.thread.turns[0].items.push({ ...user("someone else's request"), clientId: null });
       else f.thread.turns[0].items.push({ ...msg("late"), ...(change === "question" ? { questions: ["Which?"] } : {}) });
-      const receipt = f.cloud
-        ? await sendDesktopCloudInput(id, wire, options, { home: f.home, connect: async () => f.server.client })
-        : await sendOnClient(f.server.client, id, wire, options);
+      for (const item of f.thread.turns[0].items) if (item.type === "userMessage") item.clientId = null;
+      const receipt = await deliver(f, id, wire, options);
       mutated = true; return receipt;
     };
-    await assert.rejects(tellWork(f.id, "reviewed instruction", {}, { storage: f, read: f.read, send }), error => ["WORK_TELL_STALE_SYNC", "WORK_TELL_HUMAN_REQUIRED"].includes(error.code));
-    assert.equal(mutated, false);
-    assert.equal(f.server.calls.some(c => c.method.startsWith("turn/")), false);
+    const outcome = await tellWork(f.id, "reviewed instruction", {}, { storage: f, read: f.read, send }).catch(error => error);
+    if (refusal) {
+      assert.equal(outcome.code, refusal); assert.equal(mutated, false);
+      assert.equal(f.server.calls.some(c => c.method.startsWith("turn/")), false);
+    } else {
+      assert.deepEqual([outcome.delivery_status, mutated, outcome.unseen_since_basis.latest_agent_message?.text ?? null],
+        ["accepted", true, change === "updated" ? "after" : "late"], "the worker's change at the boundary is sent over and reported");
+      if (change === "own input") assert.ok(outcome.unseen_since_basis.events >= 2, "the earlier own message was in the delta it sent over");
+    }
   });
 
   test(`${mode}: sync persists public full text, outputs and diffs through observe`, async t => {

@@ -31,19 +31,26 @@ function printed(error, json) {
   return json ? JSON.parse(lines.join("\n")).error : lines;
 }
 
-test("a stale-sync refusal prints the delta it refused on, bounded, in JSON and in text", async t => {
+test("a refusal prints the events it refused on, bounded, in JSON and in text", async t => {
   const f = await fixture(t);
-  f.current = task(Array.from({ length: 25 }, (_, n) => ({ id: `agent-${n}`, type: "agentMessage", text: `${n}:` + "x".repeat(3000) })));
+  f.current = task([...Array.from({ length: 25 }, (_, n) => ({ id: `agent-${n}`, type: "agentMessage", text: `${n}:` + "x".repeat(3000) })),
+    { id: "ask", type: "agentMessage", text: "26: which one?", questions: ["A or B?"] }]);
   const error = await refusal(tellWork(THREAD, "fixture", {}, { storage: f, read: f.read }));
-  assert.equal(error.code, "WORK_TELL_STALE_SYNC");
+  assert.equal(error.code, "WORK_TELL_HUMAN_REQUIRED");
   const json = printed(error, true);
-  assert.equal(json.code, "WORK_TELL_STALE_SYNC"); assert.equal(json.events.length, 20); assert.equal(json.events_omitted, error.events.length - 20);
-  assert.match(json.events.at(-1).text, /^24:/, "the newest events are kept"); assert.ok(json.events.every(event => event.text.length <= 2000 + "\n[truncated]".length));
-  assert.equal(json.turn_identity, "turn-one"); assert.equal(json.sync_turn_identity, "turn-one"); assert.equal(json.delivery_action, undefined);
+  assert.equal(json.code, "WORK_TELL_HUMAN_REQUIRED"); assert.equal(json.events.length, 20); assert.equal(json.events_omitted, error.events.length - 20);
+  assert.match(json.events.at(-1).text, /^26:/, "the newest events are kept"); assert.ok(json.events.every(event => event.text.length <= 2000 + "\n[truncated]".length));
+  assert.equal(json.delivery_action, undefined);
   const text = printed(error, false);
   assert.equal(text.filter(line => line.startsWith("event: ")).length, 20); assert.ok(text.includes(`events_omitted: ${error.events.length - 20}`));
-  assert.ok(text.includes('turn_identity: "turn-one"'));
-  const pasted = Object.assign(new Error("changed"), { code: "WORK_TELL_STALE_SYNC", events: [{ id: "user-image", type: "userMessage", text: "see image", attachments: [{ url: `data:image/png;base64,${"A".repeat(50000)}` }], questions: ["Q".repeat(5000)] }] });
+
+  const other = await fixture(t);
+  other.current = task([{ id: "agent-new", type: "agentMessage", text: "progress" }, { id: "user-new", type: "userMessage", content: [{ type: "text", text: "someone else's request" }] }]);
+  const foreign = printed(await refusal(tellWork(THREAD, "fixture", {}, { storage: other, read: other.read })), true);
+  assert.deepEqual([foreign.code, foreign.events.map(event => event.id), foreign.events_omitted], ["WORK_TELL_FOREIGN_INPUT", ["user-new"], 0], "the input that refused it, not the worker's progress");
+  const plain = printed(Object.assign(new Error("changed"), { code: "STALE_OBSERVATION", events: [{ id: "user-new", type: "userMessage", text: "x".repeat(3000) }] }), true);
+  assert.deepEqual([plain.events.length, plain.events[0].text.length], [1, 2000 + "\n[truncated]".length], "a plain send's refusal names the input too");
+  const pasted = Object.assign(new Error("changed"), { code: "WORK_TELL_FOREIGN_INPUT", events: [{ id: "user-image", type: "userMessage", text: "see image", attachments: [{ url: `data:image/png;base64,${"A".repeat(50000)}` }], questions: ["Q".repeat(5000)] }] });
   const clipped = printed(pasted, true).events[0];
   assert.ok(clipped.attachments[0].url.length <= 2000 + "\n[truncated]".length && clipped.questions[0].length <= 2000 + "\n[truncated]".length, "every string in an event is clipped");
 });
