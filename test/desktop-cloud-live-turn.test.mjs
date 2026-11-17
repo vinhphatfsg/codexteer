@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tempPrefix } from "../test-support/temp.mjs";
+import { writeRecord } from "../src/store.mjs";
 import { desktopCloudService } from "../test-support/desktop-cloud-service.mjs";
-import { DesktopCloudClient, connectDesktopCloud } from "../src/desktop-cloud-api.mjs";
+import { DesktopCloudClient, connectDesktopCloud, startedTurns } from "../src/desktop-cloud-api.mjs";
 import { observeThread } from "../src/observe.mjs";
 import { getManagedThread, registerManagedThread } from "../src/project-index.mjs";
 import { registerSupervisor } from "../src/supervision.mjs";
@@ -26,20 +27,29 @@ const command = (status = "inProgress") => ({ id: `item-${++serial}`, type: "com
 
 // One Desktop Cloud task behind the real client, reader and project commands.
 // The service shows a running turn's items only when it ends, as the service does;
-// `live: false` is the switch left off.
+// `live: false` is the switch off. The reader learns the turns codexteer started
+// from the project's send receipts; `start` stands for such a send under the
+// task's reviewer unless `started` is false.
 function task(n, { live = true } = {}) {
-  const id = `durable_${uuid(n)}`, service = desktopCloudService(uuid(n), { environment: `fixture~asenvcfg_${n}`, liveTurn: true });
-  const connect = async () => new DesktopCloudClient(service.rpc, live ? { openLive: service.openLive, timeoutMs: 100, drainMs: 5 } : {});
-  return { ...service, id, connect, environment: `fixture~asenvcfg_${n}`, session: uuid(n + 500),
+  const id = `durable_${uuid(n)}`, service = desktopCloudService(uuid(n), { environment: `fixture~asenvcfg_${n}`, liveTurn: true }), sent = new Map();
+  const x = { ...service, id, environment: `fixture~asenvcfg_${n}`, session: uuid(n + 500), storage: null,
     resumes: () => service.state.live.resumes.length,
-    start(text = "order") { const opening = user(text); const started = service.append([opening], { status: "inProgress" }); service.state.status = "active"; return { turn: started.id, opening }; },
+    turns: async thread => new Map([...x.storage ? await startedTurns(thread, x.storage) : [], ...sent]),
+    start(text = "order", { started = true } = {}) {
+      const opening = user(text), turn = service.append([opening], { status: "inProgress" });
+      service.state.status = "active"; if (started) sent.set(turn.id, service.state.reviewer);
+      return { turn: turn.id, opening };
+    },
     endedButActive() { service.append([user("order"), agent("report")]); service.state.status = "active"; } };
+  x.connect = async () => new DesktopCloudClient(service.rpc, live ? { openLive: service.openLive, turns: x.turns, timeoutMs: 100, drainMs: 5 } : {});
+  return x;
 }
 
 async function project(t, tasks) {
   const home = await mkdtemp(tempPrefix("ct-dc-live-")); t.after(() => rm(home, { recursive: true, force: true }));
   const storage = { home }, byId = new Map(tasks.map(x => [x.id, x]));
   for (const x of tasks) {
+    x.storage = storage;
     await registerManagedThread(x.id, { projectId: "P", connection: "desktop-cloud", environmentConfigId: x.environment }, storage);
     await registerSupervisor(x.id, x.session, { ...storage, connection: "desktop-cloud" });
   }
@@ -187,7 +197,26 @@ test("a server request replayed to the reader is reported as human attention and
   f.state.live.failure = null; f.state.live.requests = [];
   const answered = await f.row();
   assert.equal(answered.attention, "none"); assert.equal(answered.group, "動作中");
-  for (const connection of liveCalls(f)) assert.deepEqual(connection, { calls: ["thread/resume"], closed: true });
+  const held = f.state.live.connections.filter(connection => !connection.closed);
+  assert.equal(held.length, 3, "each reader sent the request stays open");
+  for (const connection of held) connection.emit("notification", { method: "serverRequest/resolved", params: { threadId: uuid(901), requestId: "replayed-0" } });
+  for (const connection of liveCalls(f)) assert.deepEqual(connection, { calls: ["thread/resume"], closed: true }, "and closes once the service resolves it");
+});
+
+test("a reader sent server requests closes only after the service resolves every one", async t => {
+  const f = await member(t);
+  f.start(); f.progress(command());
+  f.state.live.requests = [APPROVAL, "item/fileChange/requestApproval"];
+  assert.deepEqual((await f.read(ID, {})).pending_requests, [APPROVAL, "item/fileChange/requestApproval"].sort());
+  const [reader] = f.state.live.connections, resolved = requestId => reader.emit("notification", { method: "serverRequest/resolved", params: { threadId: uuid(901), requestId } });
+  assert.equal(reader.closed, false, "a reader that closes on a request it holds would interrupt the turn");
+  resolved("another-request"); reader.emit("notification", { method: "turn/completed", params: {} });
+  assert.equal(reader.closed, false);
+  resolved("replayed-0"); assert.equal(reader.closed, false, "one request is still unresolved");
+  resolved("replayed-1"); assert.equal(reader.closed, true);
+  f.state.live.requests = [];
+  await f.read(ID, {});
+  assert.equal(f.state.live.connections[1].closed, true, "a reader sent no request closes at once");
 });
 
 test("a turn that ends between the history read and the resume is read from the history", async t => {
@@ -346,21 +375,27 @@ test("work tell that is first to meet a refused live view sends as on an unread 
   assert.equal(f.resumes() - resumes, 1, "the refusal found by the first read holds for the check before sending");
 });
 
-test("past 256 live items the member is read from the history for the rest of the turn, and the row says so", async t => {
-  for (const before of [0, 200]) {
+test("a turn's live items fill 512 places, and the reads after that neither resume nor deliver until the turn ends", async t => {
+  for (const before of [0, 300]) {
     const f = await member(t);
     f.append([user("first order"), agent("first report")]);
     await f.sync();
     const { turn, opening } = f.start(), early = Array.from({ length: before }, (_, n) => agent(`early ${n}`)), rows = [];
     const row = async () => (await f.sync({ byteBudget: 1024 * 1024 })).works[0];
     if (before) { f.progress(...early); rows.push(await row()); assert.equal(rows[0].live_fallback, undefined); assert.equal(eventIds(rows[0]).length, before + 2); }
-    const late = Array.from({ length: 257 - before }, (_, n) => agent(`late ${n}`));
+    const late = Array.from({ length: 513 - before }, (_, n) => agent(`late ${n}`));
     f.progress(...late);
-    const full = await f.sync({ byteBudget: 1024 * 1024 });
+    const filled = await f.sync({ byteBudget: 1024 * 1024 });
+    rows.push(filled.works[0]);
+    assert.deepEqual(eventIds(rows.at(-1)).filter(id => late.some(item => item.id === id)), late.slice(0, -1).map(item => item.id), "the places left take the oldest items");
+    assert.equal(rows.at(-1).live_fallback, "ledger_full", `${before}: the read that leaves an item out has not seen the whole turn`);
+    assert.equal(rows.at(-1).attention_coverage, UNOBSERVED); assert.equal(rows.at(-1).complete, true);
+    assert.deepEqual(filled.attention_unobserved, FALLBACK(ID, "ledger_full"));
+    const resumes = f.resumes(), full = await f.sync({ byteBudget: 1024 * 1024 });
     rows.push(full.works[0]);
-    assert.equal(full.works[0].live_fallback, "ledger_full", `${before}`); assert.equal(full.works[0].attention_coverage, UNOBSERVED); assert.equal(full.works[0].complete, true);
-    assert.deepEqual(full.attention_unobserved, FALLBACK(ID, "ledger_full"));
-    assert.equal(eventIds(full.works[0]).some(id => late.some(item => item.id === id)), false, "an item past the limit waits for the history");
+    assert.equal(f.resumes(), resumes, "a full ledger is not resumed for");
+    assert.equal(full.works[0].live_fallback, "ledger_full"); assert.equal(full.works[0].attention_coverage, UNOBSERVED);
+    assert.deepEqual(eventIds(full.works[0]), [], "the item past the limit waits for the history");
     const final = agent("Done.");
     f.complete([final]);
     rows.push(await row());
@@ -506,7 +541,6 @@ test("work tell does not steer a turn that ends after its first read: it starts 
 test("work tell that cannot take its second live view sends as on an unread turn, and its receipt says so", async t => {
   const blind = { error: f => { f.state.live.failure = "error"; }, timeout: f => { f.state.live.failure = "timeout"; },
     view: f => { f.state.live.itemId = id => `live-${id}`; },
-    ledger: f => { f.progress(...Array.from({ length: 257 }, (_, n) => agent(`late ${n}`))); },
     ended: f => { f.state.live.beforeResume = () => { f.complete([agent("Finished.")]); f.state.live.beforeResume = null; }; } };
   for (const [name, change] of Object.entries(blind)) {
     const f = await member(t);
@@ -537,7 +571,7 @@ test("work start reads the new task's history only, and the first sync reads its
   const home = await mkdtemp(tempPrefix("ct-dc-live-start-")), root = await mkdtemp(tempPrefix("ct-dc-live-root-"));
   t.after(() => Promise.all([rm(home, { recursive: true, force: true }), rm(root, { recursive: true, force: true })]));
   await writeFile(`${root}/CODEXTEER.md`, "policy\n");
-  const x = task(941), storage = { home }, environment = { id: x.environment, name: "Fixture" };
+  const x = task(941), storage = { home }, environment = { id: x.environment, name: "Fixture" }; x.storage = storage;
   const transport = { ...storage, connect: x.connect, environments: async () => ({ environments: [environment] }) };
   const read = (id, options) => observeThread(id, options, { connect: x.connect });
   const started = await startWork({ project: "P", title: "live", order: "Report a focused result.", root, environment: "Fixture", connection: "desktop-cloud" }, { storage,
@@ -590,12 +624,13 @@ test("a cursor that carries a live ledger is read with the switch off, and the e
 
 // The wire under connectDesktopCloud: a scripted socket that serves one task
 // with a running turn and replays an approval request to a resuming client.
-function wire() {
-  const UUID = uuid(931), frames = [];
-  const turn = { id: "turn-1", status: "inProgress", startedAt: 1, items: [{ id: "item-a", type: "userMessage", content: [{ type: "text", text: "order" }] }] };
+// `home` holds the send receipts the reader learns codexteer's turns from.
+function wire(home) {
+  const UUID = uuid(931), frames = [], sockets = [];
+  const turn = { id: "turn-1", status: "inProgress", startedAt: 1, items: [{ id: "item-a", type: "userMessage", content: [{ type: "text", text: "order" }] }], itemsView: "full" };
   const asked = { id: "item-b", type: "agentMessage", text: "Which database?", questions: [{ id: "choice", question: "Which database?" }] };
   class Socket extends EventEmitter {
-    constructor() { super(); this.readyState = 0; this.sent = []; frames.push(this.sent); setImmediate(() => { this.readyState = 1; this.emit("open"); }); }
+    constructor() { super(); this.readyState = 0; this.sent = []; this.closed = false; frames.push(this.sent); sockets.push(this); setImmediate(() => { this.readyState = 1; this.emit("open"); }); }
     reply(message) { setImmediate(() => this.emit("message", Buffer.from(JSON.stringify(message)), false)); }
     send(data, done) {
       const message = JSON.parse(data); this.sent.push(message); done?.();
@@ -606,29 +641,137 @@ function wire() {
       else if (message.method === "thread/turns/list") this.reply({ id: message.id, result: { data: [{ ...turn, items: [], itemsView: "notLoaded" }], nextCursor: null } });
       else if (message.method === "thread/items/list") this.reply({ id: message.id, result: { data: turn.items.map(item => ({ turnId: turn.id, item })), nextCursor: null } });
       else if (message.method === "thread/resume") {
-        this.reply({ id: message.id, result: { thread: { ...thread, turns: [{ ...turn, items: [...turn.items, asked] }] }, resumeKind: "attached" } });
+        this.reply({ id: message.id, result: { thread: { ...thread, turns: [{ ...turn, items: [...turn.items, asked] }] }, approvalsReviewer: "auto_review", resumeKind: "attached" } });
         this.reply({ id: "approval-1", method: APPROVAL, params: { threadId: UUID } });
       } else this.reply({ id: message.id, error: { code: -32601, message: "unsupported" } });
     }
-    close() { this.readyState = 3; this.emit("close"); }
-    terminate() { this.readyState = 3; this.emit("close"); }
+    close() { this.closed = true; this.readyState = 3; this.emit("close"); }
+    terminate() { this.closed = true; this.readyState = 3; this.emit("close"); }
   }
-  const connect = env => () => connectDesktopCloud({}, { credentials: async () => ({ token: "token", accountId: "account" }), Socket, env });
-  return { id: `durable_${UUID}`, frames, connect };
+  const connect = env => () => connectDesktopCloud({}, { credentials: async () => ({ token: "token", accountId: "account" }), Socket, env, home });
+  return { id: `durable_${UUID}`, frames, sockets, connect };
 }
 
-test("on the wire, the reader resumes on its own connection and answers no server request", async t => {
-  const on = wire();
-  const read = await observeThread(on.id, {}, { connect: on.connect({ CODEXTEER_DESKTOP_CLOUD_LIVE_TURN: "on" }) });
-  assert.deepEqual(read.events.map(event => event.id), ["turn-1", "item-a", "item-b"]);
-  assert.deepEqual(read.attention, [FLAG]); assert.deepEqual(read.pending_requests, [APPROVAL]);
-  const methods = on.frames.map(sent => sent.map(message => message.method));
-  assert.deepEqual(methods[1], ["initialize", "initialized", "thread/resume"], "the live connection initializes and resumes, nothing more");
-  assert.equal(methods[0].includes("thread/resume"), false, "the read connection is never subscribed");
-  assert.deepEqual(on.frames.flat().filter(message => message.method === undefined), [], "no response frame, so the approval request is never answered");
+test("on the wire, the reader resumes a turn codexteer started on its own connection, answers no server request and holds it until resolved", async t => {
+  const home = await mkdtemp(tempPrefix("ct-dc-live-wire-")); t.after(() => rm(home, { recursive: true, force: true }));
+  const sent = { thread_id: `durable_${uuid(931)}`, delivery_action: "new-turn", delivery_status: "accepted", turn_id: "turn-1", approvals_reviewer: "auto_review" };
+  await writeRecord("desktop-cloud-sends", "fixture-send", sent, { home });
+  for (const env of [{}, { CODEXTEER_DESKTOP_CLOUD_LIVE_TURN: "on" }]) {
+    const on = wire(home);
+    const read = await observeThread(on.id, {}, { connect: on.connect(env) });
+    assert.deepEqual(read.events.map(event => event.id), ["turn-1", "item-a", "item-b"]);
+    assert.deepEqual(read.attention, [FLAG]); assert.deepEqual(read.pending_requests, [APPROVAL]);
+    const methods = on.frames.map(sent => sent.map(message => message.method));
+    assert.deepEqual(methods[1], ["initialize", "initialized", "thread/resume"], "the live connection initializes and resumes, nothing more");
+    assert.equal(methods[0].includes("thread/resume"), false, "the read connection is never subscribed");
+    assert.deepEqual(on.frames.flat().filter(message => message.method === undefined), [], "no response frame, so the approval request is never answered");
+    assert.deepEqual(on.sockets.map(socket => socket.closed), [true, false], "the reader holding the request stays open");
+    on.sockets[1].reply({ method: "serverRequest/resolved", params: { threadId: uuid(931), requestId: "approval-1" } });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(on.sockets[1].closed, true, "and closes once the service resolves it");
+  }
 
-  const off = wire();
-  const blind = await observeThread(off.id, {}, { connect: off.connect({}) });
+  const off = wire(home);
+  const blind = await observeThread(off.id, {}, { connect: off.connect({ CODEXTEER_DESKTOP_CLOUD_LIVE_TURN: "off" }) });
   assert.equal(blind.attention_coverage, UNOBSERVED); assert.equal(off.frames.length, 1, "with the switch off no live connection is opened");
   assert.equal(off.frames.flat().some(message => message.method === "thread/resume"), false);
+
+  const other = await mkdtemp(tempPrefix("ct-dc-live-wire-")); t.after(() => rm(other, { recursive: true, force: true }));
+  const foreign = wire(other);
+  const unread = await observeThread(foreign.id, {}, { connect: foreign.connect({}) });
+  assert.equal(unread.attention_coverage, UNOBSERVED); assert.equal(unread.live_fallback, "not_codexteer_turn");
+  assert.equal(foreign.frames.length, 1, "a turn codexteer did not start is never resumed");
+});
+
+test("a running turn codexteer did not start, or started under another reviewer, is read from the history and never resumed", async t => {
+  for (const [name, start, reason] of [["foreign", f => f.start("order", { started: false }), "not_codexteer_turn"],
+    ["user reviewer", f => { f.state.reviewer = "user"; f.start(); }, "not_auto_review"]]) {
+    const f = await member(t);
+    f.append([user("first order"), agent("first report")]);
+    await f.sync();
+    start(f); f.progress(question("Which database?"));
+    const synced = await f.sync();
+    assert.equal(synced.works[0].attention_coverage, UNOBSERVED, name); assert.equal(synced.works[0].live_fallback, reason, name);
+    assert.deepEqual(synced.attention_unobserved, FALLBACK(ID, reason), name);
+    assert.equal((await f.wait()).timed_out, true, `${name}: the question is not seen while the turn runs`);
+    const read = await f.read(ID, {});
+    assert.equal(read.live_fallback, reason, name); assert.equal(f.resumes(), 0, `${name}: the task is never resumed`);
+    f.complete([agent("Done.")]);
+    assert.equal((await f.wait()).reason, "work_changed", `${name}: the question arrives with the turn end`);
+  }
+});
+
+test("a new turn codexteer sends records the reviewer the task reports right before it starts", async t => {
+  for (const [reviewer, resumed] of [["auto_review", 1], ["user", 0], [null, 0]]) {
+    const f = await member(t);
+    f.append([user("first order"), agent("first report")]);
+    await f.sync();
+    f.state.reviewer = reviewer ?? undefined;
+    const receipt = await f.tell(ID, "Continue the same delegation.", { newTurn: true });
+    assert.equal(receipt.delivery_status, "accepted"); assert.equal(f.state.reviewerReads, 1, "the send resumes the idle task once on its own connection");
+    assert.deepEqual([...(await startedTurns(ID, f.storage))], [[receipt.turn_id, reviewer]], `${reviewer}: the receipt holds the turn and its reviewer`);
+    f.progress(agent("Working."));
+    const row = await f.row();
+    assert.equal(f.resumes(), resumed, `${reviewer}`);
+    assert.equal(row.live_fallback, resumed ? undefined : "not_auto_review", `${reviewer}`);
+    assert.equal(row.attention_coverage, resumed ? undefined : UNOBSERVED, `${reviewer}`);
+  }
+});
+
+test("a live view whose task reports another reviewer is delivered, and the task is not resumed again", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  const first = await f.read(ID, {});
+  const { turn } = f.start(), note = agent("Working.");
+  f.progress(note, command());
+  f.state.reviewer = "user"; f.state.live.requests = [APPROVAL];
+  const switched = await f.read(ID, { since: first.cursor });
+  assert.equal(switched.live_turn_id, turn); assert.equal(switched.live_fallback, undefined, "this read saw the turn live");
+  assert.equal(switched.events.some(event => event.id === note.id), true); assert.deepEqual(switched.pending_requests, [APPROVAL]);
+  assert.equal(f.state.live.connections[0].closed, false, "the reader holds the request it was sent");
+  f.progress(agent("More work."));
+  const later = await observeThread(ID, { since: switched.cursor }, { connect: f.connect });
+  assert.equal(f.resumes(), 1, "the cursor carries the refusal to another process");
+  assert.equal(later.live_fallback, "not_auto_review"); assert.equal(later.attention_coverage, UNOBSERVED); assert.deepEqual(later.events, []);
+  assert.deepEqual(later.pending_requests, [APPROVAL], "the request stays human attention until the turn ends");
+  f.complete([agent("Done.")]);
+  const ended = await f.read(ID, { since: later.cursor });
+  assert.equal(ended.live_fallback, "not_auto_review"); assert.equal(ended.live_mismatch, undefined); assert.equal(ended.pending_requests, undefined);
+  f.start("next order"); f.state.reviewer = "auto_review";
+  await f.read(ID, { since: ended.cursor });
+  assert.equal(f.resumes(), 1, "the refusal holds for the task's later turns");
+});
+
+test("a steer into a running turn codexteer did not start does not make it codexteer's", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  f.start("order", { started: false }); f.progress(agent("Working."));
+  await f.sync();
+  const receipt = await f.tell(ID, "Also update the changelog.");
+  assert.equal(receipt.delivery_status, "accepted"); assert.equal(receipt.attention_coverage, UNOBSERVED);
+  assert.equal(steers(f), 1); assert.equal(f.state.reviewerReads, 0, "a steer does not read the reviewer");
+  assert.equal((await f.read(ID, {})).live_fallback, "not_codexteer_turn");
+  assert.equal(f.resumes(), 0);
+});
+
+test("a resumed view that cannot be used still stops resuming a task that reports another reviewer", async t => {
+  const f = await member(t);
+  f.append([user("first order"), agent("first report")]);
+  const first = await f.read(ID, {});
+  f.start(); f.progress(agent("Working."), agent("More."));
+  f.state.reviewer = "user"; f.state.live.itemId = () => "same-id";
+  const read = await f.read(ID, { since: first.cursor });
+  assert.equal(read.live_fallback, "not_auto_review"); assert.equal(read.attention_coverage, UNOBSERVED); assert.equal(f.resumes(), 1);
+  f.state.live.itemId = id => id;
+  assert.equal((await f.read(ID, { since: read.cursor })).live_fallback, "not_auto_review");
+  assert.equal(f.resumes(), 1);
+});
+
+test("with the switch off, a new turn's send does not resume the task to read its reviewer", async t => {
+  const f = await member(t, { live: false });
+  f.append([user("first order"), agent("first report")]);
+  await f.sync();
+  const receipt = await f.tell(ID, "Continue the same delegation.", { newTurn: true });
+  assert.equal(receipt.delivery_status, "accepted"); assert.equal(f.state.reviewerReads, 0);
+  assert.deepEqual([...(await startedTurns(ID, f.storage))], [[receipt.turn_id, null]]);
 });

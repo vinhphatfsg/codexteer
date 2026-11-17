@@ -2,8 +2,8 @@
 // Production exposes no endpoint or credential override for this fixture.
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { DesktopCloudClient, liveTurnEnabled, loadTurn } from "../src/desktop-cloud-api.mjs?actual";
-export { DesktopCloudClient, liveTurnEnabled, loadTurn };
+import { AUTO_REVIEW, DesktopCloudClient, liveTurnEnabled, loadTurn } from "../src/desktop-cloud-api.mjs?actual";
+export { AUTO_REVIEW, DesktopCloudClient, liveTurnEnabled, loadTurn };
 const file = () => `${process.env.CODEX_HOME}/fixture.json`;
 export async function desktopCloudEnvironments() { return { environments: [{ id: "test-config", name: "Fixture" }] }; }
 export async function connectDesktopCloud() {

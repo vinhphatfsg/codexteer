@@ -56,7 +56,7 @@ async function createTask(selector, prompt, options = {}, { environments = deskt
     if (options.title) await client.request("thread/name/set", { threadId: receipt.thread_id, name: options.title }, { mutation: true });
     const { sendTrackedMessage } = await import("./journal.mjs");
     const sent = await sendTrackedMessage(receipt.thread_id, prompt, { newTurn: true, connection: "desktop-cloud" }, { ...storage,
-      send: (target, text, settings) => sendDesktopCloudInput(target, text, { ...settings, expectedEnvironmentConfigId: selected.id, initialModelSelection: receipt.model_selection }, { ...storage, connect: async () => ({ request: (...args) => client.request(...args), close() {} }) }) });
+      send: (target, text, settings) => sendDesktopCloudInput(target, text, { ...settings, expectedEnvironmentConfigId: selected.id, initialModelSelection: receipt.model_selection, approvalsReviewer: result.approvalsReviewer ?? null }, { ...storage, connect: async () => ({ request: (...args) => client.request(...args), close() {} }) }) });
     receipt = { ...receipt, ...sent }; await save(); return receipt;
   } catch (error) {
     receipt.creation_dispatched = dispatched;
@@ -78,7 +78,7 @@ async function sendState(client, id) {
   return { ...thread, turns: newest ? [{ ...newest, items: [], itemsView: "notLoaded" }] : [] };
 }
 
-export async function sendDesktopCloudInput(target, text, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend, expectedEnvironmentConfigId, initialModelSelection } = {}, { connect = connectDesktopCloud, ...storage } = {}) {
+export async function sendDesktopCloudInput(target, text, { dryRun = false, newTurn = false, clientMessageId = randomUUID(), beforeSend, expectedEnvironmentConfigId, initialModelSelection, approvalsReviewer } = {}, { connect = connectDesktopCloud, ...storage } = {}) {
   const id = desktopCloudId(target);
   if (typeof text !== "string" || !text.trim()) throw failure("A non-empty message is required.");
   const plan = { thread_id: id, deep_link: desktopCloudLink(id), client_message_id: clientMessageId, backend: "desktop-cloud", connection_mode: "desktop-cloud", delivery_action: newTurn ? "new-turn" : "steer", dry_run: dryRun, message_characters: [...text].length };
@@ -108,6 +108,8 @@ export async function sendDesktopCloudInput(target, text, { dryRun = false, newT
         if (!newTurn || !expectedEnvironmentConfigId || thread.turns.length !== 0 || !initialModelSelection.model || !initialModelSelection.thinking) throw failure("Initial model settings require a verified, empty new Cloud thread.");
       }
       await beforeSend?.(thread, client);
+      // The turn starts under the task's reviewer, which decides whether reads may resume the task while it runs.
+      if (newTurn) receipt.approvals_reviewer = approvalsReviewer !== undefined ? approvalsReviewer : await client.approvalsReviewer?.(id).catch(() => null) ?? null;
       receipt.delivery_status = "unknown"; await save(); dispatching = true;
       const params = { threadId: id, input: [{ type: "text", text, text_elements: [] }], clientUserMessageId: clientMessageId };
       const result = await client.request(newTurn ? "turn/start" : "turn/steer", newTurn ? { ...params, environments, deferredEnvironment: true,

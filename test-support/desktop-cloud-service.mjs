@@ -17,9 +17,12 @@ import { RpcFailure } from "../src/rpc.mjs";
 // only, as the service does, and `openLive` opens the separate connection a
 // live read resumes the task on. `state.live` scripts that connection and
 // records every resume, and an idle resume as a wake of the task's environment.
+// `state.reviewer` is the task's approvals reviewer, which thread/start and
+// every resume report; `state.reviewerReads` counts the resumes a send makes
+// on its own connection to learn it.
 export function desktopCloudService(uuid, { environment, receiveLimit = Infinity, liveTurn = false } = {}) {
   const state = { turns: [], flags: [], environment, status: "idle", lost: false, missing: false, calls: [], receiveLimit,
-    served: { requests: 0, turns: 0, bytes: 0, ids: 0, pages: 0 }, clock: 1_800_000_000, hideRunning: liveTurn,
+    served: { requests: 0, turns: 0, bytes: 0, ids: 0, pages: 0 }, clock: 1_800_000_000, hideRunning: liveTurn, reviewer: "auto_review", reviewerReads: 0,
     live: { resumes: [], wakes: 0, failure: null, requests: [], flags: [], beforeResume: null, itemId: id => id, item: item => item, connections: [] } };
   const turn = (fields = {}) => ({ id: `turn-${state.turns.length}`, status: "completed", startedAt: state.clock++, items: [], ...fields });
   const listed = row => state.hideRunning && row.status === "inProgress" ? { ...row, items: row.items.slice(0, 1) } : row;
@@ -27,7 +30,8 @@ export function desktopCloudService(uuid, { environment, receiveLimit = Infinity
     state.calls.push({ method, params });
     if (method === "model/list") return { data: [{ model: "neutral-default", isDefault: true, defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "high" }] }] };
     if (method === "thread/start" && state.lostCreate) throw Object.assign(new Error("creation receipt lost"), { uncertain: true });
-    if (method === "thread/start") return { thread: { id: uuid } };
+    if (method === "thread/start") return { thread: { id: uuid }, approvalsReviewer: state.reviewer };
+    if (method === "thread/resume") { state.reviewerReads++; return { thread: { id: params.threadId }, approvalsReviewer: state.reviewer }; }
     if (method === "thread/name/set") return {};
     if (method === "thread/read") {
       if (state.missing) throw Object.assign(new Error("not visible"), { code: "THREAD_NOT_FOUND" });
@@ -96,7 +100,7 @@ export function desktopCloudService(uuid, { environment, receiveLimit = Infinity
       if (state.live.failure === "timeout") return new Promise(() => {});
       setImmediate(() => state.live.requests.forEach((request, n) => connection.emit("serverRequest", { id: `replayed-${n}`, method: request, params: { threadId: params.threadId } })));
       const turns = structuredClone(state.turns).map(row => ({ ...row, items: row.items.map(item => state.live.item({ ...item, id: state.live.itemId(item.id) })) }));
-      return { thread: { id: params.threadId, status: { type: state.status, activeFlags: state.live.flags }, turns },
+      return { thread: { id: params.threadId, status: { type: state.status, activeFlags: state.live.flags }, turns }, approvalsReviewer: state.reviewer,
         initialTurnsPage: null, turnsBackwardsCursor: null, itemsBackwardsCursor: null, resumeKind: "attached" };
     };
     connection.notify = method => { connection.calls.push({ method }); };

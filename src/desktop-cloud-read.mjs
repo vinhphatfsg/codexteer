@@ -12,13 +12,14 @@ import { assertReadOptions, digest, fetchThread, mutableStatus, prefixHash, proj
 import { encodeCursor, invalidCursor, parseCursor } from "./cursor.mjs";
 import { hostFields } from "./target.mjs";
 import { turnEvidence } from "./attention-coverage.mjs";
-import { loadTurn } from "./desktop-cloud-api.mjs";
+import { AUTO_REVIEW, loadTurn } from "./desktop-cloud-api.mjs";
 import { assertNoForeignInput, snapshotDelta } from "./input-origin.mjs";
 
 const FINAL = new Set(["completed", "failed", "interrupted", "cancelled"]), RUNNING = new Set(["inProgress", "in_progress", "running", "pending", "queued"]);
 const PAGES = 1000, BYTES = 32 * 1024 * 1024;
-// The live ledger lives in the cursor, so its size bounds the cursor's.
-const LIVE_ITEMS = 256, REQUEST = "pendingRequest:";
+// The live ledger lives in the cursor, so its size bounds the cursor's: a full
+// ledger is a cursor of about 40 KB.
+const LIVE_ITEMS = 512, REQUEST = "pendingRequest:";
 const failure = message => Object.assign(new Error(message), { code: "DESKTOP_CLOUD_PROTOCOL_ERROR" });
 const startedAt = turn => Number.isSafeInteger(turn?.startedAt) && turn.startedAt >= 0 ? turn.startedAt : null;
 
@@ -161,15 +162,16 @@ export async function readCloudTail(client, thread, options = {}) {
 function liveView(client, threadId, turnId, scope) {
   const shared = scope.get(threadId);
   if (shared?.turn_id === turnId) return shared.view;
-  const view = client.liveTurn(threadId).catch(() => null);
+  const view = client.liveTurn(threadId, turnId).catch(() => null);
   scope.set(threadId, { turn_id: turnId, view });
   return view;
 }
 
 // Why a read that could read a running turn live reports the history view:
 // the cursor's refusal, or what stopped this read.
+const REFUSED = { ledger: "mismatch", view: "view_mismatch", reviewer: "not_auto_review" };
 const liveFallback = (client, refused, reason = null) => typeof client.liveTurn !== "function" ? {}
-  : refused ? { live_fallback: refused === "view" ? "view_mismatch" : "mismatch" } : reason ? { live_fallback: reason } : {};
+  : refused ? { live_fallback: REFUSED[refused] } : reason ? { live_fallback: reason } : {};
 
 // What the live view adds to the history's list of the running turn `turn`:
 // `fresh`, the events the history does not list, with their hashes. `absent`
@@ -200,7 +202,8 @@ const liveAttention = view => [...new Set([...(Array.isArray(view.status?.active
 // first; a changed one is an update. Completed history that does not list an
 // item the live view delivered, or a live view that lacks an item the history
 // lists, refuses live reads of the task from then on: the cursor carries the
-// refusal, and `live_mismatch` marks the read that found it. `live_fallback`
+// refusal, and `live_mismatch` marks the read that found it. So does a live view
+// whose task reports a reviewer other than the auto reviewer. `live_fallback`
 // says on every read why the history view is the one reported.
 async function withLiveTurn(client, threadId, turns, s, old, result, { liveTurn: scope, limit = 50, maxChars = 2000, includeOutput = false, fullEvents = false }) {
   const ledger = old?.v === 3 ? old.live ?? null : null, delivered = new Map(ledger?.items.map(item => [item.id, item.hash]) ?? []);
@@ -221,23 +224,31 @@ async function withLiveTurn(client, threadId, turns, s, old, result, { liveTurn:
   const running = turns.at(-1);
   if (scope instanceof Map && typeof client.liveTurn === "function" && !refused && !hasMore && turnEvidence(s.state) === "running" && s.state.active_turn_count === 1
     && running && RUNNING.has(running.status) && (turnId === null || turnId === running.id)) {
-    const view = await liveView(client, threadId, running.id, scope), { absent, fresh } = (view && liveEvents(view, running, s)) ?? {};
-    const changed = fresh?.filter(({ event, hash }) => delivered.get(event.id) !== hash) ?? [];
-    if (!fresh) stopped = "unavailable";
+    const view = delivered.size < LIVE_ITEMS ? await liveView(client, threadId, running.id, scope) : { fallback: "ledger_full" };
+    const { absent, fresh } = (view && !view.fallback && liveEvents(view, running, s)) ?? {};
+    // Items past the ledger's room are left to the history. The read that
+    // leaves one out has not seen the whole turn, and the reads after it do not resume.
+    let room = LIVE_ITEMS - delivered.size;
+    const changed = fresh?.filter(({ event, hash }) => delivered.get(event.id) !== hash && (delivered.has(event.id) || room-- > 0)) ?? [];
+    // A task that no longer routes approvals to the auto reviewer is not
+    // resumed again, whatever this view is worth; a usable one is delivered.
+    if (view && !view.fallback && view.reviewer !== AUTO_REVIEW) refused = "reviewer";
+    if (view?.fallback) stopped = view.fallback;
+    else if (!fresh) stopped = "unavailable";
     else if (absent) { fields.live_mismatch = { turn_id: running.id, absent }; refused = "view"; }
-    else if (delivered.size + changed.filter(({ event }) => !delivered.has(event.id)).length > LIVE_ITEMS) stopped = "ledger_full";
     else {
       const sent = changed.slice(0, Math.max(0, limit - events.length));
       events = [...events, ...sent.map(({ event }) => ({ ...trim(event), change: delivered.has(event.id) ? "updated" : "added" }))];
       for (const { event, hash } of sent) delivered.set(event.id, hash);
-      hasMore = changed.length > sent.length; attention = liveAttention(view); turnId = running.id; fields.live_turn_id = running.id;
+      hasMore = changed.length > sent.length; attention = liveAttention(view); turnId = running.id;
+      if (room < 0) stopped = "ledger_full"; else fields.live_turn_id = running.id;
       commands.push(...fresh.map(({ event }) => event).filter(event => event.type === "commandExecution" && mutableStatus.has(event.status)).map(event => trimEvent(event, maxChars, includeOutput)));
     }
   }
   const before = old?.v === 3 ? old.live?.attention ?? [] : [], requests = attention.filter(flag => flag.startsWith(REQUEST)).map(flag => flag.slice(REQUEST.length));
   if (requests.length) fields.pending_requests = requests;
   return { refused, ledger: turnId !== null && (delivered.size || attention.length) ? { turn: turnId, items: [...delivered].map(([id, hash]) => ({ id, hash })), attention } : null,
-    fields: { ...fields, ...liveFallback(client, refused, stopped), events, has_more: hasMore, running_commands: [...result.running_commands, ...commands],
+    fields: { ...fields, ...liveFallback(client, fields.live_turn_id ? null : refused, stopped), events, has_more: hasMore, running_commands: [...result.running_commands, ...commands],
       attention: Array.isArray(result.attention) ? [...new Set([...result.attention, ...attention])] : result.attention,
       changed: !old || events.length > 0 || old.state !== result.cursor.state || JSON.stringify(before) !== JSON.stringify(attention) } };
 }
