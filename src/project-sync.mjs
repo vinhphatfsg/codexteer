@@ -30,6 +30,13 @@ export function projectWaitSignal(page) {
     attention: Array.isArray(page?.attention) ? [...page.attention].sort() : null };
 }
 
+// The turn a review showed the orchestrator it could not watch, so that wait
+// reports each such turn once.
+export const reviewedSignal = state => {
+  const signal = projectWaitSignal(state.latest);
+  return attentionCoverage(state.latest, state.member.connection) ? { ...signal, unobserved_turn: signal.turn_id } : signal;
+};
+
 const endedTurn = new Set(["completed", "failed", "cancelled", "interrupted", "error"]);
 
 // What project wait returns a fully read member for, against its baseline entry.
@@ -536,13 +543,13 @@ export async function syncProject(projectId, options = {}, dependencies = {}) {
         if (dependencies.waitProbe) failures = {};
         for (const [id, state] of states) {
           // A wait returns what it read of a backlog, and its next probe reads on from there.
-          if (state.complete || state.backlog) entries[id] = { cursor: state.cursor, signal: projectWaitSignal(state.latest), sync_token: syncToken };
+          if (state.complete || state.backlog) entries[id] = { cursor: state.cursor, signal: reviewedSignal(state), sync_token: syncToken };
           else {
             if (waitReport?.has(id)) failures[id] = works.find(work => work.thread_id === id).error;
             if (baseline?.works?.[id]) entries[id] = { sync_token: baseline.sync_token, ...baseline.works[id] };
           }
         }
-        baseline = { sync_token: syncToken, membership_digest: membershipDigest, works: entries };
+        baseline = { sync_token: syncToken, membership_digest: membershipDigest, works: entries, reviewed_at: createdAt };
         if (dependencies.waitProbe) head.wait_sync_token = syncToken;
       }
       // A member an ordinary sync read in full with known flags has recovered;
