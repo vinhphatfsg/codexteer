@@ -23,6 +23,7 @@ async function fixture(t, connection = "shared") {
     calls.push({ method, params });
     if (method === "thread/read") return { thread: { ...structuredClone(thread), id: connection === "desktop-cloud" ? thread.id.slice(8) : thread.id } };
     if (method === "thread/turns/list") return { data: thread.turns.map(turn => ({ ...structuredClone(turn), itemsView: "full" })), nextCursor: null };
+    if (method === "thread/items/list") return { data: structuredClone(thread.turns.find(turn => turn.id === params.turnId).items).map(item => ({ turnId: params.turnId, item })), nextCursor: null };
     if (method === "turn/start") {
       assert.equal(options.mutation, true);
       thread.turns.push({ id: "next-turn", status: "inProgress", items: [{ id: "next-input", type: "userMessage", clientId: params.clientUserMessageId, content: params.input }] });

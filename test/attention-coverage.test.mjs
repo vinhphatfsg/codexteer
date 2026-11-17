@@ -31,6 +31,7 @@ async function fixture(t, { name = "worker" } = {}) {
     if (method === "thread/read") return { thread: { id: uuid, name, status: { type: state.status, activeFlags: state.flags },
       environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: ENV }] } };
     if (method === "thread/turns/list") return { data: state.turns.map(turn => ({ ...turn, itemsView: "full" })), nextCursor: null };
+    if (method === "thread/items/list") return { data: state.turns.find(turn => turn.id === params.turnId).items.map(item => ({ turnId: params.turnId, item })), nextCursor: null };
     if (method === "turn/steer") { state.turns.at(-1).items.push({ id: randomUUID(), type: "userMessage", clientId: params.clientUserMessageId, content: params.input }); return { turnId: state.turns.at(-1).id }; }
     if (method === "turn/start") { state.turns.push({ id: `turn-${state.turns.length}`, status: "inProgress", items: [{ id: randomUUID(), type: "userMessage", clientId: params.clientUserMessageId, content: params.input }] }); return { turn: { id: state.turns.at(-1).id } }; }
     throw new Error(`Unexpected ${method}`);

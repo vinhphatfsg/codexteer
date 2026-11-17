@@ -69,7 +69,8 @@ test("a Desktop Cloud read rejected by the service shows the detail on the membe
   const rpc = { close() {}, async request(method) {
     if (method === "thread/read") return { thread: { id: uuid, name: "w".repeat(6000), status: { type: "idle", activeFlags: [] } } };
     if (reject) return rejecting({ code: -32001, message, data: { reason: "serverOverloaded" } }).request(method);
-    return { data: [{ id: "turn-0", status: "completed", itemsView: "full", items: [{ id: "report", type: "agentMessage", text: "Done." }] }], nextCursor: null };
+    if (method === "thread/items/list") return { data: [{ turnId: "turn-0", item: { id: "report", type: "agentMessage", text: "Done." } }], nextCursor: null };
+    return { data: [{ id: "turn-0", status: "completed", itemsView: "notLoaded", items: [] }], nextCursor: null };
   } };
   const read = (id, options) => observeThread(id, options, { connect: async () => new DesktopCloudClient(rpc) });
   await registerManagedThread(ID, { projectId: "P", connection: "desktop-cloud" }, storage);

@@ -5,8 +5,13 @@ import { RpcFailure } from "../src/rpc.mjs";
 // A scripted Desktop Cloud service, used behind the real DesktopCloudClient.
 // thread/turns/list behaves like the service: newest first unless asked
 // otherwise, the full and notLoaded items views only, and a cursor naming the
-// last turn returned. `served` counts the full turns the listing sent, so tests
-// can bound the cost of a read; `served.ids` counts notLoaded turns.
+// last turn returned. thread/items/list lists the same items as `{ turnId, item }`
+// rows, of one turn when asked, in pages with a cursor naming the last row and
+// a backwards cursor that lists the other way from the first row, inclusive.
+// `receiveLimit` bounds every response. `served.turns` counts the turns whose
+// items were sent, as a full turn or from the first item page of that turn, so
+// tests can bound the cost of a read; `served.ids` counts notLoaded turns and
+// `served.pages` item pages.
 //
 // With `liveTurn`, the history shows a running turn with its opening message
 // only, as the service does, and `openLive` opens the separate connection a
@@ -14,7 +19,7 @@ import { RpcFailure } from "../src/rpc.mjs";
 // records every resume, and an idle resume as a wake of the task's environment.
 export function desktopCloudService(uuid, { environment, receiveLimit = Infinity, liveTurn = false } = {}) {
   const state = { turns: [], flags: [], environment, status: "idle", lost: false, missing: false, calls: [], receiveLimit,
-    served: { requests: 0, turns: 0, bytes: 0, ids: 0 }, clock: 1_800_000_000, hideRunning: liveTurn,
+    served: { requests: 0, turns: 0, bytes: 0, ids: 0, pages: 0 }, clock: 1_800_000_000, hideRunning: liveTurn,
     live: { resumes: [], wakes: 0, failure: null, requests: [], flags: [], beforeResume: null, itemId: id => id, item: item => item, connections: [] } };
   const turn = (fields = {}) => ({ id: `turn-${state.turns.length}`, status: "completed", startedAt: state.clock++, items: [], ...fields });
   const listed = row => state.hideRunning && row.status === "inProgress" ? { ...row, items: row.items.slice(0, 1) } : row;
@@ -45,6 +50,26 @@ export function desktopCloudService(uuid, { environment, receiveLimit = Infinity
         turns: state.served.turns + (full ? data.length : 0), ids: state.served.ids + (full ? 0 : data.length) });
       if (bytes > state.receiveLimit) throw new RpcFailure("App Server response exceeded the 16 MiB receive limit. Use paginated history access; the receive limit remains enforced.", { code: "PAYLOAD_TOO_LARGE" });
       return { data, nextCursor: start + rows.length < ordered.length ? JSON.stringify({ direction, id: rows.at(-1).id }) : null, backwardsCursor: null };
+    }
+    if (method === "thread/items/list") {
+      const rejected = () => new RpcFailure("thread/items/list was rejected by App Server.", { code: "RPC_REJECTED", rpcCode: -32602 });
+      const direction = params.sortDirection ?? "asc", turns = state.turns.filter(row => !params.turnId || row.id === params.turnId);
+      if (params.turnId && !turns.length) throw rejected();
+      const rows = turns.flatMap(row => listed(row).items.map(item => ({ turnId: row.id, item }))), ordered = direction === "desc" ? rows.reverse() : rows;
+      const at = (anchor, list) => list.findIndex(row => row.turnId === anchor.turnId && row.item.id === anchor.id);
+      let start = 0;
+      if (params.cursor) {
+        const anchor = JSON.parse(params.cursor);
+        if (anchor.direction !== direction || (anchor.scope ?? null) !== (params.turnId ?? null) || at(anchor, ordered) < 0) throw rejected();
+        start = at(anchor, ordered) + (anchor.inclusive ? 0 : 1);
+      }
+      const page = ordered.slice(start, start + (params.limit ?? 25)), data = structuredClone(page), bytes = Buffer.byteLength(JSON.stringify(data));
+      const position = (row, towards, inclusive = false) => JSON.stringify({ direction: towards, scope: params.turnId ?? null, turnId: row.turnId, id: row.item.id, inclusive });
+      Object.assign(state.served, { requests: state.served.requests + 1, bytes: state.served.bytes + bytes, pages: state.served.pages + 1,
+        turns: state.served.turns + (params.turnId && !params.cursor ? 1 : 0) });
+      if (bytes > state.receiveLimit) throw new RpcFailure("App Server response exceeded the 16 MiB receive limit. Use paginated history access; the receive limit remains enforced.", { code: "PAYLOAD_TOO_LARGE" });
+      return { data, nextCursor: start + page.length < ordered.length ? position(page.at(-1), direction) : null,
+        backwardsCursor: page.length ? position(page[0], direction === "asc" ? "desc" : "asc", true) : null };
     }
     if (method === "turn/start") {
       const started = turn({ status: "inProgress", items: [{ id: randomUUID(), type: "userMessage", clientId: state.nullClientId ? null : params.clientUserMessageId, content: params.input }] });
@@ -86,6 +111,6 @@ export function desktopCloudService(uuid, { environment, receiveLimit = Infinity
   const append = (items = [], fields = {}) => { const added = turn({ items, ...fields }); state.turns.push(added); return added; };
   // Items the running turn produced since it started; the history shows them when it ends.
   const progress = (...items) => { state.turns.at(-1).items.push(...items); return items; };
-  const resetServed = () => Object.assign(state.served, { requests: 0, turns: 0, bytes: 0, ids: 0 });
+  const resetServed = () => Object.assign(state.served, { requests: 0, turns: 0, bytes: 0, ids: 0, pages: 0 });
   return { rpc, state, complete, append, progress, resetServed, openLive };
 }
