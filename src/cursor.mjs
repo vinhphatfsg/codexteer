@@ -47,7 +47,8 @@ const HASH = /^[a-f0-9]{64}$/;
 /**
  * `settled`: the window is one final turn, delivered in full, with nothing running or pending.
  * `live_refused`: the task is read from the history only, because a live view once disagreed with it. `ledger`: an
- * ended turn's history did not list an item the live view had delivered. `view`: a live view lacked an item the history listed.
+ * ended turn's history did not list an item the live view had delivered. `view`: written by earlier versions when a live view
+ * lacked an item the history listed; the reader ignores it.
  * `reviewer`: a live view reported a reviewer other than the auto reviewer.
  * @typedef {Omit<SnapshotCursor, "v"> & { v: 3, window: string | null, window_started_at: number | null, settled: boolean,
  *   live?: LiveLedger, live_refused?: "ledger" | "view" | "reviewer" }} TailCursor

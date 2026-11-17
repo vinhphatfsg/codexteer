@@ -131,7 +131,7 @@ async function quietRead(client, thread, claim, since) {
   if (newest?.id !== claim.window) return null;
   const { state } = threadSnapshot({ ...thread, turns: [{ id: newest.id, status: newest.status, items: [] }] });
   if (digest(state) !== claim.state) return null;
-  return { ...state, events: [], running_commands: [], ...hostFields(), ...liveFallback(client, claim.live_refused), cursor: since, changed: false, has_more: false, omitted_older_events: 0,
+  return { ...state, events: [], running_commands: [], ...hostFields(), ...liveFallback(client, standing(claim.live_refused)), cursor: since, changed: false, has_more: false, omitted_older_events: 0,
     observed_at: new Date().toISOString(), history_scope: "tail-turns" };
 }
 
@@ -169,14 +169,20 @@ function liveView(client, threadId, turnId, scope) {
 
 // Why a read that could read a running turn live reports the history view:
 // the cursor's refusal, or what stopped this read.
-const REFUSED = { ledger: "mismatch", view: "view_mismatch", reviewer: "not_auto_review" };
+const REFUSED = { ledger: "mismatch", reviewer: "not_auto_review" };
+// Earlier versions refused a task whose live view lacked an item the history
+// listed. A view shows only a recent part of the turn, so that refusal is
+// void and the task is read live again.
+const standing = refused => refused === "view" ? null : refused ?? null;
 const liveFallback = (client, refused, reason = null) => typeof client.liveTurn !== "function" ? {}
   : refused ? { live_fallback: REFUSED[refused] } : reason ? { live_fallback: reason } : {};
 
 // What the live view adds to the history's list of the running turn `turn`:
-// `fresh`, the events the history does not list, with their hashes. `absent`
-// counts the listed items the view lacks. Null when the view is not of this
-// turn while it runs, or an item is malformed.
+// `fresh`, the events the history does not list, with their hashes. `shared`
+// counts the listed items the view shows too. Null when the view is not of this
+// turn while it runs, or an item is malformed. The view shows a recent part of
+// the turn, so it may lack items the history lists. A context compaction has an
+// id in the view that the history never lists, so the history delivers it.
 // A listed item is matched by its id alone. It is delivered from the history,
 // never from the view, so its content in the view decides nothing; what the
 // view delivers is checked by hash against the history when the turn ends.
@@ -184,10 +190,10 @@ function liveEvents(view, turn, s) {
   const items = view?.turn?.id === turn.id && RUNNING.has(view.turn.status) && Array.isArray(view.turn.items) ? view.turn.items : null;
   if (!items || items.some(item => !item || typeof item !== "object" || typeof item.id !== "string" || !item.id || typeof item.type !== "string" || !item.type
     || (item.questions != null && !Array.isArray(item.questions)))) return null;
-  const events = items.map(item => project(item, turn.id)).filter(Boolean), hashes = new Map(events.map(event => [event.id, digest(event)]));
+  const events = items.filter(item => item.type !== "contextCompaction").map(item => project(item, turn.id)).filter(Boolean), hashes = new Map(events.map(event => [event.id, digest(event)]));
   if (hashes.size !== events.length) return null;
   const known = new Set(s.events.flatMap(event => event.turn_id === turn.id && event.type !== "turn" ? [event.id] : []));
-  return { absent: [...known].filter(id => !hashes.has(id)).length, fresh: events.filter(event => !known.has(event.id)).map(event => ({ event, hash: hashes.get(event.id) })) };
+  return { shared: [...known].filter(id => hashes.has(id)).length, fresh: events.filter(event => !known.has(event.id)).map(event => ({ event, hash: hashes.get(event.id) })) };
 }
 
 // What the live view says the task waits on: its flags and the methods of the
@@ -201,15 +207,18 @@ const liveAttention = view => [...new Set([...(Array.isArray(view.status?.active
 // the history lists it and the history cursor passes it, so the ledger holds
 // what the history lags behind, not the turn. The history cursor stays as the
 // history proves it, so a read without the live view still validates. Each item is delivered once, whichever view lists it
-// first; a changed one is an update. Completed history that does not list an
-// item the live view delivered, or a live view that lacks an item the history
-// lists, refuses live reads of the task from then on: the cursor carries the
-// refusal, and `live_mismatch` marks the read that found it. So does a live view
+// first; a changed one is an update. A turn's view is used once it has shown
+// an item the history lists, which proves both name the same items; the ledger
+// then stays for the rest of the turn, also when empty, because a later view
+// cut short by a compaction may share no item with a lagging history. Until
+// then a read waits (`view_unconfirmed`). Completed history that does not list
+// an item the live view delivered refuses live reads of the task from then on:
+// the cursor carries the refusal, and `live_mismatch` marks the read that found it. So does a live view
 // whose task reports a reviewer other than the auto reviewer. `live_fallback`
 // says on every read why the history view is the one reported.
 async function withLiveTurn(client, threadId, turns, s, old, result, { liveTurn: scope, limit = 50, maxChars = 2000, includeOutput = false, fullEvents = false }) {
   const ledger = old?.v === 3 ? old.live ?? null : null, delivered = new Map(ledger?.items.map(item => [item.id, item.hash]) ?? []);
-  let events = result.events, hasMore = result.has_more, attention = ledger?.attention ?? [], turnId = ledger?.turn ?? null, refused = old?.v === 3 ? old.live_refused ?? null : null, stopped = null;
+  let events = result.events, hasMore = result.has_more, attention = ledger?.attention ?? [], turnId = ledger?.turn ?? null, refused = old?.v === 3 ? standing(old.live_refused) : null, stopped = null;
   const fields = {}, commands = [], trim = event => fullEvents ? event : trimEvent(event, maxChars, includeOutput);
   if (ledger) {
     const items = new Map(s.events.flatMap((event, i) => event.turn_id === turnId && event.type !== "turn" ? [[event.id, i]] : []));
@@ -227,7 +236,7 @@ async function withLiveTurn(client, threadId, turns, s, old, result, { liveTurn:
   if (scope instanceof Map && typeof client.liveTurn === "function" && !refused && !hasMore && turnEvidence(s.state) === "running" && s.state.active_turn_count === 1
     && running && RUNNING.has(running.status) && (turnId === null || turnId === running.id)) {
     const view = delivered.size < LIVE_ITEMS ? await liveView(client, threadId, running.id, scope) : { fallback: "ledger_full" };
-    const { absent, fresh } = (view && !view.fallback && liveEvents(view, running, s)) ?? {};
+    const { shared, fresh } = (view && !view.fallback && liveEvents(view, running, s)) ?? {};
     // Items past the ledger's room are left to the history. The read that
     // leaves one out has not seen the whole turn, and the reads after it do not resume.
     let room = LIVE_ITEMS - delivered.size;
@@ -237,7 +246,7 @@ async function withLiveTurn(client, threadId, turns, s, old, result, { liveTurn:
     if (view && !view.fallback && view.reviewer !== AUTO_REVIEW) refused = "reviewer";
     if (view?.fallback) stopped = view.fallback;
     else if (!fresh) stopped = "unavailable";
-    else if (absent) { fields.live_mismatch = { turn_id: running.id, absent }; refused = "view"; }
+    else if (!shared && turnId !== running.id) stopped = "view_unconfirmed";
     else {
       const sent = changed.slice(0, Math.max(0, limit - events.length));
       events = [...events, ...sent.map(({ event }) => ({ ...trim(event), change: delivered.has(event.id) ? "updated" : "added" }))];
@@ -249,7 +258,7 @@ async function withLiveTurn(client, threadId, turns, s, old, result, { liveTurn:
   }
   const before = old?.v === 3 ? old.live?.attention ?? [] : [], requests = attention.filter(flag => flag.startsWith(REQUEST)).map(flag => flag.slice(REQUEST.length));
   if (requests.length) fields.pending_requests = requests;
-  return { refused, ledger: turnId !== null && (delivered.size || attention.length) ? { turn: turnId, items: [...delivered].map(([id, hash]) => ({ id, hash })), attention } : null,
+  return { refused, ledger: turnId !== null ? { turn: turnId, items: [...delivered].map(([id, hash]) => ({ id, hash })), attention } : null,
     fields: { ...fields, ...liveFallback(client, fields.live_turn_id ? null : refused, stopped), events, has_more: hasMore, running_commands: [...result.running_commands, ...commands],
       attention: Array.isArray(result.attention) ? [...new Set([...result.attention, ...attention])] : result.attention,
       changed: !old || events.length > 0 || old.state !== result.cursor.state || JSON.stringify(before) !== JSON.stringify(attention) } };

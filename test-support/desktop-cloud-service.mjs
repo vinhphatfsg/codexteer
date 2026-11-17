@@ -24,7 +24,7 @@ import { RpcFailure } from "../src/rpc.mjs";
 export function desktopCloudService(uuid, { environment, receiveLimit = Infinity, liveTurn = false } = {}) {
   const state = { turns: [], flags: [], environment, status: "idle", lost: false, missing: false, calls: [], receiveLimit,
     served: { requests: 0, turns: 0, bytes: 0, ids: 0, pages: 0 }, clock: 1_800_000_000, hideRunning: liveTurn, listedRunning: 1, reviewer: "auto_review", reviewerReads: 0,
-    live: { resumes: [], wakes: 0, failure: null, requests: [], flags: [], beforeResume: null, itemId: id => id, item: item => item, connections: [] } };
+    live: { cut: 0, resumes: [], wakes: 0, failure: null, requests: [], flags: [], beforeResume: null, itemId: id => id, item: item => item, connections: [] } };
   const turn = (fields = {}) => ({ id: `turn-${state.turns.length}`, status: "completed", startedAt: state.clock++, items: [], ...fields });
   const listed = row => state.hideRunning && row.status === "inProgress" ? { ...row, items: row.items.slice(0, state.listedRunning) } : row;
   const rpc = { close() {}, async request(method, params) {
@@ -78,7 +78,7 @@ export function desktopCloudService(uuid, { environment, receiveLimit = Infinity
     }
     if (method === "turn/start") {
       const started = turn({ status: "inProgress", items: [{ id: randomUUID(), type: "userMessage", clientId: state.nullClientId ? null : params.clientUserMessageId, content: params.input }] });
-      state.turns.push(started); state.listedRunning = 1; state.status = "active";
+      state.turns.push(started); state.listedRunning = 1; state.live.cut = 0; state.status = "active";
       if (state.lost) throw Object.assign(new Error("lost receipt"), { uncertain: true });
       return { turn: { id: started.id } };
     }
@@ -100,7 +100,7 @@ export function desktopCloudService(uuid, { environment, receiveLimit = Infinity
       if (state.live.failure === "error") throw new RpcFailure("thread/resume was rejected by App Server.", { code: "RPC_REJECTED", rpcCode: -32603 });
       if (state.live.failure === "timeout") return new Promise(() => {});
       setImmediate(() => state.live.requests.forEach((request, n) => connection.emit("serverRequest", { id: `replayed-${n}`, method: request, params: { threadId: params.threadId } })));
-      const turns = structuredClone(state.turns).map(row => ({ ...row, items: row.items.map(item => state.live.item({ ...item, id: state.live.itemId(item.id) })) }));
+      const turns = structuredClone(state.turns).map((row, n) => ({ ...row, items: row.items.slice(n === state.turns.length - 1 ? state.live.cut : 0).map((item, k) => state.live.item({ ...item, id: item.type === "contextCompaction" ? `item-${k}` : state.live.itemId(item.id) })) }));
       return { thread: { id: params.threadId, status: { type: state.status, activeFlags: state.live.flags }, turns }, approvalsReviewer: state.reviewer,
         initialTurnsPage: null, turnsBackwardsCursor: null, itemsBackwardsCursor: null, resumeKind: "attached" };
     };
@@ -113,11 +113,14 @@ export function desktopCloudService(uuid, { environment, receiveLimit = Infinity
     const running = state.turns.at(-1);
     running.status = status; running.items.push(...items); state.status = "idle";
   };
-  const append = (items = [], fields = {}) => { const added = turn({ items, ...fields }); state.listedRunning = 1; state.turns.push(added); return added; };
+  const append = (items = [], fields = {}) => { const added = turn({ items, ...fields }); state.listedRunning = 1; state.live.cut = 0; state.turns.push(added); return added; };
   // Items the running turn produced since it started; the history shows them at
   // the next `catchUp` or when the turn ends.
   const progress = (...items) => { state.turns.at(-1).items.push(...items); return items; };
+  // A context compaction: the running turn gains a compaction item, which a
+  // resume names with an id of its own, and a resume shows the items from it on.
+  const compact = () => { const items = state.turns.at(-1).items; state.live.cut = items.length; items.push({ id: randomUUID(), type: "contextCompaction" }); };
   const catchUp = () => { state.listedRunning = state.turns.at(-1).items.length; };
   const resetServed = () => Object.assign(state.served, { requests: 0, turns: 0, bytes: 0, ids: 0, pages: 0 });
-  return { rpc, state, complete, append, progress, catchUp, resetServed, openLive };
+  return { rpc, state, complete, append, progress, catchUp, compact, resetServed, openLive };
 }
