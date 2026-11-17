@@ -2,6 +2,14 @@
 
 公開日は日本時間です。
 
+## 0.26.1 — 未公開
+
+Desktopを`codexteer desktop start`で起動してから3日以上たつと、localの`work start`・`send`・`read`などが`RUNTIME_UNAVAILABLE`で止まることがありました。shared App Serverは自分の状態を`/private/tmp`の下のファイルに書きますが、macOSは毎日0時に、3日以上触られていない`/tmp`のファイルを消します。状態ファイルは起動時とDesktopの接続・切断のときにしか書かれなかったため、消えたまま戻りませんでした。App Server自体は動き続けていました。
+
+- shared App Serverは状態ファイルを1時間ごとに書き直します。消されても1時間以内に戻ります。
+- 状態ファイルの書き込みが一度失敗すると（ディスクが満杯のときなど）、その後の書き込みもすべて失敗していました。失敗の後も書き込みを続けます。
+- この修正は、0.26.1で`codexteer desktop start`を実行した後に効きます。すでに状態ファイルが消えている場合は、Desktopを終了して`codexteer desktop start`を実行し直してください。
+
 ## 0.26.0 — 2026-11-17公開
 
 ### work tellが送れる場面を広げる
