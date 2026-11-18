@@ -2,7 +2,7 @@
 
 公開日は日本時間です。
 
-## 0.26.1 — 未公開
+## 0.26.1 — 2026-11-18公開
 
 Desktopを`codexteer desktop start`で起動してから3日以上たつと、localの`work start`・`send`・`read`などが`RUNTIME_UNAVAILABLE`で止まることがありました。shared App Serverは自分の状態を`/private/tmp`の下のファイルに書きますが、macOSは毎日0時に、3日以上触られていない`/tmp`のファイルを消します。状態ファイルは起動時とDesktopの接続・切断のときにしか書かれなかったため、消えたまま戻りませんでした。App Server自体は動き続けていました。
 
