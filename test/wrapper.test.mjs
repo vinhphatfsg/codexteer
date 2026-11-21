@@ -14,20 +14,73 @@ test("wrapper preserves TOML argv byte for byte and changes only stdio transport
   assert.deepEqual(serverArguments(["app-server", "--listen=stdio://"], "/s"), ["app-server", "--listen", "unix:///s"]);
 });
 
-test("only Desktop's direct child is classified as a shared-server launch", () => {
+test("Desktop's direct child is classified without inspecting further ancestors", () => {
   for (const [stdout, expected] of [
     ["/Applications/ChatGPT.app/Contents/MacOS/ChatGPT\n", true],
+    ["/Applications/ChatGPT.app/Contents/MacOS/ChatGPT --some-option\n", true],
+    ["/Applications/ChatGPT.app/Contents/MacOS/ChatGPT-other\n", false],
     ["/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node\n", false],
     ["/Applications/ChatGPT.app/Contents/Resources/node_repl\n", false],
     ["/usr/bin/zsh\n", false],
   ]) {
     assert.equal(isDesktopProcess({ parentPid: 123, run(command, args) {
       assert.equal(command, "/bin/ps");
-      assert.deepEqual(args, ["-p", "123", "-o", "comm="]);
-      return { status: 0, stdout };
+      assert.deepEqual(args, ["-ww", "-p", "123", "-o", "ppid=", "-o", "command="]);
+      return { status: 0, stdout: `456 ${stdout}` };
     } }), expected);
   }
   assert.equal(isDesktopProcess({ run: () => ({ status: 1, stdout: "" }) }), false);
+});
+
+const desktopExecutable = "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT";
+const serviceExecutable = (version, name = "Service") => `/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/${version ? `Versions/${version}/` : ""}Helpers/Codex (${name}).app/Contents/MacOS/Codex (${name})`;
+
+function serviceOrigin({ executable = serviceExecutable("158.0.8127.37"), command = `${executable} --type=utility --utility-sub-type=node.mojom.NodeService --lang=ja`, desktop = desktopExecutable, ppid = "456", failedAt } = {}) {
+  const calls = [], responses = [`${ppid} ${command}`, `1 ${desktop}`];
+  const result = isDesktopProcess({ parentPid: 123, run(command, args) {
+    assert.equal(command, "/bin/ps");
+    calls.push(args);
+    const index = calls.length - 1;
+    assert.ok(index < responses.length, "must not search additional ancestors");
+    return { status: index === failedAt ? 1 : 0, stdout: responses[index] + "\n" };
+  } });
+  return { result, calls };
+}
+
+test("Desktop's bundled Node utility can own the shared runtime", () => {
+  for (const version of ["158.0.8127.37", "Current", null]) {
+    for (const name of ["Aperitif", "Service"]) {
+      const { result, calls } = serviceOrigin({ executable: serviceExecutable(version, name) });
+      assert.equal(result, true);
+      assert.deepEqual(calls, [
+        ["-ww", "-p", "123", "-o", "ppid=", "-o", "command="],
+        ["-ww", "-p", "456", "-o", "ppid=", "-o", "command="],
+      ]);
+    }
+  }
+});
+
+test("the Desktop 26.1117 Aperitif utility command shape is recognized without comm", () => {
+  const command = `${serviceExecutable("158.0.8127.37", "Aperitif")} --type=utility --utility-sub-type=node.mojom.NodeService --lang=ja --service-sandbox-type=none --user-data-dir=/Users/example/Library/Application Support/Codex --standard-schemes=app,codex-sandbox --shared-files`;
+  assert.equal(serviceOrigin({ command }).result, true);
+});
+
+test("utility detection rejects other apps, non-Node roles, invalid ancestry and failed inspection", () => {
+  for (const options of [
+    { executable: serviceExecutable("158.0.8127.37").replace("/Applications/", "/tmp/") },
+    { executable: serviceExecutable("158.0.8127.37").replaceAll("(Service)", "(Renderer)") },
+    { executable: serviceExecutable("158.0.8127.37", "Aperitif Renderer") },
+    { executable: serviceExecutable("158.0.8127.37", "Aperitif").replace("/MacOS/Codex (Aperitif)", "/MacOS/Codex (Service)") },
+    { executable: serviceExecutable("158.0.8127.37") + "Extra" },
+    { command: `${serviceExecutable("158.0.8127.37")} --type=renderer --utility-sub-type=node.mojom.NodeService` },
+    { command: `${serviceExecutable("158.0.8127.37")} --type=utility --utility-sub-type=network.mojom.NetworkService` },
+    { command: `${serviceExecutable("158.0.8127.37")} --type=utility --utility-sub-type=node.mojom.NodeServiceExtra` },
+    { command: "/tmp/other --type=utility --utility-sub-type=node.mojom.NodeService" },
+    { desktop: BUNDLED_NODE }, { desktop: "/bin/zsh" }, { desktop: desktopExecutable + "-other" },
+    { ppid: "1" }, { ppid: "123" }, { ppid: "invalid" }, { ppid: "9007199254740992" },
+    { command: "/Applications/Ch" }, { command: "" }, { command: "invalid\nsecond row" },
+    { failedAt: 0 }, { failedAt: 1 },
+  ]) assert.equal(serviceOrigin(options).result, false, JSON.stringify(options));
 });
 
 test("wrapper leaves unrelated invocations and schema/daemon/proxy subcommands alone", () => {
