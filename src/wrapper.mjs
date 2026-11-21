@@ -67,10 +67,35 @@ function resolveBundledCli() {
 export const BUNDLED_CLI = resolveBundledCli();
 export const BUNDLED_NODE = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node";
 const DESKTOP_EXECUTABLE = "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT";
+const DESKTOP_UTILITY = /^\/Applications\/ChatGPT\.app\/Contents\/Frameworks\/Codex Framework\.framework\/(?:Versions\/(?:Current|\d+(?:\.\d+)*)\/)?Helpers\/Codex \((Aperitif|Service)\)\.app\/Contents\/MacOS\/Codex \(\1\)(?:\s|$)/;
+
+function desktopProcessInfo(pid, run) {
+  // Put command last and request unlimited width. A multi-column comm field
+  // can truncate the executable to /Applications/Ch on macOS.
+  const result = run("/bin/ps", ["-ww", "-p", String(pid), "-o", "ppid=", "-o", "command="], { encoding: "utf8", timeout: 3000 });
+  const match = result.status === 0 && result.stdout?.trim().match(/^(\d+)[ \t]+([^\r\n]+)$/);
+  if (!match || !Number.isSafeInteger(Number(match[1])) || Number(match[1]) < 1) return null;
+  return { ppid: Number(match[1]), command: match[2] };
+}
+
+const isDesktopCommand = command => command === DESKTOP_EXECUTABLE || command.startsWith(`${DESKTOP_EXECUTABLE} `);
 
 export function isDesktopProcess({ parentPid = process.ppid, run = spawnSync } = {}) {
-  const parent = run("/bin/ps", ["-p", String(parentPid), "-o", "comm="], { encoding: "utf8", timeout: 3000 });
-  return parent.status === 0 && parent.stdout.trim() === DESKTOP_EXECUTABLE;
+  if (!Number.isSafeInteger(parentPid) || parentPid <= 1) return false;
+  const parent = desktopProcessInfo(parentPid, run);
+  if (!parent) return false;
+  if (isDesktopCommand(parent.command)) return true;
+  if (!DESKTOP_UTILITY.test(parent.command)) return false;
+
+  // Desktop 26.1117 runs app-server-host in an Electron Node utility process.
+  // Admit only that one intermediary, owned by the main Desktop process. Do
+  // not walk arbitrary ancestors: inherited MCP/Computer Use invocations must
+  // keep their own stdio server instead of claiming Desktop's shared runtime.
+  if (parent.ppid <= 1 || parent.ppid === parentPid
+    || !/(?:^|\s)--type=utility(?:\s|$)/.test(parent.command)
+    || !/(?:^|\s)--utility-sub-type=node\.mojom\.NodeService(?:\s|$)/.test(parent.command)) return false;
+  const desktop = desktopProcessInfo(parent.ppid, run);
+  return !!desktop && isDesktopCommand(desktop.command);
 }
 
 async function forwardInvocation(executable, args, env) {
@@ -131,7 +156,7 @@ export async function stopChild(child) {
 
 export async function runWrapper(args, { executable = BUNDLED_CLI, env = process.env, input = process.stdin, output = process.stdout, desktopProcess } = {}) {
   // CODEX_CLI_PATH is inherited by MCP/Computer Use helpers which launch their
-  // own stdio servers. Only Desktop's direct child owns the shared runtime.
+  // own stdio servers. Only Desktop or its Node utility owns the shared runtime.
   // Check origin before parsing/changing transports so helper calls remain exact.
   if (!(desktopProcess ?? isDesktopProcess()) || !serverArguments(args, "/unused")) {
     return forwardInvocation(executable, args, env);
