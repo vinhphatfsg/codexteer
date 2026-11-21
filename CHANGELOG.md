@@ -2,11 +2,11 @@
 
 公開日は日本時間です。
 
-## 未公開
+## 0.26.2
 
 - Desktop 26.1117.41037はApp Serverを本体の直接の子ではなく、同梱の`Codex (Aperitif)`のNode utility processから起動します。codexteerがこの起動をヘルパー呼び出しと判定し、共有接続を作らず`RUNTIME_UNAVAILABLE`になっていました。同梱のAperitifまたはService実行ファイル・Node utilityの引数・Desktop本体への親子関係を確認して、この経路でも共有接続を作ります。従来の直接起動とMCPヘルパーの素通しは維持します。
 - ヘルパーのパスは、バージョン付きの実体・`Versions/Current`経由・Framework直下の`Helpers`経由の3形式に対応します。プロセスの判定には、列幅で切り詰められる`comm`を使わず、`ps -ww`の最終列の`command`を読みます。
-- 反映には、作業終了後にDesktopを終了し、修正済みソースの`codexteer desktop start`で起動し直してください。すでに保存した実行コピーは書き換えません。
+- 反映には、作業を終えてDesktopを終了し、0.26.2の`codexteer desktop start`で起動し直してください。すでに保存した実行コピーは書き換えません。
 
 ## 0.26.1 — 2026-11-18公開
 
